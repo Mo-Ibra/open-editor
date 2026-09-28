@@ -38,7 +38,7 @@ g.AudioContext ??= class {
   close = async () => undefined
 }
 
-const { createAppState } = await import('../src/app/state.ts')
+const { createAppState } = await import('../src/app/store/state.ts')
 
 test('the store builds', () => {
   const state = createAppState()

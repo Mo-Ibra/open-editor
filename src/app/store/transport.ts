@@ -13,7 +13,7 @@
 
 import { createSignal, type Accessor } from 'solid-js'
 
-import { AudioEngine } from '../audio/audio-engine.js'
+import { AudioEngine } from '../../audio/audio-engine.js'
 import {
   clipAtLane,
   findClip,
@@ -23,7 +23,7 @@ import {
   type Clip,
   type ClipId,
   type Project,
-} from '../model/project.js'
+} from '../../model/project.js'
 import type { Selection } from './selection.js'
 
 /** Output frame rate. Fixed, because the export muxer wants a constant rate. */

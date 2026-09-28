@@ -21,7 +21,7 @@ import {
   ZOOM_MAX,
   ZOOM_MIN,
   ZOOM_RATIO_PER_NOTCH,
-} from '../src/app/zoom.ts'
+} from '../src/app/store/zoom.ts'
 
 /** The instant shown at a given pixel, given the scroll offset and zoom. */
 const timeAt = (scrollLeft: number, localX: number, zoom: number): number =>

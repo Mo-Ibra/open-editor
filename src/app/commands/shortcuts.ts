@@ -11,9 +11,9 @@
  * `test/keyboard.test.ts` asserts they match the modes the timeline implements.
  */
 
-import type { AppState } from './state.js'
+import type { AppState } from '../store/state.js'
 import type { Shortcut } from './keyboard.js'
-import { shouldSuppressNativeMenu } from '../ui/ContextMenu.js'
+import { shouldSuppressNativeMenu } from '../view/ContextMenu.js'
 
 export interface ShortcutContext {
   state: AppState

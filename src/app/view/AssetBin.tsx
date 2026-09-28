@@ -7,7 +7,7 @@
  */
 
 import { For, Show } from 'solid-js'
-import type { AppState } from '../app/state.js'
+import type { AppState } from '../store/state.js'
 import type { ContextMenuState } from './ContextMenu.js'
 
 export function AssetBin(props: { state: AppState; menu: ContextMenuState }) {

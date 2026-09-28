@@ -13,7 +13,7 @@
 
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
-import { createSelection } from '../src/app/selection.ts'
+import { createSelection } from '../src/app/store/selection.ts'
 import { emptyProject, type Clip, type Project } from '../src/model/project.ts'
 
 const clip = (id: string, lane: 'video' | 'audio' = 'video'): Clip => ({

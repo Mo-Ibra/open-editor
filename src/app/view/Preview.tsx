@@ -7,11 +7,14 @@
  */
 
 import { createEffect, createSignal, onCleanup, onMount, Show } from 'solid-js'
-import { clipAtLane, sourceTimeAt } from '../model/project.js'
-import { renderBlank, renderFrame, type SourceImage } from '../render/render.js'
-import type { AppState } from '../app/state.js'
+import { clipAtLane, sourceTimeAt } from '../../model/project.js'
+import { renderBlank, renderFrame, type SourceImage } from '../../render/render.js'
+import type { AppState } from '../store/state.js'
 import type { ContextMenuState } from './ContextMenu.js'
-import { log } from '../dev/debug.js'
+import { log } from '../../dev/debug.js'
+import { createDiagnostics, HEALTH_INTERVAL_MS } from '../../dev/preview-diagnostics.js'
+import { Transport } from './preview/Transport.js'
+import { usePlaybackClock } from './preview/use-playback-clock.js'
 
 export function Preview(props: { state: AppState; menu: ContextMenuState }) {
   const state = props.state
@@ -248,7 +251,7 @@ export function Preview(props: { state: AppState; menu: ContextMenuState }) {
     // renderer failing, and the source genuinely being black. A screen
     // recording of a dark or blank screen decodes to black frames — correct
     // output, useless video — and no amount of render debugging will change it.
-    const stats = measure(viewport.width, viewport.height)
+    const stats = diagnostics.sample(viewport.width, viewport.height)
     log.debug(
       `paint ${source.width}x${source.height} → ${viewport.width}x${viewport.height} ` +
         `fit=${fit.toFixed(4)} draw=${(source.width * fit).toFixed(0)}x${(source.height * fit).toFixed(0)} ` +
@@ -269,83 +272,39 @@ export function Preview(props: { state: AppState; menu: ContextMenuState }) {
   let blackFrames = 0
   let frameCounter = 0
 
-  function measure(w: number, h: number): { max: number; mean: number } {
-    try {
-      const c = context()
-      // A sparse grid beats getImageData over the whole canvas: a few
-      // kilobytes instead of several megabytes, sixty times a second.
-      const data = c.getImageData(0, 0, w, h).data
-      let max = 0
-      let sum = 0
-      let n = 0
-      const stride = 4 * 64
-      for (let i = 0; i < data.length; i += stride) {
-        const luma = (data[i]! + data[i + 1]! + data[i + 2]!) / 3
-        if (luma > max) max = luma
-        sum += luma
-        n++
-      }
-      return { max: Math.round(max), mean: n ? Math.round(sum / n) : 0 }
-    } catch (err) {
-      log.warn('getImageData failed', String(err))
-      return { max: -1, mean: -1 }
-    }
-  }
+  /**
+   * Diagnostics, bound to this component's locals.
+   *
+   * The component keeps only what it alone knows — the context, the output
+   * size, and three counters — and hands them over. Everything else, including
+   * the wording, lives in dev/preview-diagnostics.
+   */
+  const diagnostics = createDiagnostics(state, {
+    ctx: context,
+    size: options,
+    counters: () => ({ paints: frameCounter, blackFrames, luma: lastLuma }),
+    lastError: () => lastError,
+    inFlight: () => inFlight,
+    overlayOn: showDiag,
+  })
 
-  /** Liveness summary, logged on a timer so it is readable. */
   function reportHealth(): void {
-    // Layout matters as much as pixels. Drawing correct frames to a canvas that
-    // has collapsed to 0x0 on screen is indistinguishable from a black video,
-    // and "the video is black" is a conclusion you should never have to infer
-    // from silence.
-    const rect = canvas.getBoundingClientRect()
-    const style = getComputedStyle(canvas)
-    log.info(
-      `health: ${frameCounter} paints, ${blackFrames} fully black, ` +
-        `last luma max=${lastLuma.max} mean=${lastLuma.mean}, cache=${state.frameCache.size} frames`,
-    )
-    log.info(`audio: ${JSON.stringify(state.audio.describe())}`)
-    log.info(
-      `layout: canvas on-screen ${Math.round(rect.width)}x${Math.round(rect.height)} ` +
-        `at ${Math.round(rect.left)},${Math.round(rect.top)}  ` +
-        `display=${style.display} visibility=${style.visibility} opacity=${style.opacity}`,
-    )
-    if (rect.width < 2 || rect.height < 2) {
-      log.error('LAYOUT: the canvas has no size on screen — nothing can be visible, however correct the pixels are')
-    }
+    const { info, errors } = diagnostics.health()
+    for (const line of info) log.info(line)
+    for (const line of errors) log.error(line)
   }
-  const healthTimer = setInterval(reportHealth, 5000)
+  const healthTimer = setInterval(reportHealth, HEALTH_INTERVAL_MS)
+  // The health interval holds the store, so leaving it running would keep a
+  // torn-down preview alive and log against a project that no longer exists.
+  onCleanup(() => clearInterval(healthTimer))
 
   /** Last-resort readout, drawn on the canvas so it needs no devtools. */
   function drawDiagnostic(): void {
-    const t = state.playhead()
-    const loc = clipAtLane(state.project.video, t)
-    const clip = loc?.clip
-    const asset = clip ? state.getAsset(clip.assetId) : undefined
-    const entry = clip ? state.library.get(clip.assetId) : undefined
-
+    // Blank first, so the overlay text is legible over any frame.
     renderBlank(context(), options())
-    const cached = loc && entry?.videoSink ? state.frameCache.find(sourceTimeAt(loc, t)) : undefined
-    const lines = [
-      `t=${t.toFixed(2)}   clip=${loc ? loc.index : 'none'}   ${inFlight ? 'decoding…' : 'idle'}   ${showDiag() ? '[D] overlay on' : '[D] overlay'}`,
-      `asset  ${asset ? `${asset.name}  ${asset.width}x${asset.height} ${asset.videoCodec}` : 'none'}`,
-      `clip   in=${loc ? loc.clip.in.toFixed(2) : '—'}s out=${loc ? loc.clip.out.toFixed(2) : '—'}s  (source t=${loc ? sourceTimeAt(loc, t).toFixed(2) : '—'}s)`,
-      `decoder ${entry?.videoSink ? 'ready' : 'MISSING'}${entry?.error ? ` — ${entry.error}` : ''}`,
-      `canvas  ${cached ? `${cached.canvas.width}x${cached.canvas.height}` : 'nothing cached yet'}`,
-      `viewport ${options().width}x${options().height}`,
-      `pixels  max=${lastLuma.max} mean=${lastLuma.mean} (0 = nothing was drawn)`,
-      lastError ? `PROBLEM  ${lastError}` : 'ok',
-    ]
-
-    context().save()
-    context().fillStyle = '#000'
-    context().fillRect(0, 0, options().width, options().height)
-    context().fillStyle = '#8ab4ff'
-    context().font = '16px ui-monospace, monospace'
-    context().textBaseline = 'top'
-    lines.forEach((line, i) => context().fillText(line, 16, 16 + i * 22))
-    context().restore()
+    diagnostics.drawOverlay()
   }
+
 
   // Re-draw whenever the playhead, the clips, or the canvas size changes.
   createEffect(() => {
@@ -377,45 +336,7 @@ export function Preview(props: { state: AppState; menu: ContextMenuState }) {
    * still fire, so playback resumes correctly and stays in step with real time
    * because every step is computed from `performance.now()`, not accumulated.
    */
-  const [ticks, setTicks] = createSignal(0)
-  let timer: ReturnType<typeof setInterval> | undefined
-
-  function stopClock(): void {
-    if (timer !== undefined) {
-      clearInterval(timer)
-      timer = undefined
-    }
-  }
-
-  createEffect(() => {
-    if (!state.playing()) {
-      stopClock()
-      setTicks(0)
-      return
-    }
-
-    // This interval does NOT own the clock. It only polls it: `advanceClock`
-    // reads the AudioContext time (the reference) and falls back to
-    // wall-clock only if audio never started. A JS timer is not accurate
-    // enough to be the timebase for a 10-minute edit — it drifts, and the
-    // drift is exactly A/V desync.
-    timer = setInterval(() => {
-      const previous = state.playhead()
-      state.advanceClock()
-
-      if (state.playhead() >= state.duration() && state.playing()) {
-        state.seek(state.duration())
-        state.setPlaying(false)
-        return
-      }
-      if (state.playhead() !== previous) setTicks((n) => n + 1)
-    }, 1000 / 120)
-  })
-
-  onCleanup(() => {
-    stopClock()
-    clearInterval(healthTimer)
-  })
+  const clock = usePlaybackClock(state)
 
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -494,110 +415,7 @@ export function Preview(props: { state: AppState; menu: ContextMenuState }) {
         </div>
       </div>
 
-      {/* transport */}
-      <div class="flex h-12 shrink-0 items-center gap-3 border-t border-line bg-panel px-3">
-        <div class="flex items-center gap-1">
-          <button class="btn !px-2" onClick={() => state.step(-1)} title="Previous frame (←)">
-            <SkipIcon dir="left" />
-          </button>
-          <button
-            class="grid size-7 place-items-center rounded-full bg-fg text-bg transition-transform hover:scale-105 active:scale-95"
-            onClick={() => void state.togglePlay()}
-            title={state.playing() ? 'Pause (space)' : 'Play (space)'}
-          >
-            {state.playing() ? <PauseIcon /> : <PlayIcon />}
-          </button>
-          <button class="btn !px-2" onClick={() => state.step(1)} title="Next frame (→)">
-            <SkipIcon dir="right" />
-          </button>
-          <button
-            classList={{ 'btn !px-2': true, 'text-warn!': state.audio.isMuted }}
-            onClick={() => state.audio.setMuted(!state.audio.isMuted)}
-            title={state.audio.isMuted ? 'Unmute (M)' : 'Mute (M)'}
-          >
-            <SpeakerIcon muted={state.audio.isMuted} />
-          </button>
-        </div>
-
-        <div class="timecode flex items-baseline gap-1.5 text-[12px]">
-          <span>{formatTime(state.playhead())}</span>
-          <span class="text-muted">/</span>
-          <span class="text-muted">{formatTime(state.duration())}</span>
-        </div>
-
-        <span class="flex-1" />
-
-        <label class="flex items-center gap-2 text-[10.5px] text-muted">
-          <span>zoom</span>
-          <input
-            type="range"
-            min="10"
-            max="400"
-            step="10"
-            class="w-28"
-            value={state.zoom()}
-            onInput={(e) => state.setZoom(Number(e.currentTarget.value))}
-          />
-        </label>
-
-        <span
-          class="timecode rounded border border-line bg-raised px-1.5 py-0.5 text-[10px] text-muted"
-          title="playback state — the tick count proves the clock is running"
-        >
-          {state.playing() ? `playing ${ticks()}` : 'stopped'} · ph {state.playhead().toFixed(2)}
-        </span>
-      </div>
+      <Transport state={state} ticks={clock.ticks} />
     </div>
   )
-}
-
-function PlayIcon() {
-  return (
-    <svg viewBox="0 0 16 16" class="size-3" fill="currentColor">
-      <path d="M4 2.5v11l9-5.5-9-5.5Z" />
-    </svg>
-  )
-}
-
-function PauseIcon() {
-  return (
-    <svg viewBox="0 0 16 16" class="size-3" fill="currentColor">
-      <rect x="3.5" y="2.5" width="3.5" height="11" rx="1" />
-      <rect x="9" y="2.5" width="3.5" height="11" rx="1" />
-    </svg>
-  )
-}
-
-function SkipIcon(props: { dir: 'left' | 'right' }) {
-  return (
-    <svg viewBox="0 0 16 16" class="size-3.5" fill="currentColor" style={{ transform: props.dir === 'left' ? 'scaleX(-1)' : undefined }}>
-      <path d="M3 3h1.6v10H3V3Zm9 0v10l-6-5 6-5Z" />
-    </svg>
-  )
-}
-
-function SpeakerIcon(props: { muted: boolean }) {
-  return (
-    <svg viewBox="0 0 16 16" class="size-3.5" fill="currentColor">
-      <path d="M7 2.5 4.2 5H2v6h2.2L7 13.5v-11Z" />
-      {props.muted ? (
-        <path d="M10 6l3 4M13 6l-3 4" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round" />
-      ) : (
-        <path
-          d="M9.5 5.5a3.4 3.4 0 0 1 0 5M11.5 3.5a6 6 0 0 1 0 9"
-          stroke="currentColor"
-          stroke-width="1.3"
-          fill="none"
-          stroke-linecap="round"
-        />
-      )}
-    </svg>
-  )
-}
-
-function formatTime(seconds: number): string {
-  const s = Math.max(0, seconds)
-  const m = Math.floor(s / 60)
-  const rest = s - m * 60
-  return `${m}:${rest.toFixed(2).padStart(5, '0')}`
 }

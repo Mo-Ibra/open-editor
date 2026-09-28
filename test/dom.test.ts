@@ -63,7 +63,7 @@ console.log('dom id assertions passed')
   assert.deepEqual(offenders, [], `components must not render lists from library.all(): ${offenders.join(', ')}`)
 
   // And the bin must derive its list from the store.
-  const bin = readFileSync(new URL('../src/ui/AssetBin.tsx', import.meta.url), 'utf8')
+  const bin = readFileSync(new URL('../src/app/view/AssetBin.tsx', import.meta.url), 'utf8')
   assert.ok(bin.includes('state.assetIds()'), 'AssetBin should iterate reactive asset ids')
 }
 
@@ -174,7 +174,7 @@ console.log('ref-binding assertions passed')
  * props match. Only the count is wrong. So the count is the assertion.
  */
 {
-  const app = readFileSync(new URL('../src/app/app.tsx', import.meta.url), 'utf8')
+  const app = readFileSync(new URL('../src/app/view/App.tsx', import.meta.url), 'utf8')
   // Only JSX usage: the import line and any local variable named e.g. `Timeline`
   // are not element instantiations.
   const singletons = ['AssetBin', 'Preview', 'Timeline', 'ExportDialog', 'ContextMenu']
@@ -200,7 +200,7 @@ console.log('ref-binding assertions passed')
  * The check is structural: a menu must not be opened from a pointerdown.
  */
 {
-  const files = ['../src/ui/Timeline.tsx', '../src/ui/AssetBin.tsx', '../src/ui/Preview.tsx']
+  const files = ['../src/app/view/timeline/use-timeline-drag.ts', '../src/app/view/AssetBin.tsx', '../src/app/view/Preview.tsx']
   const problems: string[] = []
   for (const rel of files) {
     const code = readFileSync(new URL(rel, import.meta.url), 'utf8')
@@ -211,10 +211,28 @@ console.log('ref-binding assertions passed')
         problems.push(`${rel}: a context menu is opened from a pointer-down handler`)
       }
     }
-    // And the handler must exist, or right click has no menu at all.
-    if (/menu\.(show|toggle)\(/.test(code) && !/onContextMenu=/.test(code)) {
-      problems.push(`${rel}: opens a context menu but binds no onContextMenu`)
+    // A file that opens a menu must either bind the handler or define it.
+    // Which one it is depends on the split: AssetBin and Preview do both in
+    // place, while the timeline defines its handler in the drag controller and
+    // binds it in the component. The wiring between them is asserted below.
+    if (/menu\.(show|toggle)\(/.test(code) && !/onContextMenu=/.test(code) && !/function onContextMenu/.test(code)) {
+      problems.push(`${rel}: opens a context menu but neither binds nor defines onContextMenu`)
     }
+  }
+
+  // The timeline's handler is defined in the drag controller and bound in the
+  // component, so neither file alone proves the right-click works. The binding
+  // has to name the controller, or the split has silently disconnected it.
+  {
+    const controller = readFileSync(
+      new URL('../src/app/view/timeline/use-timeline-drag.ts', import.meta.url), 'utf8')
+    const timeline = readFileSync(new URL('../src/app/view/Timeline.tsx', import.meta.url), 'utf8')
+    assert.match(
+      controller, /function onContextMenu/,
+      'the drag controller should define the timeline\'s right-click handler')
+    assert.match(
+      timeline, /onContextMenu=\{drag\.onContextMenu\}/,
+      'and the timeline should bind that exact handler — otherwise right-click on a clip does nothing')
   }
   assert.deepEqual(problems, [], `context menu wiring:\n  ${problems.join('\n  ')}`)
   console.log(`  context menus open on right click only (${files.length} components)`)
@@ -341,7 +359,7 @@ console.log('ref-binding assertions passed')
  * Checked from the source, because the alternative is a browser.
  */
 {
-  const timeline = readFileSync(new URL('../src/ui/Timeline.tsx', import.meta.url), 'utf8')
+  const timeline = readFileSync(new URL('../src/app/view/timeline/use-timeline-drag.ts', import.meta.url), 'utf8')
 
   assert.match(
     timeline,
@@ -362,7 +380,7 @@ console.log('ref-binding assertions passed')
     'range, toggle and replace must all be reachable')
 
   // And the legend must still name both gestures.
-  const shortcuts = readFileSync(new URL('../src/app/shortcuts.ts', import.meta.url), 'utf8')
+  const shortcuts = readFileSync(new URL('../src/app/commands/shortcuts.ts', import.meta.url), 'utf8')
   for (const gesture of ['^click', '⇧click']) {
     assert.ok(shortcuts.includes(gesture), `the legend should still advertise ${gesture}`)
   }
@@ -383,7 +401,7 @@ console.log('ref-binding assertions passed')
  * gesture people already have.
  */
 {
-  const timeline = readFileSync(new URL('../src/ui/Timeline.tsx', import.meta.url), 'utf8')
+  const timeline = readFileSync(new URL('../src/app/view/timeline/use-timeline-drag.ts', import.meta.url), 'utf8')
 
   assert.match(
     timeline,
@@ -433,7 +451,53 @@ console.log('ref-binding assertions passed')
   )
 
   // The legend advertises it, so the feature is discoverable.
-  const shortcuts = readFileSync(new URL('../src/app/shortcuts.ts', import.meta.url), 'utf8')
+  const shortcuts = readFileSync(new URL('../src/app/commands/shortcuts.ts', import.meta.url), 'utf8')
   assert.ok(shortcuts.includes('^scroll'), 'the legend should advertise ctrl+scroll')
   console.log('  ctrl+wheel zoom is wired natively, non-passively, and advertised')
+}
+
+/**
+ * The timeline's gesture contract: what the drag controller *reads* must still
+ * be *written* somewhere.
+ *
+ * The split moved the producer of these attributes — `Clip.tsx` and `Lane.tsx` —
+ * into different files from the consumer, `use-timeline-drag.ts`. Nothing in the
+ * type system connects them: `closest('[data-lane]')` and `dataset.handle` are
+ * strings, so renaming one side breaks dragging at runtime with no compile
+ * error, no unit test, and nothing visible until a user grabs a trim handle.
+ *
+ * So the two halves are checked against each other, from the source.
+ */
+{
+  const read = readFileSync(
+    new URL('../src/app/view/timeline/use-timeline-drag.ts', import.meta.url), 'utf8')
+  const read2 = (rel: string): string => readFileSync(new URL(rel, import.meta.url), 'utf8')
+  const written = [
+    read2('../src/app/view/timeline/Clip.tsx'),
+    read2('../src/app/view/timeline/Lane.tsx'),
+    read2('../src/app/view/Timeline.tsx'),
+  ].join('\n')
+
+  // Every attribute the controller looks up, as it appears in the query.
+  const queries = [
+    ...read.matchAll(/closest\('\[([a-z-]+)\]'\)/g),
+    ...read.matchAll(/dataset\.([a-zA-Z]+)/g),
+  ]
+  const names = new Set(queries.map((m) => m[1]!).filter(Boolean))
+  assert.ok(names.size >= 3, `expected the controller to look up several attributes, found ${[...names]}`)
+
+  const missing: string[] = []
+  for (const name of names) {
+    // Read as `data-x` from closest(), `x` from dataset.x.
+    const attr = name.startsWith('data-') ? name : `data-${name.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`
+    if (!written.includes(attr)) missing.push(attr)
+  }
+  assert.deepEqual(missing, [], `the drag controller reads attributes nothing renders: ${missing.join(', ')}`)
+
+  // The lane a clip lives in comes from the DOM, not from a prop, so a clip
+  // rendered outside a lane would resolve to `undefined` and do nothing.
+  assert.match(written, /data-lane=\{props\.lane\}|data-lane="|data-lane=\{/, 'a lane must render data-lane')
+  assert.match(written, /data-clip-id=\{props\.clip\.id\}/, 'a clip must render its own id')
+  assert.match(written, /data-clip-index=\{props\.index\}/, 'and its index, which drag reads as a number')
+  console.log(`  ${names.size} gesture attributes are both read and rendered`)
 }

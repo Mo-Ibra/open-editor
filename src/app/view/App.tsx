@@ -15,19 +15,19 @@
 
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
 
-import { AssetBin } from '../ui/AssetBin.js'
-import { ContextMenu, createContextMenu } from '../ui/ContextMenu.js'
-import { ExportDialog } from '../ui/ExportDialog.js'
-import { Preview } from '../ui/Preview.js'
-import { Resizer } from '../ui/Resizer.js'
-import { Timeline } from '../ui/Timeline.js'
+import { AssetBin } from './AssetBin.js'
+import { ContextMenu, createContextMenu } from './ContextMenu.js'
+import { ExportDialog } from './ExportDialog.js'
+import { Preview } from './Preview.js'
+import { Resizer } from './Resizer.js'
+import { Timeline } from './Timeline.js'
 
-import { dump, log } from '../dev/debug.js'
-import { createKeyHandler, shortcutLegend } from './keyboard.js'
-import { createLayout } from './layout.js'
-import { menuItems } from './menu-items.js'
-import { createShortcuts, suppressNativeMenu } from './shortcuts.js'
-import { createAppState } from './state.js'
+import { dump, log } from '../../dev/debug.js'
+import { createKeyHandler, shortcutLegend } from '../commands/keyboard.js'
+import { createLayout } from '../store/layout.js'
+import { menuItems } from '../commands/menu-items.js'
+import { createShortcuts, suppressNativeMenu } from '../commands/shortcuts.js'
+import { createAppState } from '../store/state.js'
 
 export function App() {
   const state = createAppState()

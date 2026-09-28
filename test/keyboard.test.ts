@@ -13,7 +13,7 @@
 
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
-import { matchShortcut, shouldIgnore, shortcutLegend, type Shortcut } from '../src/app/keyboard.ts'
+import { matchShortcut, shouldIgnore, shortcutLegend, type Shortcut } from '../src/app/commands/keyboard.ts'
 
 const pressed = (key: string, mods: Partial<KeyboardEvent> = {}): KeyboardEvent =>
   ({ key, ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, target: null, ...mods }) as unknown as KeyboardEvent

@@ -14,10 +14,10 @@ import { createSignal, type Accessor } from 'solid-js'
 import { createStore } from 'solid-js/store'
 import { unwrap } from 'solid-js/store'
 
-import { MediaLibrary } from '../media/library.js'
-import { computePeaks, type Peak } from '../media/peaks.js'
-import { AudioEngine } from '../audio/audio-engine.js'
-import { log } from '../dev/debug.js'
+import { MediaLibrary } from '../../media/library.js'
+import { computePeaks, type Peak } from '../../media/peaks.js'
+import { AudioEngine } from '../../audio/audio-engine.js'
+import { log } from '../../dev/debug.js'
 import {
   appendAsset,
   newId,
@@ -26,7 +26,7 @@ import {
   type Clip,
   type Lane,
   type Project,
-} from '../model/project.js'
+} from '../../model/project.js'
 import type { Selection } from './selection.js'
 import type { History } from './history.js'
 

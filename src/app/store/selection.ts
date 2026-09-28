@@ -11,7 +11,7 @@
  */
 
 import { createSignal, type Accessor } from 'solid-js'
-import type { Clip, ClipId, Lane, Project } from '../model/project.js'
+import type { Clip, ClipId, Lane, Project } from '../../model/project.js'
 
 /** How a click changes the selection. */
 export type SelectMode = 'replace' | 'toggle' | 'range'

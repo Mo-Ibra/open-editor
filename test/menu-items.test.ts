@@ -30,8 +30,8 @@ g.AudioContext ??= class {
 }
 g.navigator ??= { clipboard: { writeText: async () => undefined } }
 
-const { createAppState } = await import('../src/app/state.ts')
-const { menuItems } = await import('../src/app/menu-items.ts')
+const { createAppState } = await import('../src/app/store/state.ts')
+const { menuItems } = await import('../src/app/commands/menu-items.ts')
 
 type State = ReturnType<typeof createAppState>
 

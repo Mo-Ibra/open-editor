@@ -13,7 +13,7 @@
 
 import { unwrap } from 'solid-js/store'
 
-import { AudioEngine } from '../audio/audio-engine.js'
+import { AudioEngine } from '../../audio/audio-engine.js'
 import {
   breakLink,
   clipAtLane,
@@ -35,8 +35,8 @@ import {
   type ClipId,
   type Lane,
   type Project,
-} from '../model/project.js'
-import type { Lanes } from '../model/project-store.js'
+} from '../../model/project.js'
+import type { Lanes } from '../../model/project-store.js'
 import type { History } from './history.js'
 import type { Selection } from './selection.js'
 

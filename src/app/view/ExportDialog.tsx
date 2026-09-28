@@ -15,12 +15,13 @@
  */
 
 import { createEffect, createSignal, For, onCleanup, Show } from 'solid-js'
-import { Exporter, ExportCancelled, settingsFor, type ExportResult } from '../output/exporter.js'
-import { buildExportAudio, verifyAudioTrack, type ExportAudioTrack } from '../audio/export-audio.js'
-import { projectDuration } from '../model/project.js'
-import { availablePlans, bitrateFor, even, type PlanCandidate } from '../output/codecs.js'
-import { log } from '../dev/debug.js'
-import type { AppState } from '../app/state.js'
+import { Exporter, ExportCancelled, settingsFor, type ExportResult } from '../../output/exporter.js'
+import { buildExportAudio, verifyAudioTrack, type ExportAudioTrack } from '../../audio/export-audio.js'
+import { projectDuration } from '../../model/project.js'
+import { readMediaFacts, selfCheck, selfCheckLine } from '../../output/self-check.js'
+import { availablePlans, bitrateFor, even, type PlanCandidate } from '../../output/codecs.js'
+import { log } from '../../dev/debug.js'
+import type { AppState } from '../store/state.js'
 
 const PRESETS = [
   { label: 'Match source', value: 'source' as const },
@@ -367,19 +368,17 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
                       log.error(`export self-playback failed: ${text}`)
                     }}
                     onLoadedMetadata={() => {
-                      const info = describe(video)
-                      setMeta(
-                        `${info.width}×${info.height} · ${info.duration.toFixed(2)}s · ` +
-                          `audio ${audioVerdict(info, output().hasAudio)}`,
-                      )
+                      // Metadata is authoritative for size and duration, even
+                      // before the browser can say anything about audio.
+                      const info = readMediaFacts(video)
+                      setMeta(selfCheckLine(info, output().hasAudio))
                     }}
                     onTimeUpdate={() => {
-                      const info = describe(video)
-                      if (info.decodedBytes === undefined && info.mozHasAudio === undefined) return
-                      setMeta(
-                        `${info.width}×${info.height} · ${info.duration.toFixed(2)}s · ` +
-                          `audio ${audioVerdict(info, output().hasAudio)}`,
-                      )
+                      // Only replace the line once the browser can judge audio;
+                      // otherwise a not-yet-decodable frame would overwrite real
+                      // information with "not yet confirmed".
+                      const line = selfCheck(video, output().hasAudio)
+                      if (line) setMeta(line)
                     }}
                   />
                 </div>
@@ -457,46 +456,3 @@ function formatTime(seconds: number): string {
   return `${m}:${String(s).padStart(2, '0')}`
 }
 
-interface MediaFacts {
-  width: number
-  height: number
-  duration: number
-  enabledTrackCount: number
-  decodedBytes: number | undefined
-  mozHasAudio: boolean | undefined
-}
-
-function describe(video: HTMLVideoElement): MediaFacts {
-  const anyVideo = video as HTMLVideoElement & {
-    mozHasAudio?: boolean
-    webkitAudioDecodedByteCount?: number
-    audioTracks?: ArrayLike<unknown>
-  }
-  return {
-    width: video.videoWidth,
-    height: video.videoHeight,
-    duration: Number.isFinite(video.duration) ? video.duration : 0,
-    enabledTrackCount: anyVideo.audioTracks?.length ?? 0,
-    decodedBytes: anyVideo.webkitAudioDecodedByteCount,
-    mozHasAudio: anyVideo.mozHasAudio,
-  }
-}
-
-type Verdict = 'present' | 'absent' | 'not yet confirmed'
-
-/**
- * What the element knows about the file's audio.
- *
- * Every signal lies at a different moment: `audioTracks` is empty in Chrome
- * until the tracks are enabled, `webkitAudioDecodedByteCount` is 0 until
- * something has decoded, and `mozHasAudio` is Firefox only. So three states,
- * never two — announcing a disagreement on inconclusive evidence is worse than
- * saying nothing.
- */
-function audioVerdict(info: MediaFacts, weAddedAudio: boolean): Verdict {
-  if (info.mozHasAudio === true) return 'present'
-  if (info.mozHasAudio === false) return 'absent'
-  if (info.decodedBytes !== undefined) return info.decodedBytes > 0 ? 'present' : weAddedAudio ? 'not yet confirmed' : 'absent'
-  if (info.enabledTrackCount > 0) return 'present'
-  return weAddedAudio ? 'not yet confirmed' : 'absent'
-}

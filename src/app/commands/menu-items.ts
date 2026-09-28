@@ -12,10 +12,10 @@
  * user can read* — never present-but-dead.
  */
 
-import { dump } from '../dev/debug.js'
-import type { AppState } from './state.js'
-import type { LayoutState } from './layout.js'
-import type { ContextMenuState, MenuItem } from '../ui/ContextMenu.js'
+import { dump } from '../../dev/debug.js'
+import type { AppState } from '../store/state.js'
+import type { LayoutState } from '../store/layout.js'
+import type { ContextMenuState, MenuItem } from '../view/ContextMenu.js'
 
 export function menuItems(
   state: AppState,

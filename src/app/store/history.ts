@@ -12,8 +12,8 @@
 
 import { createSignal, type Accessor } from 'solid-js'
 import { unwrap } from 'solid-js/store'
-import type { Lanes } from '../model/project-store.js'
-import type { Project } from '../model/project.js'
+import type { Lanes } from '../../model/project-store.js'
+import type { Project } from '../../model/project.js'
 
 const HISTORY_LIMIT = 100
 

@@ -70,7 +70,7 @@ check('the playhead is available as a target, but the editor does not use it', (
   assert.ok(collectTargets(p, { playhead: 4.2, includePlayhead: true }).some((t) => t.kind === 'playhead'))
   assert.ok(!collectTargets(p, { playhead: 4.2, includePlayhead: false }).some((t) => t.kind === 'playhead'))
 
-  const timeline = readFileSync(new URL('../src/ui/Timeline.tsx', import.meta.url), 'utf8')
+  const timeline = readFileSync(new URL('../src/app/view/timeline/use-timeline-drag.ts', import.meta.url), 'utf8')
   assert.ok(
     /includePlayhead: false/.test(timeline),
     'the timeline must opt out of playhead snapping',
@@ -170,7 +170,7 @@ check('an empty timeline still offers the origin', () => {
 // paths — so the separation is guarded here rather than left to review.
 // ---------------------------------------------------------------------------
 
-const timelineSource = readFileSync(new URL('../src/ui/Timeline.tsx', import.meta.url), 'utf8')
+const timelineSource = readFileSync(new URL('../src/app/view/timeline/use-timeline-drag.ts', import.meta.url), 'utf8')
 const snappingSource = readFileSync(new URL('../src/model/snapping.ts', import.meta.url), 'utf8')
 
 /**

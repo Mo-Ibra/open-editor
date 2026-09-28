@@ -1,5 +1,5 @@
 import { render } from 'solid-js/web'
-import { App } from './app/app.js'
+import { App } from './app/view/App.js'
 import { install } from './dev/debug.js'
 
 const root = document.getElementById('root')

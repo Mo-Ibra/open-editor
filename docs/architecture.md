@@ -32,7 +32,7 @@ File ──▶ probe.ts ──▶ Asset ──▶ library.ts ──▶ CanvasSin
 ### Pure — no Web APIs, no imports from the app
 
 These run in Node. That is not an accident; it is what makes the interesting
-logic testable without a browser. `app/selection.ts` and `app/history.ts` are
+logic testable without a browser. `app/store/selection.ts` and `app/store/history.ts` are
 pure for the same reason, and are the pattern to follow when adding a slice.
 
 | Module | Responsibility |
@@ -66,26 +66,31 @@ audible during an export.
 |---|---|
 | `render/render.ts` | **One** function, `renderFrame`. Preview and export both call it ([ADR-1](decisions/0001-one-render-function.md)). |
 | `output/exporter.ts` | The frame loop: walk the timeline, fetch each frame, render, encode, mux. |
+| `output/self-check.ts` | Play the exported file and report what it actually contains. |
 | `audio/export-audio.ts` | The whole timeline as one mixed `Float32Array` ([ADR-4](decisions/0004-deterministic-audio-mixing.md)). |
 | `audio/audio.ts` | Audio preparation for export: conform sample rate, downmix channels, trim. |
 | `output/codecs.ts` | Codec negotiation. See [export.md](export.md#codec-negotiation). |
 
 ### State
 
+`app/` is three layers, and the file extension is a reliable signal for which:
+`.tsx` renders, `.ts` does not.
+
 | Module | Responsibility |
 |---|---|
-| `app/state.ts` | **Composition root.** Builds the slices, wires them, exposes one flat surface. |
-| `app/selection.ts` | Clip selection. Multi-select policy; testable with no store. |
-| `app/history.ts` | Undo. A stack of lane snapshots. |
-| `app/assets.ts` | Import, remove, and getting files onto the timeline. |
-| `app/edits.ts` | Every clip operation. Intent here, meaning in `model/project.ts`. |
-| `app/transport.ts` | Playhead, playback, and what is derived from them. |
-| `app/shortcuts.ts` | The shortcut list — the single source for handler and legend. |
-| `app/keyboard.ts` | Matching and legend derivation. Pure, no browser. |
-| `app/menu-items.ts` | The context menu, as a pure function of (state, target). |
-| `app/layout.ts` | Panel geometry. A *preference*, not project data. |
+| `app/store/state.ts` | **Composition root.** Builds the slices, wires them, exposes one flat surface. |
+| `app/store/selection.ts` | Clip selection. Multi-select policy; testable with no store. |
+| `app/store/history.ts` | Undo. A stack of lane snapshots. |
+| `app/store/assets.ts` | Import, remove, and getting files onto the timeline. |
+| `app/store/edits.ts` | Every clip operation. Intent here, meaning in `model/project.ts`. |
+| `app/store/transport.ts` | Playhead, playback, and what is derived from them. |
+| `app/commands/shortcuts.ts` | The shortcut list — the single source for handler and legend. |
+| `app/commands/keyboard.ts` | Matching and legend derivation. Pure, no browser. |
+| `app/commands/menu-items.ts` | The context menu, as a pure function of (state, target). |
+| `app/store/layout.ts` | Panel geometry. A *preference*, not project data. |
 | `model/project-store.ts` | The single point the project is written. See the warning inside. |
 | `dev/debug.ts` | Logging that also streams to the dev-server terminal at `/__debug`. |
+| `dev/preview-diagnostics.ts` | Luma sampling and the health/overlay readouts. Pure. |
 
 ### UI
 
@@ -93,13 +98,22 @@ SolidJS components, no VDOM.
 
 | Component | Responsibility |
 |---|---|
-| `app/app.tsx` | The shell. Wiring and markup only. |
-| `ui/Timeline.tsx` | Lanes, clips, drag state machine, snapping, ruler, toolbar, waveform. |
-| `ui/Preview.tsx` | The canvas, playhead-driven rendering, playback. |
-| `ui/ExportDialog.tsx` | The export modal. Plays its own output before offering the download. |
-| `ui/AssetBin.tsx` | Imported files. Select, double-click to append, drag onto a lane. |
-| `ui/ContextMenu.tsx` | The application context menu. |
-| `ui/Resizer.tsx` | The draggable panel dividers. |
+| `app/view/App.tsx` | The shell. Wiring and markup only. |
+| `app/view/Timeline.tsx` | Layout and composition. No decisions. |
+| `app/view/timeline/use-timeline-drag.ts` | Every pointer and wheel gesture: seek, move, trim, right-click, zoom. |
+| `app/view/timeline/ticks.ts` | Ruler spacing and labels. Pure, in a `.ts` so it is testable. |
+| `app/view/timeline/Ruler.tsx` | The ruler's markup. |
+| `app/view/timeline/Lane.tsx` | One lane, and the drop target for dragged-in files. |
+| `app/view/timeline/Clip.tsx` | One clip: body, trim handles, badges. |
+| `app/view/timeline/Waveform.tsx` | The peaks canvas. |
+| `app/view/timeline/Toolbar.tsx` | The toolbar. |
+| `app/view/Preview.tsx` | The canvas and the render loop. Cohesive on purpose. |
+| `app/view/preview/Transport.tsx` | The transport bar: play, stepping, mute, time, zoom. |
+| `app/view/preview/use-playback-clock.ts` | The playback clock. Polls the audio clock; never owns it. |
+| `app/view/ExportDialog.tsx` | The export modal. Plays its own output before offering the download. |
+| `app/view/AssetBin.tsx` | Imported files. Select, double-click to append, drag onto a lane. |
+| `app/view/ContextMenu.tsx` | The application context menu. |
+| `app/view/Resizer.tsx` | The draggable panel dividers. |
 
 ### Not part of the app
 
@@ -108,6 +122,54 @@ encode/decode/mux benchmark at `/phase0`. No editor, no model, no Solid. It
 exists because the answer to "can a browser close the loop, and how fast?"
 settled [ADR-3](decisions/0003-re-encode-only.md) and should be re-runnable when
 that is in doubt. It is dev-only and does not ship in the production build.
+
+## Split by coupling, not by line count
+
+`Timeline.tsx` was 755 lines and `Preview.tsx` was 558. Only the first wanted
+splitting.
+
+- **Timeline had breadth, low coupling.** Six unrelated regions at one indent
+  level, none touching another's locals. Every piece had an obvious name, so it
+  became seven files.
+- **Preview has depth, high coupling.** Its top ~300 lines are one render loop.
+  `draw()` reaches into eight component locals (`explain`, `canvas`,
+  `requestedAt`, `paintedAt`, `inFlight`, `paint`, `showDiag`, `lastError`).
+  Extracting it means a ten-parameter function — which is exactly the trap that
+  made the *first* diagnostics attempt make the file longer instead of shorter.
+
+So Preview got two extractions and a `ticks.ts`, and kept its render loop intact.
+Two files where Timeline has seven is the correct outcome, not a half-measure.
+
+## Two rules the view layer follows
+
+**Pure logic goes in `.ts`, even when it belongs next to a component.** The test
+runner strips types with Node's own loader, which **cannot load `.tsx` at all** —
+so pure logic parked in a component file is untested by construction. That is
+why `timeline/ticks.ts` is separate from `Ruler.tsx`.
+
+**The gesture contract is checked across files.** `use-timeline-drag` finds
+clips, lanes and trim handles by `data-*` attribute, and `Clip`/`Lane` render
+them from *different files*. `closest('[data-lane]')` and `dataset.handle` are
+strings, so a rename on either side breaks dragging at runtime with no compile
+error and no unit test. `test/dom.test.ts` therefore reads both halves and
+asserts every attribute the controller queries is actually rendered.
+
+## Where diagnostic code lives
+
+Two modules exist purely to keep dev instrumentation out of the view, and both
+followed the same rule: **extract the pure part, keep the DOM call.**
+
+- `dev/preview-diagnostics.ts` samples luma and formats every readout. The
+  preview keeps only `getImageData` and `fillText`, because those genuinely need
+  a canvas. It takes the store whole and six accessors, rather than being handed
+  twenty copied fields.
+- `output/self-check.ts` judges the exported file. It reads the `<video>`
+  element once and everything else is a pure function of the facts.
+
+The rule matters: the first attempt at the preview extraction passed twenty
+individual values across and made the component *longer* than before. A wide
+behavioural interface is not a refactor, it is the coupling moved somewhere less
+obvious.
 
 ## Data flow
 
@@ -135,8 +197,8 @@ These are not enforced by anything, so they are worth stating:
 
 1. `model/project.ts` must not import from any other module in the app.
 2. `render/render.ts` must not know what a playhead is. It draws one image.
-3. UI components may read anything and write only through `app/state.ts`.
-4. `app/state.ts` holds no behaviour of its own. It builds slices and wires
+3. UI components may read anything and write only through `app/store/state.ts`.
+4. `app/store/state.ts` holds no behaviour of its own. It builds slices and wires
    them; a `project.ts` call that appears there is a bug, because it would
    bypass the slice that owns the policy around it.
 4. No module may hardcode an output codec. See

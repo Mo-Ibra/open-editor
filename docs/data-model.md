@@ -170,7 +170,7 @@ at, or it weakens as they zoom in and feels broken.
 
 ## Zoom
 
-`app/zoom.ts`. `Ctrl`+wheel over the timeline, about the pointer. A trackpad
+`app/store/zoom.ts`. `Ctrl`+wheel over the timeline, about the pointer. A trackpad
 pinch arrives as a ctrl+wheel event, so that works with no special case; a
 plain wheel still scrolls.
 

@@ -21,7 +21,7 @@
 import { batch, createSignal } from 'solid-js'
 import { createStore } from 'solid-js/store'
 
-import { applyLanes, type Lanes } from '../model/project-store.js'
+import { applyLanes, type Lanes } from '../../model/project-store.js'
 import {
   clipDuration,
   clipStart,
@@ -34,11 +34,11 @@ import {
   type Clip,
   type Lane,
   type Project,
-} from '../model/project.js'
+} from '../../model/project.js'
 
-import { AudioEngine } from '../audio/audio-engine.js'
-import { FrameCache } from '../media/frame-cache.js'
-import { MediaLibrary } from '../media/library.js'
+import { AudioEngine } from '../../audio/audio-engine.js'
+import { FrameCache } from '../../media/frame-cache.js'
+import { MediaLibrary } from '../../media/library.js'
 
 import { createAssets } from './assets.js'
 import { createEdits } from './edits.js'
