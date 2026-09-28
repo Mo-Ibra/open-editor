@@ -92,6 +92,7 @@ export async function loadAsset(file: File, id: AssetId = newId('ast')): Promise
     rotation,
     frameRate: metrics.bestGuessFrameRate || 30,
     variableFrameRate,
+    hasVideo: true,
     hasAudio: audio !== null,
     audioSampleRate: audio ? await audio.getSampleRate() : 0,
     audioChannels: audio ? await audio.getNumberOfChannels() : 0,

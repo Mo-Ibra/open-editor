@@ -25,7 +25,8 @@ export function App() {
       case ' ':
         event.preventDefault()
         console.log('[transport] space -> togglePlay', {
-          clips: state.project.clips.length,
+          video: state.project.video.length,
+          audio: state.project.audio.length,
           duration: state.duration(),
           wasPlaying: state.playing(),
         })
@@ -34,7 +35,7 @@ export function App() {
         break
       case 's':
       case 'S':
-        if (state.project.clips.length) state.splitAt(state.playhead())
+        if (state.project.video.length || state.project.audio.length) state.splitAt(state.playhead())
         break
       case 'm':
       case 'M':
@@ -78,7 +79,8 @@ export function App() {
 
   // The frame cache is only valid for the media it holds.
   createEffect(() => {
-    state.project.clips
+    state.project.video
+    state.project.audio
     state.frameCache.clear()
   })
 

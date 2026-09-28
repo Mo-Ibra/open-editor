@@ -10,8 +10,9 @@ import assert from 'node:assert/strict'
 import { frameTimesForClip, totalFramesFor } from '../src/exporter.ts'
 import { projectDuration, type Clip, type Project } from '../src/project.ts'
 
-const c = (id: string, i: number, o: number): Clip => ({ id, assetId: 'a', in: i, out: o })
-const project = (clips: Clip[]): Project => ({ version: 1, assets: {}, clips })
+const c = (id: string, i: number, o: number): Clip => ({ id, lane: 'video', assetId: 'a', in: i, out: o })
+/** The exporter walks the VIDEO lane; a real project also has an audio lane. */
+const project = (clips: Clip[]): Project => ({ version: 2, assets: {}, video: clips, audio: [] })
 
 const clips = [c('a', 0, 10), c('b', 5, 25), c('c', 2, 4)] // 10s, 20s, 2s
 const FPS = 30

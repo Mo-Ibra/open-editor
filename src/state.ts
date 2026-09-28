@@ -7,22 +7,37 @@
  */
 
 import { batch, createSignal } from 'solid-js'
-import { createStore, produce, unwrap } from 'solid-js/store'
-import { MediaLibrary, type LibraryEntry } from './library.js'
+import { createStore, unwrap } from 'solid-js/store'
 import { FrameCache } from './frame-cache.js'
+import { MediaLibrary, type LibraryEntry } from './library.js'
 import { AudioEngine } from './audio-engine.js'
+import { computePeaks, type Peak } from './peaks.js'
+import { log } from './debug.js'
 import {
-  clipAt,
+  appendAsset,
+  breakLink,
+  clipAtLane,
   clipDuration,
+  clipStart,
   emptyProject,
+  findClip,
+  isLinked,
+  laneDuration,
+  laneOf,
+  linkedPartner,
   moveClip,
   newId,
   projectDuration,
   removeClip,
-  splitClip,
+  setClipGain as applyGain,
+  setTransform as applyTransform,
+  splitLinked,
+  toggleMute as applyMute,
+  trimClip as applyTrim,
   type AssetId,
   type Clip,
   type ClipId,
+  type Lane,
   type Project,
 } from './project.js'
 
@@ -43,16 +58,18 @@ export function createAppState() {
   const [zoom, setZoomLevel] = createSignal(80) // pixels per second
   const [notices, setNotices] = createSignal<Notice[]>([])
   const [loading, setLoading] = createSignal(false)
+  /** Peaks per asset, computed once and reused. The waveform redraws on every
+   *  playhead move, so recomputing would make scrubbing unusable. */
+  const [peaksBy, setPeaksBy] = createStore<Record<string, Peak[]>>({})
 
-  // Undo is a snapshot of the clips array. It is a few KB and it is exact,
-  // which beats a command pattern for a model this small.
-  const [past, setPast] = createSignal<Clip[][]>([])
-  const [future, setFuture] = createSignal<Clip[][]>([])
+  /** History entries are the two lanes, without assets — pointers are all an
+   *  edit can change, and it keeps a snapshot to a few hundred bytes. */
+  type Lanes = { video: Clip[]; audio: Clip[] }
+  const [past, setPast] = createSignal<Lanes[]>([])
+  const [future, setFuture] = createSignal<Lanes[]>([])
 
   const frameCache = new FrameCache()
 
-  // The audio clock is the master during playback, so the engine is created
-  // once and outlives every play/pause cycle.
   const audio = new AudioEngine({
     library,
     onError: (message) => notify('error', message),
@@ -63,10 +80,15 @@ export function createAppState() {
     if (kind !== 'error') setTimeout(() => setNotices((prev) => prev.slice(0, -1)), 6000)
   }
 
-  /** Snapshot before a mutation, so undo has something to go back to. */
+  // --- history ------------------------------------------------------------
+
+  function snapshot(): Lanes {
+    return { video: unwrap(project).video, audio: unwrap(project).audio }
+  }
+
   function commit(): void {
-    const snapshot = unwrap(project).clips.map((c) => ({ ...c }))
-    setPast((prev) => [...prev.slice(-(HISTORY_LIMIT - 1)), snapshot])
+    const current = snapshot()
+    setPast((prev) => [...prev.slice(-(HISTORY_LIMIT - 1)), current])
     setFuture([])
   }
 
@@ -74,10 +96,11 @@ export function createAppState() {
     const history = past()
     const previous = history.at(-1)
     if (!previous) return
-    const current = unwrap(project).clips.map((c) => ({ ...c }))
+    const current = snapshot()
     setPast(history.slice(0, -1))
     setFuture((f) => [...f, current])
-    setProject('clips', previous)
+    setProject('video', previous.video)
+    setProject('audio', previous.audio)
     setSelected(null)
   }
 
@@ -85,28 +108,30 @@ export function createAppState() {
     const history = future()
     const next = history.at(-1)
     if (!next) return
-    const current = unwrap(project).clips.map((c) => ({ ...c }))
+    const current = snapshot()
     setFuture(history.slice(0, -1))
     setPast((p) => [...p, current])
-    setProject('clips', next)
+    setProject('video', next.video)
+    setProject('audio', next.audio)
   }
 
   const canUndo = () => past().length > 0
   const canRedo = () => future().length > 0
 
-  // --- assets ---------------------------------------------------------------
+  // --- assets -------------------------------------------------------------
 
   async function addFiles(files: File[]): Promise<void> {
     setLoading(true)
     for (const file of files) {
       try {
         const entry = await library.add(file)
-        setProject('assets', entry.asset.id, entry.asset)
         if (entry.error) {
           notify('error', `${file.name}: ${entry.error}`)
-        } else {
-          notify('info', `Added ${file.name} — ${entry.asset.width}×${entry.asset.height}`)
+          continue
         }
+        setProject('assets', entry.asset.id, entry.asset)
+        notify('info', `Added ${file.name} — ${entry.asset.width}×${entry.asset.height}`)
+        log.info('asset ready', { id: entry.asset.id, name: entry.asset.name })
       } catch (err) {
         notify('error', err instanceof Error ? err.message : String(err))
       }
@@ -115,112 +140,165 @@ export function createAppState() {
   }
 
   /**
-   * The bin must iterate a REACTIVE list, or the list never updates when a
-   * file lands. MediaLibrary's internal Map is not reactive, so deriving the
-   * bin from it means a successful import renders nothing — the file is in
-   * memory, the notice fires, and the UI stays empty.
+   * Put a file on the timeline.
    *
-   * So: ids come from the store (reactive), the heavy entry comes from the
-   * library (not reactive, and does not need to be).
+   * A file with picture and sound becomes a *linked pair* — two clips, one
+   * shared `linkId` — so splitting cuts both. An audio-only file gets one
+   * unlinked audio clip; a silent file gets one unlinked video clip.
    */
-  const assetIds = (): AssetId[] => Object.keys(project.assets)
-
-  const entryFor = (id: AssetId): LibraryEntry | undefined => library.get(id)
-
-  function getAsset(id: AssetId) {
-    return project.assets[id]
-  }
-
-  // --- clips ----------------------------------------------------------------
-
-  function addClip(assetId: AssetId, atIndex?: number): void {
+  function addAssetToTimeline(assetId: AssetId): void {
     const asset = project.assets[assetId]
     if (!asset) return
     commit()
-    const clip: Clip = { id: newId('clp'), assetId, in: 0, out: asset.duration }
-    batch(() => {
-      setProject('clips', (clips) => {
-        const next = clips.slice()
-        next.splice(atIndex ?? next.length, 0, clip)
-        return next
-      })
-      setSelected(clip.id)
-    })
+    const next = appendAsset(unwrap(project), assetId, asset)
+    setProject('video', next.video)
+    setProject('audio', next.audio)
+    setSelected(next.video.at(-1)?.id ?? next.audio.at(-1)?.id ?? null)
+
+    const parts = [
+      next.video.length ? `${next.video.length} video` : null,
+      next.audio.length ? `${next.audio.length} audio` : null,
+    ].filter(Boolean)
+    notify('info', `Added ${asset.name} — ${parts.join(' and ')}`)
   }
 
-  function splitAt(time: number): void {
-    const loc = clipAt(project, time)
-    if (!loc) return
+  const assetIds = (): AssetId[] => Object.keys(project.assets)
+  const entryFor = (assetId: AssetId): LibraryEntry | undefined => library.get(assetId)
+  const getAsset = (assetId: AssetId) => project.assets[assetId]
+
+  /**
+   * Peaks for an asset's audio, computed once.
+   *
+   * Reuses the buffer the audio engine already decoded, so the waveform costs
+   * one pass over samples and nothing more.
+   */
+  async function peaksFor(assetId: AssetId): Promise<Peak[] | undefined> {
+    if (peaksBy[assetId]) return peaksBy[assetId]
+    const entry = library.get(assetId)
+    if (!entry?.audioTrack) return undefined
+    try {
+      const buffer = await audio.decodedAudio(assetId)
+      if (!buffer) return undefined
+      const peaks = computePeaks(buffer)
+      setPeaksBy(assetId, peaks)
+      log.debug(`peaks: ${peaks.length} buckets for ${entry.asset.name}`)
+      return peaks
+    } catch (err) {
+      log.warn(`peaks failed for ${entry.asset.name}`, String(err))
+      return undefined
+    }
+  }
+
+  // --- clips --------------------------------------------------------------
+
+  function addClip(assetId: AssetId): void {
+    addAssetToTimeline(assetId)
+  }
+
+  /**
+   * Split at a timeline position.
+   *
+   * With a clip selected, that clip splits — and its linked partner too. With
+   * nothing selected, whatever is under the playhead in each lane splits.
+   */
+  function splitAt(time: number, lane?: Lane): void {
     commit()
-    // A split changes what the playhead points at, so the scheduled audio is
-    // now wrong and has to be rebuilt from the new position.
-    if (playing()) void restartAt(time)
-    setProject('clips', (clips) => splitClip(clips, loc.index, time))
+
+    if (lane) {
+      const loc = clipAtLane(laneOf(project, lane), time)
+      if (!loc) return
+      setProject(replace(splitLinked(unwrap(project), lane, loc.index, time)))
+      return
+    }
+
+    const selectedClip = selected()
+    if (selectedClip) {
+      const found = findClip(project, selectedClip)
+      if (found) {
+        setProject(replace(splitLinked(unwrap(project), found.lane, found.index, time)))
+        return
+      }
+    }
+
+    // Nothing selected: split each lane independently at the playhead.
+    let next = unwrap(project)
+    for (const l of ['video', 'audio'] as const) {
+      const loc = clipAtLane(next[l], time)
+      if (loc) next = splitLinked(next, l, loc.index, time)
+    }
+    setProject(replace(next))
   }
 
+  /** Delete the selected clip, and only that clip. That is the point of lanes. */
   function deleteSelected(): void {
     const id = selected()
     if (!id) return
-    const index = project.clips.findIndex((c) => c.id === id)
-    if (index < 0) return
+    const found = findClip(project, id)
+    if (!found) return
     commit()
-    batch(() => {
-      setProject('clips', (clips) => removeClip(clips, index))
-      setSelected(null)
-    })
+    setProject(replace(removeClip(unwrap(project), found.lane, found.index)))
+    setSelected(null)
   }
 
-  function reorder(from: number, to: number): void {
+  function reorder(lane: Lane, from: number, to: number): void {
     if (from === to) return
     commit()
-    setProject('clips', (clips) => moveClip(clips, from, to))
+    setProject(replace(moveClip(unwrap(project), lane, from, to)))
   }
 
-  function trim(index: number, inPoint: number, outPoint: number): void {
-    const asset = project.assets[project.clips[index]?.assetId ?? '']
-    if (!asset) return
-    const clampedIn = Math.max(0, Math.min(inPoint, asset.duration))
-    const clampedOut = Math.max(clampedIn, Math.min(outPoint, asset.duration))
-    setProject('clips', index, produce((clip) => {
-      clip.in = clampedIn
-      clip.out = clampedOut
-    }))
-  }
-
-  function setClipGain(clipId: ClipId, gain: number): void {
-    const index = project.clips.findIndex((c) => c.id === clipId)
-    if (index < 0) return
-    setProject('clips', index, 'gain', Math.max(0, Math.min(2, gain)))
-    const clip = project.clips[index]
-    if (clip) audio.setClipGain(clip)
-  }
-
-  function toggleMute(clipId: ClipId): void {
-    const index = project.clips.findIndex((c) => c.id === clipId)
-    if (index < 0) return
-    setProject('clips', index, 'muted', !project.clips[index]!.muted)
-    const clip = project.clips[index]
-    if (clip) audio.setClipGain(clip)
+  function trim(lane: Lane, index: number, inPoint: number, outPoint: number): void {
+    setProject(replace(applyTrim(unwrap(project), lane, index, inPoint, outPoint)))
   }
 
   function setTransform(clipId: ClipId, transform: Clip['transform']): void {
-    const index = project.clips.findIndex((c) => c.id === clipId)
-    if (index < 0) return
-    setProject('clips', index, 'transform', transform)
+    setProject(replace(applyTransform(unwrap(project), clipId, transform!)))
   }
 
-  // --- derived --------------------------------------------------------------
+  function setClipGain(clipId: ClipId, gain: number): void {
+    setProject(replace(applyGain(unwrap(project), clipId, gain)))
+    const found = findClip(project, clipId)
+    if (found) audio.setClipGain(found.clip)
+  }
+
+  function toggleMute(clipId: ClipId): void {
+    setProject(replace(applyMute(unwrap(project), clipId)))
+    const found = findClip(project, clipId)
+    if (found) audio.setClipGain(found.clip)
+  }
+
+  /** Break the link on a selected clip, so its pair becomes independent. */
+  function breakSelectedLink(): void {
+    const id = selected()
+    if (!id) return
+    const found = findClip(project, id)
+    if (!found?.clip.linkId) return
+    commit()
+    setProject(replace(breakLink(unwrap(project), found.clip)))
+    notify('info', 'Link broken — this clip and its pair are now independent.')
+  }
+
+  // --- transport ----------------------------------------------------------
 
   const duration = (): number => projectDuration(project)
   const outputFps = (): number => 30
-  const selectedClip = (): Clip | null => project.clips.find((c) => c.id === selected()) ?? null
+  const selectedClip = (): Clip | null => {
+    const id = selected()
+    return id ? (findClip(project, id)?.clip ?? null) : null
+  }
+  const selectedIsLinked = (): boolean => {
+    const clip = selectedClip()
+    return clip ? isLinked(project, clip) : false
+  }
+  const selectedPartner = (): Clip | null => {
+    const clip = selectedClip()
+    return clip ? linkedPartner(project, clip) : null
+  }
 
-  // --- transport ------------------------------------------------------------
+  let wallClockAnchor: { at: number; from: number; runStart: number | null } | null = null
 
   function seek(time: number): void {
     const clamped = Math.max(0, Math.min(time, duration()))
     if (playing()) {
-      // Resuming from the new position rather than leaving audio where it was.
       void restartAt(clamped)
       return
     }
@@ -234,34 +312,12 @@ export function createAppState() {
     setPlayhead(time)
   }
 
-  /**
-   * Both transport actions refuse politely when there is nothing on the
-   * timeline, and say so. A silent no-op here reads as "the keyboard is
-   * broken" — which is exactly how it was reported, and it took a guess to
-   * find. Silent is never the right answer to "why did nothing happen".
-   */
-  function requireContent(): boolean {
-    if (project.clips.length > 0 && duration() > 0) return true
-    const hasFiles = Object.keys(project.assets).length > 0
-    notify(
-      'warn',
-      hasFiles
-        ? 'Add a clip to the timeline first — click a file under Media.'
-        : 'Drop a video file to get started.',
-    )
-    return false
-  }
-
-  /**
-   * Play / pause, with audio leading and the playhead following.
-   *
-   * The AudioContext clock is the reference because it is a sound card clock
-   * and does not drift. The JS interval only *polls* it; it is not the source
-   * of time. This is what keeps a 10-minute edit from slowly losing sync, which
-   * a performance.now()-based clock drifts into within a few minutes.
-   */
   async function togglePlay(): Promise<void> {
-    if (!requireContent()) return
+    if (project.video.length === 0 && project.audio.length === 0) {
+      const hasFiles = assetIds().length > 0
+      notify('warn', hasFiles ? 'Add a clip to the timeline first — click a file under Media.' : 'Drop a video file to get started.')
+      return
+    }
 
     if (playing()) {
       const at = audio.now() ?? playhead()
@@ -271,63 +327,49 @@ export function createAppState() {
       return
     }
 
-    // Playing from the very end should restart, not sit there.
     let from = playhead()
     if (from >= duration() - 0.01) from = 0
 
     await audio.unlock()
     const runStart = await audio.play(project, from)
-
-    // Fall back to the wall clock if the browser refused to start audio, so
-    // video still plays rather than the app deadlocking on a promise.
     wallClockAnchor = { at: performance.now(), from, runStart: runStart ?? null }
-
     if (from !== playhead()) setPlayhead(from)
     setPlaying(true)
   }
 
-  let wallClockAnchor: { at: number; from: number; runStart: number | null } | null = null
-
-  /** Called by the transport's polling tick. */
   function advanceClock(): void {
     if (!playing()) return
-
     const audioTime = audio.now()
     if (audioTime !== null) {
-      // Clamp here as well as in the engine: this is the raw write path, and
-      // an out-of-range playhead becomes a negative source time downstream.
       setPlayhead(Math.max(0, Math.min(audioTime, duration())))
       return
     }
-
     if (wallClockAnchor) {
-      const next = wallClockAnchor.from + (performance.now() - wallClockAnchor.at) / 1000
-      if (wallClockAnchor.runStart === null) setPlayhead(next)
+      setPlayhead(Math.min(wallClockAnchor.from + (performance.now() - wallClockAnchor.at) / 1000, duration()))
     }
   }
 
   function step(frames: number): void {
-    if (!requireContent()) return
     seek(playhead() + frames / outputFps())
   }
 
-  /** Timeline x/y for a clip, in pixels. */
-  function clipRect(index: number): { left: number; width: number } {
-    let start = 0
-    for (let i = 0; i < index; i++) start += clipDuration(project.clips[i]!)
-    return { left: start * zoom(), width: clipDuration(project.clips[index]!) * zoom() }
+  // --- layout helpers -----------------------------------------------------
+
+  function clipRect(lane: Lane, index: number): { left: number; width: number } {
+    const clips = laneOf(project, lane)
+    return { left: clipStart(clips, index) * zoom(), width: clipDuration(clips[index]!) * zoom() }
   }
 
-  function timeToX(time: number): number {
-    return time * zoom()
-  }
+  const timeToX = (time: number) => time * zoom()
+  const xToTime = (x: number) => x / zoom()
+  const laneLength = (lane: Lane) => laneDuration(laneOf(project, lane))
 
-  function xToTime(x: number): number {
-    return x / zoom()
+  /** Keep `setProject(next)` readable at every call site. */
+  function replace(next: Project): { video: Clip[]; audio: Clip[] } {
+    return { video: next.video, audio: next.audio }
   }
 
   return {
-    // reactive
     project,
     playhead,
     playing,
@@ -335,9 +377,9 @@ export function createAppState() {
     zoom,
     notices,
     loading,
+    peaksBy,
     canUndo,
     canRedo,
-    // setters
     setPlayhead,
     setPlaying,
     setSelected,
@@ -345,24 +387,27 @@ export function createAppState() {
     // non-reactive
     library,
     frameCache,
+    audio,
+    getAssetAudio: (id: string) => audio.decodedAudio(id),
     // actions
     addFiles,
+    addAssetToTimeline,
+    addClip,
     assetIds,
     entryFor,
     getAsset,
-    addClip,
+    peaksFor,
     splitAt,
     deleteSelected,
     reorder,
     trim,
     setTransform,
+    setClipGain,
+    toggleMute,
+    breakSelectedLink,
     seek,
     togglePlay,
     advanceClock,
-    audio,
-    getAssetAudio: (id: string) => audio.decodedAudio(id),
-    setClipGain,
-    toggleMute,
     step,
     undo,
     redo,
@@ -371,9 +416,14 @@ export function createAppState() {
     duration,
     outputFps,
     selectedClip,
+    selectedIsLinked,
+    selectedPartner,
     clipRect,
+    laneLength,
     timeToX,
     xToTime,
+    newId,
+    batch,
   }
 }
 

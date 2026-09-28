@@ -52,6 +52,11 @@ An Adobe replacement. A motion-graphics tool. A plugin host. A collaborative edi
 
 ## 3. The editing model
 
+> **Revised 2026-09-28 — two lanes.** The model below is now `video: Clip[]`
+> and `audio: Clip[]` rather than one fused `clips: Clip[]`, and project
+> version is **2**. The three rules are unchanged; see §3.1 for the lanes and
+> links.
+
 This is the whole product. It is small, and that is the point.
 
 ```ts
@@ -99,6 +104,33 @@ type CaptionTrack = {
 **2. Durations are derived, never stored.** `duration(clip) = out - in`. `start(clip) = Σ duration(clips[0..i-1])`. Two functions, used everywhere.
 
 **3. Only integers at the boundaries.** `in` and `out` are floats in seconds because that's what a human drags. They are converted **once** to integer frames and integer audio samples at export time, and the export loop never does float math. See §6.1.
+
+### 3.1 Two lanes, linked by default
+
+```
+┌─ video ────────────────────────  trim, zoom
+│ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+├─ audio ────────────────────────  waveform, level, mute
+│ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+```
+
+Adding a file with picture and sound produces a **linked pair**: two clips
+sharing one `linkId`. Splitting cuts both. Deleting one leaves the other, which
+is the entire point — trimming the picture while keeping the sound is a normal
+thing to want, and it is inexpressible if a clip carries its audio implicitly.
+
+**Link rules, each pinned by a test:**
+- A file with both → a linked pair. Audio-only → one unlinked audio clip. Silent → one unlinked video clip.
+- Splitting a linked clip splits the partner **against its own timeline**, not the partner's source time. A linked pair can legitimately be out of alignment if you slid the audio, and splitting at the video's source time would land in the wrong place.
+- A partner too short to split is **left alone**, rather than halved into a 10 ms clip.
+- `Break link` severs both directions. Thereafter they are independent.
+
+**Waveform.** Peaks at 200/sec, computed once per asset during the audio decode
+we already do, cached, and redrawn only on zoom or trim — never per frame.
+Extremes are preserved when downsampling to pixels, so a transient is never
+lost to a bucket boundary: a waveform that quietly deletes peaks is worse than
+no waveform, because people cut on it. `findSilence()` already exists in
+`src/peaks.ts` for a later "shade the dead air" pass.
 
 ### Every edit is one of five operations
 

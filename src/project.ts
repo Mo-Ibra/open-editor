@@ -1,16 +1,28 @@
 /**
- * The editing model. This is the whole product (see PLAN.md §3).
+ * The editing model. This is the whole product (PLAN.md §3).
+ *
+ * Two lanes, `video` and `audio`, each an ordered array. Splitting a clip
+ * with audio attached, cutting the dead air out of a voiceover, or dropping a
+ * video and keeping its sound are all the operations people actually perform —
+ * and none of them are expressible if a clip carries its own audio implicitly.
  *
  * Rules this file obeys, and which the rest of the codebase depends on:
+ *
  *  1. No `start` field on a clip. Timeline position is derived from array
  *     order, so position and order can never disagree.
  *  2. Durations are never stored. Everything reads from `clipDuration`.
- *  3. No Web APIs in this file. It is pure data, so it is trivially
- *     testable and undo is a structured clone away.
+ *  3. **Links are symmetric and optional.** Two clips sharing a `linkId` are
+ *     edited together by default. Break the link and they are independent —
+ *     which is the point, because sometimes you need to cut the picture and
+ *     keep the sound.
+ *  4. No Web APIs in this file. Pure data, so undo is a snapshot and this is
+ *     directly testable.
  */
 
 export type AssetId = string
 export type ClipId = string
+export type Lane = 'video' | 'audio'
+export type LinkId = string
 
 export type Rotation = 0 | 90 | 180 | 270
 
@@ -27,6 +39,10 @@ export interface Asset {
   frameRate: number
   /** True when frame durations are irregular — i.e. most screen recordings. */
   variableFrameRate: boolean
+  /** False for an audio-only source — a voice memo, a music bed. It gets no
+   *  video clip, because a black rectangle pretending to be a clip is worse
+   *  than no clip. */
+  hasVideo: boolean
   hasAudio: boolean
   audioSampleRate: number
   audioChannels: number
@@ -43,15 +59,23 @@ export interface ClipTransform {
 
 export interface Clip {
   id: ClipId
+  /** Which lane this lives in. A clip is in exactly one. */
+  lane: Lane
   assetId: AssetId
   /** Source in-point, seconds. Fractional — this is what a human drags. */
   in: number
   /** Source out-point, seconds. */
   out: number
   transform?: ClipTransform
-  /** Linear gain, 0–2. Optional because absent means unity. */
+  /** Linear gain, 0–2. Absent means unity. */
   gain?: number
   muted?: boolean
+  /**
+   * Clips sharing a linkId are edited together. Absent means unlinked, which
+   * is a first-class state, not an oversight: cutting the picture while
+   * keeping the sound is a normal thing to want.
+   */
+  linkId?: LinkId
 }
 
 export type CaptionPosition = 'top' | 'center' | 'bottom'
@@ -65,82 +89,67 @@ export interface CaptionStyle {
 }
 
 export interface CaptionTrack {
-  /** The raw .srt text, verbatim. Parsed lazily, cached by mtime-free key. */
+  /** The raw .srt text, verbatim. */
   src: string
   style: CaptionStyle
 }
 
 export interface Project {
-  version: 1
+  version: 2
   assets: Record<AssetId, Asset>
-  /** Array order IS timeline order. */
-  clips: Clip[]
+  /** Array order IS timeline order, per lane. */
+  video: Clip[]
+  audio: Clip[]
   captions?: CaptionTrack
 }
 
 // ---------------------------------------------------------------------------
-// Derived quantities. These three functions replace every stored field that
-// could drift. Nothing else in the codebase should compute positions.
+// Derived quantities
 // ---------------------------------------------------------------------------
 
 export function clipDuration(clip: Clip): number {
   return Math.max(0, clip.out - clip.in)
 }
 
-/** Timeline offset of clip `index`, in seconds. */
+/** Timeline offset of index `i` within one lane, in seconds. */
 export function clipStart(clips: Clip[], index: number): number {
   let t = 0
   for (let i = 0; i < index; i++) t += clipDuration(clips[i]!)
   return t
 }
 
-export function projectDuration(project: Project): number {
+export function laneDuration(clips: Clip[]): number {
   let t = 0
-  for (const clip of project.clips) t += clipDuration(clip)
+  for (const clip of clips) t += clipDuration(clip)
   return t
 }
 
-// ---------------------------------------------------------------------------
-// Boundary arithmetic
-//
-// `in`/`out` are floats because a human drags them. They are converted to
-// integer frames and integer samples EXACTLY ONCE, at export time, and the
-// export loop never does float math. Accumulating floats across 200 clips is
-// the single most common source of A/V drift (PLAN.md §6.1).
-// ---------------------------------------------------------------------------
-
-export function toSampleIndex(seconds: number, sampleRate: number): number {
-  return Math.round(seconds * sampleRate)
+/**
+ * The timeline is as long as its longest lane.
+ *
+ * Audio longer than the video does not extend the video — it would export
+ * silence with no picture. The excess is simply not heard.
+ */
+export function projectDuration(project: Project): number {
+  return Math.max(laneDuration(project.video), laneDuration(project.audio))
 }
 
-export function toFrameIndex(seconds: number, frameRate: number): number {
-  return Math.round(seconds * frameRate)
+export function laneOf(project: Project, lane: Lane): Clip[] {
+  return lane === 'video' ? project.video : project.audio
 }
-
-/** Clamp a clip's in/out to its asset, and guarantee out > in. */
-export function normalizeClip(clip: Clip, asset: Asset): Clip {
-  const inPoint = clamp(clip.in, 0, asset.duration)
-  const outPoint = clamp(clip.out, inPoint, asset.duration)
-  return outPoint > inPoint ? { ...clip, in: inPoint, out: outPoint } : { ...clip, in: inPoint, out: inPoint }
-}
-
-// ---------------------------------------------------------------------------
-// Timeline lookup
-// ---------------------------------------------------------------------------
 
 export interface ClipLocation {
   clip: Clip
-  /** Index into `project.clips`. */
   index: number
   /** Timeline position of the clip, seconds. */
   start: number
 }
 
-/** Which clip is under timeline time `t`? Null means a gap. */
-export function clipAt(project: Project, t: number): ClipLocation | null {
+/** Which clip is under timeline time `t` in this lane? Null means a gap. */
+export function clipAtLane(clips: Clip[], t: number): ClipLocation | null {
   let start = 0
-  for (let i = 0; i < project.clips.length; i++) {
-    const clip = project.clips[i]!
+  for (let i = 0; i < clips.length; i++) {
+    const clip = clips[i]!
     const d = clipDuration(clip)
     if (t < start + d) return { clip, index: i, start }
     start += d
@@ -154,56 +163,214 @@ export function sourceTimeAt(loc: ClipLocation, t: number): number {
 }
 
 // ---------------------------------------------------------------------------
-// Editing operations. Each one is O(n) at worst and mutates nothing — the
-// caller swaps in the returned array, which keeps undo a snapshot.
+// Boundary arithmetic
+//
+// `in`/`out` are floats because a human drags them. They are converted to
+// integer frames and integer samples EXACTLY ONCE, at export time, and the
+// export loops never do float math. Accumulating floats across 200 clips is
+// the most common source of A/V drift (§6.1).
 // ---------------------------------------------------------------------------
 
-export function splitClip(clips: Clip[], index: number, timelineT: number): Clip[] {
-  const clip = clips[index]
-  if (!clip) return clips
-
-  const local = timelineT - clipStart(clips, index)
-  const sourceT = clip.in + local
-  // Refuse a split that lands within a frame of either edge; it would produce
-  // a zero-length clip and a divide-by-zero later.
-  const min = 0.04
-  if (local < min || local > clipDuration(clip) - min) return clips
-
-  const left: Clip = { ...clip, out: sourceT }
-  const right: Clip = { ...clip, id: newId('clp'), in: sourceT }
-  return [...clips.slice(0, index), left, right, ...clips.slice(index + 1)]
+export function toSampleIndex(seconds: number, sampleRate: number): number {
+  return Math.round(seconds * sampleRate)
 }
 
-export function removeClip(clips: Clip[], index: number): Clip[] {
-  return clips.filter((_, i) => i !== index)
+export function toFrameIndex(seconds: number, frameRate: number): number {
+  return Math.round(seconds * frameRate)
 }
 
-export function moveClip(clips: Clip[], from: number, to: number): Clip[] {
-  if (from === to || from < 0 || to < 0 || from >= clips.length || to >= clips.length) return clips
-  const next = clips.slice()
-  const [clip] = next.splice(from, 1)
-  next.splice(to, 0, clip!)
-  return next
-}
-
-export function trimClip(clips: Clip[], index: number, inPoint: number, outPoint: number): Clip[] {
-  const clip = clips[index]
-  if (!clip) return clips
-  const next = clips.slice()
-  next[index] = { ...clip, in: inPoint, out: Math.max(inPoint, outPoint) }
-  return next
+export function clampClip(clip: Clip, asset: Asset): Clip {
+  const inPoint = clamp(clip.in, 0, asset.duration)
+  const outPoint = clamp(clip.out, inPoint, asset.duration)
+  return outPoint > inPoint ? { ...clip, in: inPoint, out: outPoint } : { ...clip, in: inPoint, out: inPoint }
 }
 
 // ---------------------------------------------------------------------------
-// Serialization
+// Links
 // ---------------------------------------------------------------------------
 
 export function newId(prefix: string): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`
 }
 
+/** Find a clip by id in either lane. */
+export function findClip(project: Project, clipId: ClipId): { clip: Clip; lane: Lane; index: number } | null {
+  for (const lane of ['video', 'audio'] as const) {
+    const index = laneOf(project, lane).findIndex((c) => c.id === clipId)
+    if (index >= 0) return { clip: laneOf(project, lane)[index]!, lane, index }
+  }
+  return null
+}
+
+/** The other half of a linked pair, or null when the clip is unlinked. */
+export function linkedPartner(project: Project, clip: Clip): Clip | null {
+  if (!clip.linkId) return null
+  for (const lane of ['video', 'audio'] as const) {
+    for (const other of laneOf(project, lane)) {
+      if (other.id !== clip.id && other.linkId === clip.linkId) return other
+    }
+  }
+  return null
+}
+
+export function isLinked(project: Project, clip: Clip): boolean {
+  return linkedPartner(project, clip) !== null
+}
+
+/** Break a link in both directions. Afterwards the pair is independent. */
+export function breakLink(project: Project, clip: Clip): Project {
+  if (!clip.linkId) return project
+  return {
+    ...project,
+    video: project.video.map((c) => (c.linkId === clip.linkId ? { ...c, linkId: undefined } : c)),
+    audio: project.audio.map((c) => (c.linkId === clip.linkId ? { ...c, linkId: undefined } : c)),
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Editing operations
+//
+// Each returns a new Project. Nothing re-encodes and nothing mutates a source
+// file, so every one of them is free.
+// ---------------------------------------------------------------------------
+
+export interface AddAssetOptions {
+  /** Include a video clip. False for an audio-only asset. */
+  video: boolean
+  /** Include an audio clip. False for a video-only asset. */
+  audio: boolean
+}
+
+/**
+ * Append a source file to the timeline.
+ *
+ * A file with both picture and sound produces a *linked pair*: two clips
+ * sharing one `linkId`, so splitting cuts both. An audio-only file produces
+ * an audio clip alone, unlinked, because there is nothing to link it to.
+ */
+export function appendAsset(project: Project, assetId: AssetId, asset: Asset): Project {
+  // Only link when there is genuinely a pair to link.
+  const linked = asset.hasVideo && asset.hasAudio
+  const linkId = linked ? newId('lnk') : undefined
+  const video: Clip[] =
+    asset.hasVideo && asset.duration > 0
+      ? [{ id: newId('clp'), lane: 'video', assetId, in: 0, out: asset.duration, ...(linkId ? { linkId } : {}) }]
+      : []
+  const audio: Clip[] =
+    asset.hasAudio
+      ? [{ id: newId('clp'), lane: 'audio', assetId, in: 0, out: asset.duration, ...(linkId ? { linkId } : {}) }]
+      : []
+
+  return {
+    ...project,
+    video: [...project.video, ...video],
+    audio: [...project.audio, ...audio],
+  }
+}
+
+/** Remove one clip. Linked partners survive — deleting is per-lane. */
+export function removeClip(project: Project, lane: Lane, index: number): Project {
+  const clips = laneOf(project, lane).filter((_, i) => i !== index)
+  return { ...project, [lane]: clips } as Project
+}
+
+export function moveClip(project: Project, lane: Lane, from: number, to: number): Project {
+  const clips = laneOf(project, lane)
+  if (from === to || from < 0 || to < 0 || from >= clips.length || to >= clips.length) return project
+  const next = clips.slice()
+  const [clip] = next.splice(from, 1)
+  next.splice(to, 0, clip!)
+  return { ...project, [lane]: next } as Project
+}
+
+export function trimClip(project: Project, lane: Lane, index: number, inPoint: number, outPoint: number): Project {
+  const clips = laneOf(project, lane)
+  const clip = clips[index]
+  if (!clip) return project
+  const asset = project.assets[clip.assetId]
+  const inClamped = asset ? clamp(inPoint, 0, asset.duration) : inPoint
+  const outClamped = asset ? clamp(outPoint, inClamped, asset.duration) : Math.max(inClamped, outPoint)
+  const next = clips.slice()
+  next[index] = { ...clip, in: inClamped, out: outClamped }
+  return { ...project, [lane]: next } as Project
+}
+
+/** Minimum clip length. Below this, a clip divides by zero somewhere. */
+const MIN_CLIP = 0.04
+
+/**
+ * Split a clip at a timeline position, and its linked partner along with it.
+ *
+ * Each half is split against *its own* start and in-point. A linked pair can
+ * legitimately be out of alignment — you may have slid the audio — and
+ * splitting the audio at the video's source time would land in the wrong
+ * place.
+ */
+export function splitLinked(project: Project, lane: Lane, index: number, timelineT: number): Project {
+  const clips = laneOf(project, lane)
+  const clip = clips[index]
+  if (!clip) return project
+
+  const local = timelineT - clipStart(clips, index)
+  if (local < MIN_CLIP || local > clipDuration(clip) - MIN_CLIP) return project
+
+  const left: Clip = { ...clip, out: clip.in + local }
+  const right: Clip = { ...clip, id: newId('clp'), in: clip.in + local }
+
+  let next = { ...project, [lane]: [...clips.slice(0, index), left, right, ...clips.slice(index + 1)] } as Project
+
+  const partner = linkedPartner(project, clip)
+  if (partner) {
+    const otherLane: Lane = partner.lane
+    const otherClips = laneOf(next, otherLane)
+    const partnerIndex = otherClips.findIndex((c) => c.id === partner.id)
+    if (partnerIndex >= 0) {
+      const partnerLocal = timelineT - clipStart(otherClips, partnerIndex)
+      const p = otherClips[partnerIndex]!
+      // Respect the same minimum on the partner: a split that is valid for
+      // video but produces a 10 ms audio clip is not a split anyone wanted.
+      if (partnerLocal >= MIN_CLIP && partnerLocal <= clipDuration(p) - MIN_CLIP) {
+        const pLeft: Clip = { ...p, out: p.in + partnerLocal }
+        const pRight: Clip = { ...p, id: newId('clp'), in: p.in + partnerLocal }
+        const other = [...otherClips.slice(0, partnerIndex), pLeft, pRight, ...otherClips.slice(partnerIndex + 1)]
+        next = { ...next, [otherLane]: other } as Project
+      }
+    }
+  }
+
+  return next
+}
+
+export function setTransform(project: Project, clipId: ClipId, transform: ClipTransform): Project {
+  const found = findClip(project, clipId)
+  if (!found) return project
+  const next = laneOf(project, found.lane).slice()
+  next[found.index] = { ...next[found.index]!, transform }
+  return { ...project, [found.lane]: next } as Project
+}
+
+export function setClipGain(project: Project, clipId: ClipId, gain: number): Project {
+  const found = findClip(project, clipId)
+  if (!found) return project
+  const next = laneOf(project, found.lane).slice()
+  next[found.index] = { ...next[found.index]!, gain: clamp(gain, 0, 2) }
+  return { ...project, [found.lane]: next } as Project
+}
+
+export function toggleMute(project: Project, clipId: ClipId): Project {
+  const found = findClip(project, clipId)
+  if (!found) return project
+  const next = laneOf(project, found.lane).slice()
+  next[found.index] = { ...next[found.index]!, muted: !next[found.index]!.muted }
+  return { ...project, [found.lane]: next } as Project
+}
+
+// ---------------------------------------------------------------------------
+// Serialization
+// ---------------------------------------------------------------------------
+
 export function emptyProject(): Project {
-  return { version: 1, assets: {}, clips: [] }
+  return { version: 2, assets: {}, video: [], audio: [] }
 }
 
 /**
@@ -215,22 +382,31 @@ export function parseProject(text: string): Project {
   if (typeof data !== 'object' || data === null) throw new Error('Project is not an object')
   const p = data as Partial<Project>
 
-  if (p.version !== 1) throw new Error(`Unsupported project version: ${String(p.version)}`)
+  if (p.version !== 2) {
+    throw new Error(
+      p.version === 1
+        ? 'This project was saved before the two-lane format and cannot be opened.'
+        : `Unsupported project version: ${String(p.version)}`,
+    )
+  }
   if (typeof p.assets !== 'object' || p.assets === null) throw new Error('Project has no assets map')
-  if (!Array.isArray(p.clips)) throw new Error('Project has no clips array')
+  if (!Array.isArray(p.video) || !Array.isArray(p.audio)) throw new Error('Project must have a video and an audio lane')
 
-  for (const clip of p.clips) {
-    if (typeof clip.id !== 'string') throw new Error('Clip missing id')
-    if (typeof clip.assetId !== 'string') throw new Error(`Clip ${clip.id} missing assetId`)
-    if (typeof clip.in !== 'number' || typeof clip.out !== 'number') {
-      throw new Error(`Clip ${clip.id} has non-numeric in/out`)
+  for (const [lane, clips] of [['video', p.video], ['audio', p.audio]] as const) {
+    for (const clip of clips) {
+      if (typeof clip.id !== 'string') throw new Error(`A ${lane} clip is missing its id`)
+      if (typeof clip.assetId !== 'string') throw new Error(`Clip ${clip.id} missing assetId`)
+      if (typeof clip.in !== 'number' || typeof clip.out !== 'number') {
+        throw new Error(`Clip ${clip.id} has non-numeric in/out`)
+      }
     }
   }
 
   return {
-    version: 1,
-    assets: p.assets as Record<AssetId, Asset>,
-    clips: p.clips as Clip[],
+    version: 2,
+    assets: p.assets,
+    video: p.video,
+    audio: p.audio,
     ...(p.captions ? { captions: p.captions } : {}),
   }
 }

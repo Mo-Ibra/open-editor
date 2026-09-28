@@ -40,7 +40,7 @@ export function ExportPanel(props: { state: AppState }) {
   let video!: HTMLVideoElement
 
   function sourceSize() {
-    const first = state.project.clips[0]
+    const first = state.project.video[0]
     if (!first) return null
     const asset = state.getAsset(first.assetId)
     if (!asset) return null
@@ -135,7 +135,7 @@ export function ExportPanel(props: { state: AppState }) {
           </select>
         </label>
 
-        <button class="primary" disabled={busy() || state.project.clips.length === 0} onClick={() => void start()}>
+        <button class="primary" disabled={busy() || state.project.video.length === 0} onClick={() => void start()}>
           {busy() ? 'Exporting…' : 'Export'}
         </button>
 

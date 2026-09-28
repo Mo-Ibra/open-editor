@@ -153,7 +153,13 @@ export function frameTimesForClip(clips: Clip[], index: number, budget: number, 
   return times
 }
 
-/** Total frames for a timeline. Must equal the sum of every clip's frame count. */
+/**
+ * Total frames for a timeline.
+ *
+ * The **video lane** defines the output length, not the longer of the two. An
+ * audio clip that outlasts the picture is not something to pad the video with
+ * black for; it is simply not heard past the last frame.
+ */
 export function totalFramesFor(project: Project, fps: number): number {
   return Math.ceil(projectDuration(project) * fps)
 }
@@ -176,7 +182,11 @@ export class Exporter {
     this.#cancelled = false
     const t0 = performance.now()
 
-    if (project.clips.length === 0) throw new Error('Add a clip to the timeline first.')
+    if (project.video.length === 0) {
+      throw new Error(project.audio.length > 0
+        ? 'The timeline has audio but no video. Export needs at least one video clip.'
+        : 'Add a video to the timeline first.')
+    }
     const duration = projectDuration(project)
     if (duration <= 0) throw new Error('There is nothing on the timeline to export.')
 
@@ -243,11 +253,11 @@ export class Exporter {
     try {
       await out.start()
 
-      for (let index = 0; index < project.clips.length; index++) {
+      for (let index = 0; index < project.video.length; index++) {
         this.#checkCancelled()
 
-        const clip = project.clips[index]!
-        const times = frameTimesForClip(project.clips, index, totalFrames - done, settings.fps)
+        const clip = project.video[index]!
+        const times = frameTimesForClip(project.video, index, totalFrames - done, settings.fps)
         if (!times.length) continue
 
         const entry = this.#library.get(clip.assetId)

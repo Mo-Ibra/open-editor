@@ -152,9 +152,10 @@ export class AudioEngine {
     let scheduled = 0
     let skipped = 0
 
-    for (let i = 0; i < project.clips.length; i++) {
-      const clip = project.clips[i]!
-      const startsAt = clipStart(project.clips, i)
+    // The audio lane only. The picture is the exporter's business.
+    for (let i = 0; i < project.audio.length; i++) {
+      const clip = project.audio[i]!
+      const startsAt = clipStart(project.audio, i)
       const endsAt = startsAt + clipDuration(clip)
 
       // Entirely in the past relative to where we are starting.

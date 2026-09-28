@@ -54,9 +54,10 @@ class FakeAudioBuffer {
 // Install globally so the modules under test find it.
 ;(globalThis as { AudioBuffer?: unknown }).AudioBuffer = FakeAudioBuffer
 
-const project = (clips: Project['clips']): Project => ({ version: 1, assets: {}, clips })
+/** The mixer walks the AUDIO lane. */
+const project = (clips: Project['audio']): Project => ({ version: 2, assets: {}, video: [], audio: clips })
 const clip = (id: string, i: number, o: number, extra: Record<string, unknown> = {}) =>
-  ({ id, assetId: 'a', in: i, out: o, ...extra }) as Project['clips'][number]
+  ({ id, lane: 'audio', assetId: 'a', in: i, out: o, ...extra }) as Project['audio'][number]
 
 const library = (assets: Record<string, boolean>) =>
   ({ get: (id: string) => (assets[id] ? ({ audioTrack: {}, asset: { name: `${id}.mp4` } } as never) : undefined) }) as never

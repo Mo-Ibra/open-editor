@@ -38,7 +38,8 @@ export async function buildExportAudio(
   duration: number,
   options: BuildAudioOptions,
 ): Promise<ExportAudioTrack | null> {
-  const clips = project.clips
+  // The audio lane only. A video clip with no audio of its own contributes nothing.
+  const clips = project.audio
   const segments: MixSegment[] = []
   let withAudio = 0
 

@@ -130,15 +130,28 @@ button.muted { color: var(--warn); border-color: var(--warn); }
   border-left: 1px solid var(--line); padding-left: 4px; height: 14px;
 }
 
-.lane { position: relative; padding: 10px 0; min-height: 74px; }
+.lane { position: relative; min-height: 30px; border-bottom: 1px solid var(--line); }
+.lane:last-of-type { border-bottom: 0; }
+.lane-label {
+  position: absolute; right: 4px; top: 2px; z-index: 1; pointer-events: none;
+  font: 9px/1 ui-monospace, monospace; text-transform: uppercase; letter-spacing: .06em; color: var(--dim);
+}
 .clip {
-  position: absolute; top: 10px; height: 54px; border-radius: 5px;
+  position: absolute; top: 6px; border-radius: 5px;
   background: color-mix(in srgb, var(--tint) 32%, #0e1016);
   border: 1px solid color-mix(in srgb, var(--tint) 62%, transparent);
   display: flex; align-items: center; cursor: grab; overflow: hidden;
 }
 .clip.selected { border-color: #fff; box-shadow: 0 0 0 1px #fff inset, 0 2px 10px #0009; }
-.clip-name { flex: 1; padding: 0 10px; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+.clip-name {
+  position: absolute; left: 10px; top: 3px; max-width: calc(100% - 26px);
+  font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  pointer-events: none; text-shadow: 0 1px 2px #000a; z-index: 1;
+}
+.clip.linked { border-style: solid; border-color: color-mix(in srgb, var(--tint) 85%, white 15%); }
+.link-badge { position: absolute; right: 10px; top: 2px; font-size: 10px; opacity: .8; pointer-events: none; z-index: 1; }
+
+.waveform { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .handle { position: absolute; top: 0; bottom: 0; cursor: ew-resize; background: #ffffff14; }
 .handle.in { left: 0; border-radius: 5px 0 0 5px; }
 .handle.out { right: 0; border-radius: 0 5px 5px 0; }

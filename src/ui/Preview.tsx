@@ -7,7 +7,7 @@
  */
 
 import { createEffect, createSignal, onCleanup, onMount, Show } from 'solid-js'
-import { clipAt, sourceTimeAt } from '../project.js'
+import { clipAtLane, sourceTimeAt } from '../project.js'
 import { renderBlank, renderFrame, type SourceImage } from '../render.js'
 import type { AppState } from '../state.js'
 import { log } from '../debug.js'
@@ -38,7 +38,7 @@ export function Preview(props: { state: AppState }) {
   }
 
   const aspect = () => {
-    const first = state.project.clips[0]
+    const first = state.project.video[0]
     const asset = first ? state.getAsset(first.assetId) : undefined
     return asset ? asset.width / asset.height : 16 / 9
   }
@@ -105,7 +105,8 @@ export function Preview(props: { state: AppState }) {
     explainCount = 1
     log.warn(`BLANK — ${reason}`, {
       playhead: +state.playhead().toFixed(3),
-      clips: state.project.clips.length,
+      video: state.project.video.length,
+      audio: state.project.audio.length,
       duration: +state.duration().toFixed(3),
     })
     drawDiagnostic()
@@ -115,12 +116,12 @@ export function Preview(props: { state: AppState }) {
     const t = state.playhead()
     requestedAt = t
 
-    if (state.project.clips.length === 0) {
+    if (state.project.video.length === 0) {
       explain('timeline is empty — add a clip first')
       return
     }
 
-    const loc = clipAt(state.project, t)
+    const loc = clipAtLane(state.project.video, t)
     if (!loc) {
       explain(`playhead ${t.toFixed(2)}s is past the end of the timeline (${state.duration().toFixed(2)}s)`)
       return
@@ -317,7 +318,7 @@ export function Preview(props: { state: AppState }) {
   /** Last-resort readout, drawn on the canvas so it needs no devtools. */
   function drawDiagnostic(): void {
     const t = state.playhead()
-    const loc = clipAt(state.project, t)
+    const loc = clipAtLane(state.project.video, t)
     const clip = loc?.clip
     const asset = clip ? state.getAsset(clip.assetId) : undefined
     const entry = clip ? state.library.get(clip.assetId) : undefined
@@ -348,7 +349,8 @@ export function Preview(props: { state: AppState }) {
   // Re-draw whenever the playhead, the clips, or the canvas size changes.
   createEffect(() => {
     state.playhead()
-    state.project.clips
+    state.project.video
+    state.project.audio
     state.project.assets
     canvas.width
     draw()
@@ -484,7 +486,7 @@ export function Preview(props: { state: AppState }) {
         <span class="spacer" />
 
         <span class="debug" title="playback state — tick count proves the rAF loop is running">
-          {state.project.clips.length} clip{state.project.clips.length === 1 ? '' : 's'}
+          {state.project.video.length} video · {state.project.audio.length} audio
           {' · '}
           {state.playing() ? `playing (${ticks()} frames)` : 'stopped'}
           {' · '}
@@ -505,7 +507,7 @@ export function Preview(props: { state: AppState }) {
         </label>
       </div>
 
-      <Show when={state.project.clips.length === 0}>
+      <Show when={state.project.video.length === 0}>
         <div class="empty">
           <Show
             when={state.assetIds().length > 0}
