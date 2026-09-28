@@ -8,7 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types test/model.test.ts && node --experimental-strip-types test/dom.test.ts"
+    "test": "node --experimental-strip-types test/model.test.ts && node --experimental-strip-types test/dom.test.ts && node --experimental-strip-types test/frame-cache.test.ts"
   },
   "dependencies": {
     "idb": "^8.0.3",

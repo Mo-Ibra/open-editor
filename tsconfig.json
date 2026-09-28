@@ -6,6 +6,9 @@
     "moduleResolution": "bundler",
     "types": ["vite/client"],
 
+    "jsx": "preserve",
+    "jsxImportSource": "solid-js",
+
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,

@@ -20,6 +20,7 @@ import {
 } from 'mediabunny'
 import type { Asset, AssetId, Rotation } from './project.js'
 import { newId } from './project.js'
+import { log } from './debug.js'
 
 /** A probed file plus the live handles needed to decode it later. */
 export interface LoadedAsset {
@@ -67,6 +68,20 @@ export async function loadAsset(file: File, id: AssetId = newId('ast')): Promise
 
   const decodable = await video.canDecode()
   const codec = await video.getCodec()
+
+  log.debug('raw track', {
+    containerDuration: duration,
+    frameRateMetrics: {
+      bestGuess: metrics.bestGuessFrameRate,
+      min: metrics.minFrameRate,
+      max: metrics.maxFrameRate,
+      average: metrics.averageFrameRate,
+    },
+    codedSize: `${await video.getCodedWidth()}x${await video.getCodedHeight()}`,
+    squarePixelSize: `${squareWidth}x${squareHeight}`,
+    canDecode: decodable,
+    codec,
+  })
 
   const asset: Asset = {
     id,

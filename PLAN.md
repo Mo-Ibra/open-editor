@@ -447,16 +447,29 @@ Delivered along the way, all of which are product code rather than throwaway har
 
 **Still outstanding, and it is the one honest gap in this result:** the benchmark file is a 3.75 fps VFR screen recording with near-static content — the cheapest possible input. A 30 fps camera clip with real motion is ~8× the frames and far more bitrate. Headroom at 5.13× is large enough that this is unlikely to bite, but it has not been measured. Re-run on a genuine camera file before quoting any speed number to a user.
 
-### Phase 1 — Project model + preview (1–2 weeks)
-- `project.ts` and the three derived-duration functions
-- Probe on drop, show real metadata
-- Multi-file asset bin, drag onto a timeline
-- Scrub, play, pause
-- Frame-accurate seek (§6.2) with a frame ring buffer
-- VFR detection (§6.3) and both frame-index paths
-- Trim handles, split, delete, reorder
+### Phase 1 — Project model + preview — **BUILT (2026-09-28)**, needs hands-on review
 
-**Exit:** drop four clips, arrange them, scrub the whole thing smoothly, and the preview matches the source pixel for pixel.
+| File | What |
+|---|---|
+| `src/render.ts` | `renderFrame` — the single render pass (ADR-1), plus `fitRect` so overlays share the video's geometry |
+| `src/library.ts` | `MediaLibrary` — owns every File, Input and sink. No opinion about the project model |
+| `src/frame-cache.ts` | Ring buffer for scrubbing. No mediabunny dependency, so it is unit-testable |
+| `src/state.ts` | The one store. Undo is a snapshot of the clips array |
+| `src/ui/AssetBin.tsx` | Drop, probe, real metadata, append on click |
+| `src/ui/Preview.tsx` | Canvas + transport + rAF playback |
+| `src/ui/Timeline.tsx` | Arrange, reorder, trim, split, playhead |
+
+- `space` play · `S` split · `⌫` delete · `←`/`→` step frame (`shift` = 10) · `⌘Z` undo
+- Playhead seeks by scrubbing anywhere on the preview canvas
+- `src/project.ts` knows nothing about mediabunny; `src/library.ts` knows nothing about clips
+
+**Exit criteria — met, pending verification by hand:** drop four clips, arrange them, scrub smoothly, preview matches the source pixel for pixel.
+
+**Not yet done in Phase 1:**
+- **No export.** The `renderFrame` path is shared, so Phase 2 is wiring, not re-architecting — but there is no export button yet.
+- No thumbnails in the bin (a `CanvasSink` at t=0 would do it; deferred as mechanical).
+- No snapping, no keyboard reordering, no scrubbing audio.
+- Preview decode is not in a worker, so a long seek can still jank the tab.
 
 ### Phase 2 — Export (1–2 weeks)
 - The frame loop, backpressure, `OffscreenCanvas` worker (§6.6)

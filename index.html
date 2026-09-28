@@ -4,36 +4,10 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>open-editor</title>
-    <style>
-      :root { color-scheme: dark; }
-      body {
-        margin: 0; min-height: 100vh; display: grid; place-items: center;
-        font: 14px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace;
-        background: #0b0b0d; color: #e6e6e6;
-      }
-      main { max-width: 620px; padding: 32px; }
-      h1 { font-size: 18px; margin: 0 0 4px; }
-      p { color: #8a8a94; margin: 0 0 20px; }
-      ul { padding-left: 20px; color: #8a8a94; }
-      li { margin-bottom: 6px; }
-      code { color: #5b8cff; }
-      a { color: #5b8cff; }
-      hr { border: 0; border-top: 1px solid #22242c; margin: 24px 0; }
-    </style>
+    <link rel="stylesheet" href="/src/index.css" />
   </head>
   <body>
-    <main>
-      <h1>open-editor</h1>
-      <p>Web video cutter. Scaffold is up; nothing is built yet.</p>
-      <ul>
-        <li><a href="/phase0.html">Phase 0 →</a> — prove the encode loop closes</li>
-      </ul>
-      <hr />
-      <p>
-        Next up per PLAN.md: <code>src/project.ts</code> is written (the editing
-        model), <code>src/probe.ts</code> is written (rotation, PAR, VFR
-        detection). Phase 1 adds preview.
-      </p>
-    </main>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
