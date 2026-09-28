@@ -81,8 +81,28 @@ export function Preview(props: { state: AppState }) {
    * the user cannot see a video, the tool owes them an explanation on screen,
    * not a black square.
    */
+  let lastExplainAt = 0
+  let explainCount = 0
+
+  /**
+   * Every blank path reports, but a *repeating* condition reports once.
+   *
+   * An unbounded loop of warnings is not a diagnostic, it is a denial of
+   * service: one bad playhead position produced ~500 log beacons per second
+   * and took the tab down with it.
+   */
   function explain(reason: string): void {
     lastError = reason
+    const nowMs = performance.now()
+    if (nowMs - lastExplainAt < 2000) {
+      explainCount++
+      if (explainCount % 30 !== 0) return
+      lastExplainAt = nowMs
+      log.warn(`BLANK — ${reason} (suppressed ${explainCount - 1} repeats)`)
+      return
+    }
+    lastExplainAt = nowMs
+    explainCount = 1
     log.warn(`BLANK — ${reason}`, {
       playhead: +state.playhead().toFixed(3),
       clips: state.project.clips.length,
@@ -156,6 +176,13 @@ export function Preview(props: { state: AppState }) {
           )
         }
         if (!wrapped) {
+          // Before the track's first timestamp is a legitimate answer, not a
+          // failure — mediabunny documents getCanvas as returning null for it.
+          if (sourceTime < 0) {
+            renderBlank(context(), options())
+            paintedAt = forTime
+            return
+          }
           explain(
             `decoder returned no frame at source ${sourceTime.toFixed(2)}s ` +
               `(${entry.asset.name}, ${entry.asset.duration.toFixed(1)}s long)`,
@@ -275,6 +302,7 @@ export function Preview(props: { state: AppState }) {
       `health: ${frameCounter} paints, ${blackFrames} fully black, ` +
         `last luma max=${lastLuma.max} mean=${lastLuma.mean}, cache=${state.frameCache.size} frames`,
     )
+    log.info(`audio: ${JSON.stringify(state.audio.describe())}`)
     log.info(
       `layout: canvas on-screen ${Math.round(rect.width)}x${Math.round(rect.height)} ` +
         `at ${Math.round(rect.left)},${Math.round(rect.top)}  ` +
@@ -363,23 +391,21 @@ export function Preview(props: { state: AppState }) {
       return
     }
 
-    let last = performance.now()
-
-    // ~120 Hz: fine enough to look like continuous motion, cheap enough to be
-    // invisible. The draw effect only repaints when a frame actually changes.
+    // This interval does NOT own the clock. It only polls it: `advanceClock`
+    // reads the AudioContext time (the reference) and falls back to
+    // wall-clock only if audio never started. A JS timer is not accurate
+    // enough to be the timebase for a 10-minute edit — it drifts, and the
+    // drift is exactly A/V desync.
     timer = setInterval(() => {
-      const now = performance.now()
-      const dt = (now - last) / 1000
-      last = now
+      const previous = state.playhead()
+      state.advanceClock()
 
-      const next = state.playhead() + dt
-      if (next >= state.duration()) {
+      if (state.playhead() >= state.duration() && state.playing()) {
         state.seek(state.duration())
         state.setPlaying(false)
         return
       }
-      state.seek(next)
-      setTicks((n) => n + 1)
+      if (state.playhead() !== previous) setTicks((n) => n + 1)
     }, 1000 / 120)
   })
 
@@ -443,6 +469,13 @@ export function Preview(props: { state: AppState }) {
         </button>
         <button onClick={() => state.step(-1)} title="Previous frame (←)">◀|</button>
         <button onClick={() => state.step(1)} title="Next frame (→)">|▶</button>
+        <button
+          classList={{ muted: state.audio.isMuted }}
+          title={state.audio.isMuted ? 'Unmute (M)' : 'Mute (M)'}
+          onClick={() => state.audio.setMuted(!state.audio.isMuted)}
+        >
+          {state.audio.isMuted ? '🔇' : '🔊'}
+        </button>
 
         <span class="time">
           {formatTime(state.playhead())} <span class="dim">/ {formatTime(state.duration())}</span>

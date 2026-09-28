@@ -465,10 +465,24 @@ Delivered along the way, all of which are product code rather than throwaway har
 
 **Exit criteria — met, pending verification by hand:** drop four clips, arrange them, scrub smoothly, preview matches the source pixel for pixel.
 
+**Audio (built 2026-09-28) — `src/audio-engine.ts`**
+
+The hard part is not making noise, it is making the noise agree with the playhead.
+
+1. **The AudioContext clock is the master.** It is a sound card clock and does not drift the way `performance.now()` and `setInterval` do. The transport's 120 Hz interval only *polls* it; the playhead is derived from audio time. A JS timer drifts into A/V desync within minutes on a long edit.
+2. **A seek is sample-accurate.** Starting mid-clip begins audio at the matching source offset, not at the head of the clip. Getting this wrong is the classic "sound is out by a bit" bug — invisible in a 5-second test, obvious in a 10-minute edit.
+3. **Silence is scheduled, not skipped.** A gap in the timeline is a gap in the audio. Skipping the gap compresses the sound and desyncs everything after it.
+4. Assets are decoded **once** and cached; each asset is conformed to 48 kHz via the existing `conformAudioBuffer` (§6.1), so 96 kHz camera files work.
+
+- `M` mutes, per-clip level + mute in the timeline bar
+- Any edit that invalidates the schedule (seek, split) rebuilds it from the new position
+- Falls back to a wall clock if the browser refuses to start audio, so video still plays
+
 **Not yet done in Phase 1:**
 - **No export.** The `renderFrame` path is shared, so Phase 2 is wiring, not re-architecting — but there is no export button yet.
 - No thumbnails in the bin (a `CanvasSink` at t=0 would do it; deferred as mechanical).
-- No snapping, no keyboard reordering, no scrubbing audio.
+- No snapping, no keyboard reordering, no scrub-audio (dragging the playhead is silent by design).
+- No master bus, no waveform, no per-clip fades, no speed control. Per-clip gain and mute only; a mixer is a different feature.
 - Preview decode is not in a worker, so a long seek can still jank the tab.
 
 ### Phase 2 — Export (1–2 weeks)

@@ -49,6 +49,9 @@ export interface Clip {
   /** Source out-point, seconds. */
   out: number
   transform?: ClipTransform
+  /** Linear gain, 0–2. Optional because absent means unity. */
+  gain?: number
+  muted?: boolean
 }
 
 export type CaptionPosition = 'top' | 'center' | 'bottom'

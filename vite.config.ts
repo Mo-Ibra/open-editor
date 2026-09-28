@@ -15,6 +15,13 @@ function terminalLogger(): Plugin {
   return {
     name: 'open-editor:terminal-logger',
     configureServer(server) {
+      const counter = { now: 0, total: 0, warned: false }
+      const reset = setInterval(() => {
+        counter.now = 0
+        counter.warned = false
+      }, 1000)
+      server.httpServer?.once('close', () => clearInterval(reset))
+
       server.middlewares.use('/__debug', (req, res) => {
         if (req.method !== 'POST') {
           res.statusCode = 405
@@ -32,6 +39,20 @@ function terminalLogger(): Plugin {
         req.on('end', () => {
           res.setHeader('Access-Control-Allow-Origin', '*')
           res.end('ok')
+
+          // Defence in depth. A page bug that emits thousands of logs per
+          // second can saturate stdout and the event loop, which looks
+          // exactly like a crashed browser. Count and complain once.
+          const perSecond = ++counter.now
+          if (perSecond > 200) {
+            if (!counter.warned) {
+              counter.warned = true
+              process.stdout.write('\x1b[31m[!] over 200 debug logs/sec — the page is probably in a log loop\x1b[0m\n')
+            }
+            return
+          }
+          counter.total++
+
           try {
             const entry = JSON.parse(body) as { level: string; message: string; time: number; tag: string }
             const stamp = new Date(entry.time).toISOString().slice(11, 23)

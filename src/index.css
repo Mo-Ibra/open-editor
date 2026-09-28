@@ -116,6 +116,11 @@ button.ghost { background: none; }
 /* min-width: 0 is what makes this a scroll container rather than a
    min-content contributor. Without it the track's full width becomes the
    flex item's minimum and the page grows sideways. */
+.timeline-bar .level { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--dim); }
+.timeline-bar .level input[type=range] { width: 90px; accent-color: var(--accent); }
+.timeline-bar .level button { padding: 1px 7px; font-size: 10.5px; }
+button.muted { color: var(--warn); border-color: var(--warn); }
+
 .scroller { flex: 1; overflow: auto; min-width: 0; min-height: 0; }
 .track { position: relative; min-height: 100%; user-select: none; touch-action: none; }
 

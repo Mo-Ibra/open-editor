@@ -35,6 +35,10 @@ export function App() {
       case 'S':
         if (state.project.clips.length) state.splitAt(state.playhead())
         break
+      case 'm':
+      case 'M':
+        state.audio.setMuted(!state.audio.isMuted)
+        break
       case 'Backspace':
       case 'Delete':
         event.preventDefault()

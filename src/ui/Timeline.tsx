@@ -140,6 +140,31 @@ export function Timeline(props: { state: AppState }) {
         <button onClick={splitHere} disabled={state.project.clips.length === 0}>Split</button>
         <button onClick={() => state.deleteSelected()} disabled={!state.selected()}>Delete</button>
         <span class="spacer" />
+
+        <Show when={state.selectedClip()}>
+          {(clip) => (
+            <label class="level" title="Level of the selected clip">
+              level
+              <input
+                type="range"
+                min="0"
+                max="2"
+                step="0.01"
+                value={clip().gain ?? 1}
+                onInput={(e) => state.setClipGain(clip().id, Number(e.currentTarget.value))}
+              />
+              <span class="dim">{Math.round((clip().gain ?? 1) * 100)}%</span>
+              <button
+                classList={{ ghost: !clip().muted }}
+                onClick={() => state.toggleMute(clip().id)}
+                title={clip().muted ? 'Unmute clip' : 'Mute clip'}
+              >
+                {clip().muted ? 'muted' : 'live'}
+              </button>
+            </label>
+          )}
+        </Show>
+
         <span class="dim">
           {state.project.clips.length} clip{state.project.clips.length === 1 ? '' : 's'}
         </span>

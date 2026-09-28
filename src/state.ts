@@ -10,6 +10,7 @@ import { batch, createSignal } from 'solid-js'
 import { createStore, produce, unwrap } from 'solid-js/store'
 import { MediaLibrary, type LibraryEntry } from './library.js'
 import { FrameCache } from './frame-cache.js'
+import { AudioEngine } from './audio-engine.js'
 import {
   clipAt,
   clipDuration,
@@ -49,6 +50,13 @@ export function createAppState() {
   const [future, setFuture] = createSignal<Clip[][]>([])
 
   const frameCache = new FrameCache()
+
+  // The audio clock is the master during playback, so the engine is created
+  // once and outlives every play/pause cycle.
+  const audio = new AudioEngine({
+    library,
+    onError: (message) => notify('error', message),
+  })
 
   function notify(kind: Notice['kind'], text: string): void {
     setNotices((prev) => [...prev.slice(-4), { kind, text }])
@@ -144,6 +152,9 @@ export function createAppState() {
     const loc = clipAt(project, time)
     if (!loc) return
     commit()
+    // A split changes what the playhead points at, so the scheduled audio is
+    // now wrong and has to be rebuilt from the new position.
+    if (playing()) void restartAt(time)
     setProject('clips', (clips) => splitClip(clips, loc.index, time))
   }
 
@@ -176,6 +187,22 @@ export function createAppState() {
     }))
   }
 
+  function setClipGain(clipId: ClipId, gain: number): void {
+    const index = project.clips.findIndex((c) => c.id === clipId)
+    if (index < 0) return
+    setProject('clips', index, 'gain', Math.max(0, Math.min(2, gain)))
+    const clip = project.clips[index]
+    if (clip) audio.setClipGain(clip)
+  }
+
+  function toggleMute(clipId: ClipId): void {
+    const index = project.clips.findIndex((c) => c.id === clipId)
+    if (index < 0) return
+    setProject('clips', index, 'muted', !project.clips[index]!.muted)
+    const clip = project.clips[index]
+    if (clip) audio.setClipGain(clip)
+  }
+
   function setTransform(clipId: ClipId, transform: Clip['transform']): void {
     const index = project.clips.findIndex((c) => c.id === clipId)
     if (index < 0) return
@@ -191,7 +218,20 @@ export function createAppState() {
   // --- transport ------------------------------------------------------------
 
   function seek(time: number): void {
-    setPlayhead(Math.max(0, Math.min(time, duration())))
+    const clamped = Math.max(0, Math.min(time, duration()))
+    if (playing()) {
+      // Resuming from the new position rather than leaving audio where it was.
+      void restartAt(clamped)
+      return
+    }
+    setPlayhead(clamped)
+  }
+
+  async function restartAt(time: number): Promise<void> {
+    audio.stop()
+    const runStart = await audio.play(project, time)
+    wallClockAnchor = { at: performance.now(), from: time, runStart: runStart ?? null }
+    setPlayhead(time)
   }
 
   /**
@@ -212,11 +252,58 @@ export function createAppState() {
     return false
   }
 
-  function togglePlay(): void {
+  /**
+   * Play / pause, with audio leading and the playhead following.
+   *
+   * The AudioContext clock is the reference because it is a sound card clock
+   * and does not drift. The JS interval only *polls* it; it is not the source
+   * of time. This is what keeps a 10-minute edit from slowly losing sync, which
+   * a performance.now()-based clock drifts into within a few minutes.
+   */
+  async function togglePlay(): Promise<void> {
     if (!requireContent()) return
+
+    if (playing()) {
+      const at = audio.now() ?? playhead()
+      setPlaying(false)
+      audio.stop()
+      setPlayhead(at)
+      return
+    }
+
     // Playing from the very end should restart, not sit there.
-    if (playhead() >= duration() - 0.01) setPlayhead(0)
-    setPlaying((p) => !p)
+    let from = playhead()
+    if (from >= duration() - 0.01) from = 0
+
+    await audio.unlock()
+    const runStart = await audio.play(project, from)
+
+    // Fall back to the wall clock if the browser refused to start audio, so
+    // video still plays rather than the app deadlocking on a promise.
+    wallClockAnchor = { at: performance.now(), from, runStart: runStart ?? null }
+
+    if (from !== playhead()) setPlayhead(from)
+    setPlaying(true)
+  }
+
+  let wallClockAnchor: { at: number; from: number; runStart: number | null } | null = null
+
+  /** Called by the transport's polling tick. */
+  function advanceClock(): void {
+    if (!playing()) return
+
+    const audioTime = audio.now()
+    if (audioTime !== null) {
+      // Clamp here as well as in the engine: this is the raw write path, and
+      // an out-of-range playhead becomes a negative source time downstream.
+      setPlayhead(Math.max(0, Math.min(audioTime, duration())))
+      return
+    }
+
+    if (wallClockAnchor) {
+      const next = wallClockAnchor.from + (performance.now() - wallClockAnchor.at) / 1000
+      if (wallClockAnchor.runStart === null) setPlayhead(next)
+    }
   }
 
   function step(frames: number): void {
@@ -271,6 +358,10 @@ export function createAppState() {
     setTransform,
     seek,
     togglePlay,
+    advanceClock,
+    audio,
+    setClipGain,
+    toggleMute,
     step,
     undo,
     redo,
