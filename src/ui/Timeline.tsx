@@ -23,7 +23,7 @@ import {
 import type { AppState, SelectMode } from '../app/state.js'
 import type { ContextMenuState } from './ContextMenu.js'
 import { DND_ASSET } from './AssetBin.js'
-import { clampZoom, scrollLeftAfterZoom, zoomFactor } from '../app/zoom.js'
+import { notchesFromDelta, scrollLeftAfterZoom, zoomAfterNotches } from '../app/zoom.js'
 import { log } from '../dev/debug.js'
 
 const HANDLE = 8
@@ -45,6 +45,11 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState }) {
   const state = props.state
   let track!: HTMLDivElement
   let scroller!: HTMLDivElement
+  /** Wheel bursts are summed and applied once per frame. */
+  let pendingNotches = 0
+  let rafId = 0
+  /** Pointer X of the most recent wheel event, in client coordinates. */
+  let wheelClientX = 0
 
   let drag: Drag | null = null
   const [guide, setGuide] = createSignal<{ time: number; label: string } | null>(null)
@@ -152,15 +157,42 @@ function targets(): SnapTarget[] {
    */
   function onWheel(event: WheelEvent): void {
     if (!event.ctrlKey && !event.metaKey) return
+    wheelClientX = event.clientX
+    // Must happen even though the zoom is deferred: this is the browser's own
+    // page-zoom gesture, and the event does not wait for an animation frame.
     event.preventDefault()
 
+    pendingNotches += notchesFromDelta(event.deltaY, event.deltaMode)
+    if (rafId) return
+    rafId = requestAnimationFrame(applyPendingZoom)
+  }
+
+  /**
+   * Apply the whole burst in one go, once per frame.
+   *
+   * Wheel events arrive far faster than a frame. Zooming per event meant a
+   * trackpad pinch ran dozens of full re-layouts per second — and because each
+   * one reads `getBoundingClientRect()` and `scrollLeft` before writing, every
+   * event forced a synchronous layout of everything the previous event had
+   * just dirtied. That is the difference between zooming and fighting the
+   * timeline.
+   *
+   * Coalescing also makes the *response* faster: a burst collapses to a single
+   * jump instead of a queue of work that lags behind the gesture.
+   */
+  function applyPendingZoom(): void {
+    rafId = 0
+    const notches = pendingNotches
+    pendingNotches = 0
+    if (notches === 0) return
+
     const before = state.zoom()
-    const after = clampZoom(before * zoomFactor(event.deltaY, event.deltaMode))
+    const after = zoomAfterNotches(before, notches)
     if (after === before) return
 
-    // Pointer position inside the visible area, which is where the content's
-    // left edge was before the scroll offset is added.
-    const localX = event.clientX - scroller.getBoundingClientRect().left
+    // Pointer position inside the visible area. Read once per frame, before any
+    // write, so this never forces a layout mid-burst.
+    const localX = wheelClientX - scroller.getBoundingClientRect().left
     const nextScroll = scrollLeftAfterZoom({
       scrollLeft: scroller.scrollLeft,
       localX,
@@ -169,8 +201,6 @@ function targets(): SnapTarget[] {
     })
 
     state.setZoom(after)
-    // After setting the zoom, so the track has already re-laid out at the new
-    // width. The browser clamps a negative or overflowing value for us.
     scroller.scrollLeft = Math.max(0, nextScroll)
   }
 
@@ -302,6 +332,8 @@ function targets(): SnapTarget[] {
   })
   onCleanup(() => {
     scroller.removeEventListener('wheel', onWheel)
+    // A pending frame would otherwise apply a zoom to a component that is gone.
+    if (rafId) cancelAnimationFrame(rafId)
   })
 
   /** How many clips are selected, for labels that name their own count. */

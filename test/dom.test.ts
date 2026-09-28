@@ -408,7 +408,29 @@ console.log('ref-binding assertions passed')
     'a plain wheel must be left alone so it still scrolls',
   )
   assert.match(handler, /event\.preventDefault\(\)/, 'and ctrl+wheel must stop the browser zooming the page')
-  assert.match(handler, /scrollLeftAfterZoom\(/, 'and it must zoom about the pointer, not the origin')
+
+  // Coalescing. A wheel fires far faster than a frame; applying per event meant
+  // dozens of forced layouts per second, because each one read the scroll
+  // geometry after the previous event had already dirtied it.
+  assert.match(handler, /pendingNotches \+=/, 'the delta must be accumulated, not applied per event')
+  assert.match(
+    handler,
+    /requestAnimationFrame\(applyPendingZoom\)/,
+    'and applied at most once per animation frame',
+  )
+  // The anchor needs the pointer position, which only exists on the event, so it
+  // must be captured there and used in the frame callback.
+  assert.match(handler, /wheelClientX = event\.clientX/, 'the pointer position must be recorded from the event')
+
+  const apply = timeline.match(/function applyPendingZoom[\s\S]*?\n  \}/)?.[0] ?? ''
+  assert.ok(apply, 'applyPendingZoom should exist')
+  assert.match(apply, /scrollLeftAfterZoom\(/, 'and it must zoom about the pointer, not the origin')
+  assert.match(apply, /pendingNotches = 0/, 'and reset the accumulator, or it grows forever')
+  assert.match(
+    apply,
+    /getBoundingClientRect\(\)/,
+    'the scroll geometry is read once per frame, before any write',
+  )
 
   // The legend advertises it, so the feature is discoverable.
   const shortcuts = readFileSync(new URL('../src/app/shortcuts.ts', import.meta.url), 'utf8')

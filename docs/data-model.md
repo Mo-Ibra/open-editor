@@ -174,9 +174,20 @@ at, or it weakens as they zoom in and feels broken.
 pinch arrives as a ctrl+wheel event, so that works with no special case; a
 plain wheel still scrolls.
 
-- **Ratio, not pixels.** One notch is 1.15× at every zoom level. A fixed pixel
+- **Ratio, not pixels.** One notch is **1.3×** at every zoom level. A fixed pixel
   step feels progressively more sluggish as you zoom in, and the user cannot
-  tell whether the wheel broke or the app did.
+  tell whether the wheel broke or the app did. The constant was measured: at
+  1.15× a mouse needed **11.5 clicks** to cross the range and read as broken;
+  1.3× takes 6.1. Chrome's own ctrl+wheel page zoom is around 1.1–1.2, so this
+  is deliberately brisker — the timeline range is only 40:1, where page zoom is
+  unbounded.
+- **Coalesced to one change per frame.** A wheel fires far faster than a frame
+  (a trackpad pinch sends dozens per gesture). Zooming per event meant dozens of
+  forced synchronous layouts per second, because each read `getBoundingClientRect`
+  and `scrollLeft` *after* the previous event had dirtied the page. Deltas are
+  summed into `pendingNotches` and applied in one `requestAnimationFrame`
+  callback, which is also what makes a burst feel responsive rather than a
+  backlog. Intermediate levels are never seen, so skipping them is free.
 - **Anchored to the pointer.** The instant under the cursor stays under the
   cursor. Zooming about the origin also changes the zoom — and moves whatever
   you were looking at, which reads as the app ignoring you.

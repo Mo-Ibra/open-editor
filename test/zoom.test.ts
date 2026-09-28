@@ -13,16 +13,63 @@ import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
 import {
   clampZoom,
+  notchesFromDelta,
   scrollLeftAfterZoom,
+  zoomAfterNotches,
   zoomFactor,
   ZOOM_DEFAULT,
   ZOOM_MAX,
   ZOOM_MIN,
+  ZOOM_RATIO_PER_NOTCH,
 } from '../src/app/zoom.ts'
 
 /** The instant shown at a given pixel, given the scroll offset and zoom. */
 const timeAt = (scrollLeft: number, localX: number, zoom: number): number =>
   (scrollLeft + localX) / zoom
+
+test('one notch is fast enough to cross the range in a sane number of clicks', () => {
+  // Measured on a real browser: at 1.15x a mouse user needed 11.5 clicks to go
+  // from 80 to 400px/s, which reads as broken. The full range is only 40:1, so
+  // a notch can afford to be brisker than the browser's own page zoom.
+  // The realistic gesture: from the default, across to a close-up.
+  const practical = Math.log(400 / 80) / Math.log(ZOOM_RATIO_PER_NOTCH)
+  assert.ok(
+    practical <= 7,
+    `80 -> 400px/s should take at most 7 notches, takes ${practical.toFixed(1)} (was 11.5 at 1.15x)`,
+  )
+  assert.ok(ZOOM_RATIO_PER_NOTCH >= 1.25, 'a notch must be a decisive step, not a nudge')
+
+  // The full 40:1 range is rarely walked end to end, but it must not be silly.
+  const full = Math.log(ZOOM_MAX / ZOOM_MIN) / Math.log(ZOOM_RATIO_PER_NOTCH)
+  assert.ok(full < 16, `the whole range should take under 16 notches, takes ${full.toFixed(1)}`)
+})
+
+test('notches are additive, so a burst is one gesture', () => {
+  // Ten small trackpad deltas that together equal one notch must equal one
+  // notch. This is what makes coalescing lossless.
+  const one = notchesFromDelta(-100, 0)
+  let summed = 0
+  for (let i = 0; i < 10; i++) summed += notchesFromDelta(-10, 0)
+  assert.ok(Math.abs(summed - one) < 1e-9, `${summed} vs ${one}`)
+  assert.ok(Math.abs(zoomAfterNotches(80, summed) - zoomAfterNotches(80, one)) < 1e-9)
+})
+
+test('a burst of notches applies in one step', () => {
+  const after = zoomAfterNotches(80, 4)
+  assert.equal(after, Math.round(80 * ZOOM_RATIO_PER_NOTCH ** 4))
+  assert.ok(after > zoomAfterNotches(80, 1), 'four notches go further than one')
+  assert.equal(clampZoom(after), after, 'and a sane burst stays in range')
+})
+
+test('zero notches leaves the zoom alone', () => {
+  assert.equal(zoomAfterNotches(80, 0), 80)
+  assert.equal(zoomAfterNotches(80, Number.NaN), 80, 'a nonsense burst is ignored, not applied')
+})
+
+test('an enormous burst still clamps rather than exploding', () => {
+  assert.equal(zoomAfterNotches(100, 10_000), ZOOM_MAX)
+  assert.equal(zoomAfterNotches(100, -10_000), ZOOM_MIN)
+})
 
 test('a plain notch zooms in, and scrolling up zooms out', () => {
   assert.ok(zoomFactor(-100, 0) > 1, 'wheel up zooms in')
