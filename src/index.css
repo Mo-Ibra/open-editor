@@ -150,6 +150,30 @@ button.muted { color: var(--warn); border-color: var(--warn); }
   border: 4px solid transparent; border-top-color: var(--accent);
 }
 
+/* --- export --- */
+.export { background: var(--panel-2); border-top: 1px solid var(--line); }
+.export-bar { display: flex; align-items: center; gap: 8px; padding: 7px 10px; }
+.export-bar label { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--dim); }
+.export-bar select {
+  background: var(--panel); color: var(--text); border: 1px solid var(--line);
+  border-radius: 4px; font: inherit; padding: 3px 6px;
+}
+.export-status { font: 11px/1 ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+.export-progress { height: 3px; background: #0008; }
+.export-progress .bar { height: 100%; background: var(--accent); transition: width .2s linear; }
+.export-error { margin: 0; padding: 6px 10px; color: var(--danger); font-size: 12px; }
+.export-result { padding: 10px; }
+.export-result .row { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+.export-result video { max-width: 420px; width: 100%; background: #000; border-radius: 5px; }
+.export-result .meta { min-width: 200px; }
+.export-result .meta p { margin: 4px 0; font-size: 11px; }
+
+button.primary, a.primary {
+  background: var(--accent); color: #fff; border: 0; border-radius: 5px;
+  padding: 5px 12px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; text-decoration: none;
+}
+button.primary:disabled { background: #2a2c36; color: #666; cursor: not-allowed; }
+
 /* --- notices --- */
 .notices { position: fixed; right: 14px; bottom: 40px; display: flex; flex-direction: column; gap: 6px; max-width: 380px; }
 .notice {

@@ -485,15 +485,41 @@ The hard part is not making noise, it is making the noise agree with the playhea
 - No master bus, no waveform, no per-clip fades, no speed control. Per-clip gain and mute only; a mixer is a different feature.
 - Preview decode is not in a worker, so a long seek can still jank the tab.
 
-### Phase 2 — Export (1–2 weeks)
-- The frame loop, backpressure, `OffscreenCanvas` worker (§6.6)
-- Deterministic audio mixing (§ADR-4)
-- A/V sync, and the five tests in §6.1
-- Rotation and PAR (§6.4)
-- Progress with ETA, cancel
-- Feature-detected codec fallback
+### Phase 2 — Export — **video path BUILT (2026-09-28), audio pending**
 
-**Exit:** the four-clip arrangement exports to an mp4 that is frame-accurate and does not drift. Run the sync tests before believing it.
+| File | What |
+|---|---|
+| `src/codecs.ts` | Container + encoder negotiation, shared with the Phase 0 harness (§6.8) |
+| `src/exporter.ts` | The frame loop, one sequential decode pass per clip |
+| `src/ui/ExportPanel.tsx` | Presets, progress + ETA, cancel, **and a self-playback check** |
+
+- Output resolution and frame rate default to the **source** (§6.9). Three presets, no settings panel.
+- Reuses `renderFrame` — preview and export share one draw path (ADR-1).
+- Per clip, output timestamps go through **one** `canvasesAtTimestamps` pass, so every packet is decoded at most once (§R2).
+- Audio-only clips emit their own black frames, so the video cannot come out shorter than the timeline.
+- The result is **played in the page** before the download link appears.
+
+**Two bugs the tests caught on the first run — both worth recording:**
+
+1. **961 frames instead of 960.** `for (let t = start; t < end; t += 1 / fps)` looks equivalent to counting frames and is not: `1/30` is not representable, the running sum drifts, and the final clip emits a spare frame. This is the float accumulation §6.1 warns about, committed in the one place the plan explicitly says not to. Fixed by rounding clip boundaries to whole frames once and deriving by division. **`test/exporter.test.ts` now pins the invariant at 24/25/30/50/60 fps.**
+2. **An out-of-range clip index threw** instead of yielding no frames. An empty timeline is an empty export, not a crash.
+
+**Audio on export (built 2026-09-28) — `src/export-audio.ts`**
+
+- The whole timeline becomes **one** mixed buffer via the deterministic `Float32Array` mixer (ADR-4). No Web Audio graph.
+- **Every position is an integer sample index computed once, at the boundary.** The mix loop never does float math. This is the §6.1 drift rule and the reason the sync checks pass.
+- A gap in the timeline is **silence, not a skip** — skipping would compress the sound to the front and desync everything after it.
+- The preview's decoded-audio cache is shared, so a 7-minute file is decoded once, not twice.
+- `verifyAudioTrack()` holds the mix to the §6.1 assertions *before* a minute of video is encoded: duration matches the video within one frame, channel count, and not silent. Tolerance is one video frame — a frame of slack is correct, a sample of slack is not.
+
+**`test/export-audio.test.ts` — the §6.1 tests, written before the mixing code,** on purpose. The plan says tests come first for A/V sync, and the float-accumulation bug in `frameTimesForClip` was found exactly this way. Seven suites, ~20 assertions: exact duration, gaps as silence, overlapping segments sum, gain and mute, short-audio detection, one frame of slack tolerated, silent mix reported rather than shipped.
+
+**A reporting bug worth recording.** The first audio export worked, and the panel announced *"no audio — but we added one. MUXER AND PANEL DISAGREE."* It was a false positive from the check, not a fault in the file. Chrome leaves `video.audioTracks` empty until tracks are *enabled*, and `webkitAudioDecodedByteCount` is 0 until something has decoded — so at `loadedmetadata` both mean "not yet", not "absent". The detector now reports three states (`present` / `absent` / `not yet confirmed`) and re-checks on `timeupdate`, once the decoder has actually run. **A check that cries disagreement on inconclusive evidence is worse than no check.**
+
+**Still to do in Phase 2:**
+- No worker yet, so a long export blocks the tab between awaits. Cancel stays alive, but a 10-minute render is a long wait.
+- Frame accounting (§6.9) is not reported in the export panel.
+- No fps preset, no bitrate control, no progress detail during the audio-encode stage.
 
 ### Phase 3 — Zoom, text, captions (1 week)
 - `transform` on clips, drag handles on the canvas

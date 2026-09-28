@@ -272,6 +272,24 @@ export class AudioEngine {
     }
   }
 
+  /**
+   * The decoded, 48 kHz audio for an asset — decoded once and shared.
+   *
+   * The preview and the exporter both want this, and a seven-minute file is
+   * tens of megabytes of PCM. Decoding it twice is pure waste, and on a long
+   * timeline the second decode is the thing people notice as "export is slow
+   * for no reason".
+   */
+  async decodedAudio(assetId: string): Promise<AudioBuffer | null> {
+    const entry = this.#library.get(assetId)
+    if (!entry?.audioTrack) return null
+    try {
+      return await this.#bufferFor(assetId)
+    } catch {
+      return null
+    }
+  }
+
   /** Decode the whole asset once, conformed to the output rate. */
   async #bufferFor(assetId: string): Promise<AudioBuffer> {
     const cached = this.#buffers.get(assetId)

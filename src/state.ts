@@ -360,6 +360,7 @@ export function createAppState() {
     togglePlay,
     advanceClock,
     audio,
+    getAssetAudio: (id: string) => audio.decodedAudio(id),
     setClipGain,
     toggleMute,
     step,

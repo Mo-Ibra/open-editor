@@ -77,19 +77,35 @@ function emit(level: Level, message: string, data?: unknown): void {
   else if (level === 'debug') console.debug(line, data ?? '')
   else console.log(line, data ?? '')
 
-  // Development only. `navigator.sendBeacon` survives the page unloading, which
-  // matters for the errors that only fire on teardown.
-  if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
-    const payload = JSON.stringify({ level, message, data: safe(data), time: entry.time, tag: entry.tag })
-    try {
-      if (navigator.sendBeacon) {
-        navigator.sendBeacon(ENDPOINT, new Blob([payload], { type: 'application/json' }))
-      } else {
-        void fetch(ENDPOINT, { method: 'POST', body: payload, keepalive: true }).catch(() => undefined)
-      }
-    } catch {
-      /* the terminal is a convenience, never a dependency */
+  // Development only, and only in a browser. The logger is imported by modules
+  // under unit test, where there is no `location` — a logger that throws when
+  // nobody asked it to log is worse than no logger.
+  if (isLocalhost()) {
+    post(JSON.stringify({ level, message, data: safe(data), time: entry.time, tag: entry.tag }))
+  }
+}
+
+/** True in a dev browser, false anywhere else including Node. */
+function isLocalhost(): boolean {
+  try {
+    if (typeof location === 'undefined') return false
+    return location.hostname === 'localhost' || location.hostname === '127.0.0.1'
+  } catch {
+    return false
+  }
+}
+
+function post(payload: string): void {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
+      navigator.sendBeacon(ENDPOINT, new Blob([payload], { type: 'application/json' }))
+      return
     }
+    if (typeof fetch === 'function') {
+      void fetch(ENDPOINT, { method: 'POST', body: payload, keepalive: true }).catch(() => undefined)
+    }
+  } catch {
+    /* the terminal is a convenience, never a dependency */
   }
 }
 
@@ -132,11 +148,8 @@ export function install(): void {
       original(...args)
       if (args.length && !String(args[0]).startsWith('[')) {
         // Avoid recursing: emit() calls the console.
-        try {
-          const payload = JSON.stringify({ level, message: args.map(serialize).join(' '), time: Date.now(), tag: 'console' })
-          void fetch(ENDPOINT, { method: 'POST', body: payload, keepalive: true }).catch(() => undefined)
-        } catch {
-          /* ignore */
+        if (isLocalhost()) {
+          post(JSON.stringify({ level, message: args.map(serialize).join(' '), time: Date.now(), tag: 'console' }))
         }
       }
     }

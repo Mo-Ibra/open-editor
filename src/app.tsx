@@ -6,6 +6,7 @@ import { createEffect, onCleanup, onMount, For, Show } from 'solid-js'
 import { AssetBin } from './ui/AssetBin.js'
 import { Preview } from './ui/Preview.js'
 import { Timeline } from './ui/Timeline.js'
+import { ExportPanel } from './ui/ExportPanel.js'
 import { createAppState } from './state.js'
 import { dump, log } from './debug.js'
 
@@ -94,6 +95,7 @@ export function App() {
 
       <main>
         <Preview state={state} />
+        <ExportPanel state={state} />
         <Timeline state={state} />
       </main>
 
