@@ -8,12 +8,14 @@
 
 import { batch, createSignal } from 'solid-js'
 import { createStore, unwrap } from 'solid-js/store'
-import { applyLanes, type Lanes } from './project-store.js'
-import { FrameCache } from './frame-cache.js'
-import { MediaLibrary, type LibraryEntry } from './library.js'
-import { AudioEngine } from './audio-engine.js'
-import { computePeaks, type Peak } from './peaks.js'
-import { log } from './debug.js'
+import { applyLanes, type Lanes } from '../model/project-store.js'
+import { createHistory } from './history.js'
+import { createSelection } from './selection.js'
+import { FrameCache } from '../media/frame-cache.js'
+import { MediaLibrary, type LibraryEntry } from '../media/library.js'
+import { AudioEngine } from '../audio/audio-engine.js'
+import { computePeaks, type Peak } from '../media/peaks.js'
+import { log } from '../dev/debug.js'
 import {
   appendAsset,
   breakLink,
@@ -45,9 +47,7 @@ import {
   type ClipId,
   type Lane,
   type Project,
-} from './project.js'
-
-const HISTORY_LIMIT = 100
+} from '../model/project.js'
 
 /**
  * The shortest clip a split will leave behind, in seconds.
@@ -68,15 +68,6 @@ export function createAppState() {
   const [project, applyProject] = createStore<Project>(emptyProject())
   const [playhead, setPlayhead] = createSignal(0)
   const [playing, setPlaying] = createSignal(false)
-  /**
-   * The clip selection, in click order. The last entry is the *primary* clip:
-   * the one the inspector describes and the one a solo action applies to.
-   *
-   * An array rather than a Set because order carries meaning — it is what makes
-   * a range extend from the primary — and because two-element arrays are free to
-   * compare. A Set would need to be copied on every change anyway.
-   */
-  const [selection, setSelection] = createSignal<readonly ClipId[]>([])
   const [zoom, setZoomLevel] = createSignal(80) // pixels per second
   const [notices, setNotices] = createSignal<Notice[]>([])
   const [loading, setLoading] = createSignal(false)
@@ -90,94 +81,12 @@ export function createAppState() {
   const [peaksBy, setPeaksBy] = createStore<Record<string, Peak[]>>({})
 
   // --- selection ----------------------------------------------------------
+  //
+  // The signal lives in the slice now, so nothing below this line may
+  // manipulate it directly. `sel.prune` is the one exception and it is
+  // wired in as the post-write hook.
 
-  /** Every clip on screen, in timeline order: video lane, then audio lane. */
-  function orderedClips(): Clip[] {
-    return [...project.video, ...project.audio]
-  }
-
-  const primary = (): ClipId | null => selection().at(-1) ?? null
-  const isSelected = (clipId: ClipId): boolean => selection().includes(clipId)
-  const selectionCount = (): number => selection().length
-
-  /**
-   * Select a clip.
-   *
-   * - `replace` is a plain click: one clip, whatever was selected before.
-   * - `toggle` is ctrl/cmd-click: adds or removes, keeping the rest.
-   * - `range` is shift-click: everything between the primary and this clip.
-   *
-   * A plain click on an already-selected clip *keeps* the selection rather than
-   * collapsing to one. Otherwise ctrl-clicking three clips and then nudging one
-   * of them would silently throw the other two away.
-   */
-  function selectClip(clipId: ClipId, mode: SelectMode = 'replace'): void {
-    const current = selection()
-    if (mode === 'replace') {
-      // Already the sole selection: nothing to do, and re-setting would drop
-      // the primary if it were ever a multi-selection containing this clip.
-      if (current.length === 1 && current[0] === clipId) return
-      setSelection([clipId])
-      return
-    }
-    if (mode === 'toggle') {
-      setSelection(
-        current.includes(clipId) ? current.filter((id) => id !== clipId) : [...current, clipId],
-      )
-      return
-    }
-    // range
-    const anchor = primary() ?? current[0] ?? clipId
-    const order = orderedClips().map((c) => c.id)
-    const a = order.indexOf(anchor)
-    const b = order.indexOf(clipId)
-    if (a < 0 || b < 0) {
-      setSelection([clipId])
-      return
-    }
-    const [from, to] = a < b ? [a, b] : [b, a]
-    const span = order.slice(from, to + 1)
-    // Everything in the span, plus anything already selected outside it, so
-    // ctrl-then-shift extends instead of discarding.
-    const merged = [...new Set([...span, ...current])]
-    setSelection(merged)
-  }
-
-  function setPrimary(clipId: ClipId): void {
-    if (!isSelected(clipId)) return
-    setSelection([...selection().filter((id) => id !== clipId), clipId])
-  }
-
-  function clearSelection(): void {
-    setSelection([])
-  }
-
-  /** Select every clip in both lanes, for ctrl+A. */
-  function selectAll(): void {
-    setSelection(orderedClips().map((c) => c.id))
-  }
-
-  /** Drop ids that no longer exist, so a delete cannot leave ghosts behind. */
-  function pruneSelection(): void {
-    const live = new Set(orderedClips().map((c) => c.id))
-    const kept = selection().filter((id) => live.has(id))
-    if (kept.length !== selection().length) setSelection(kept)
-  }
-
-  /** The clips currently selected, in timeline order. */
-  const selectedClips = (): Clip[] =>
-    orderedClips().filter((c) => isSelected(c.id))
-
-  const selectedLanes = (): Lane[] => {
-    const lanes = new Set<Lane>()
-    for (const clip of selectedClips()) lanes.add(clip.lane)
-    return [...lanes]
-  }
-
-  /** History entries are the two lanes, without assets — pointers are all an
-   *  edit can change, and it keeps a snapshot to a few hundred bytes. */
-  const [past, setPast] = createSignal<Lanes[]>([])
-  const [future, setFuture] = createSignal<Lanes[]>([])
+  const sel = createSelection(project)
 
   const frameCache = new FrameCache()
 
@@ -193,41 +102,16 @@ export function createAppState() {
 
   // --- history ------------------------------------------------------------
 
-  function snapshot(): Lanes {
-    return { video: unwrap(project).video, audio: unwrap(project).audio }
-  }
-
-  function commit(): void {
-    const current = snapshot()
-    setPast((prev) => [...prev.slice(-(HISTORY_LIMIT - 1)), current])
-    setFuture([])
-  }
-
-  function undo(): void {
-    const history = past()
-    const previous = history.at(-1)
-    if (!previous) return
-    const current = snapshot()
-    setPast(history.slice(0, -1))
-    setFuture((f) => [...f, current])
-    setProject('video', previous.video)
-    setProject('audio', previous.audio)
-    clearSelection()
-  }
-
-  function redo(): void {
-    const history = future()
-    const next = history.at(-1)
-    if (!next) return
-    const current = snapshot()
-    setFuture(history.slice(0, -1))
-    setPast((p) => [...p, current])
-    setProject('video', next.video)
-    setProject('audio', next.audio)
-  }
-
-  const canUndo = () => past().length > 0
-  const canRedo = () => future().length > 0
+  const history = createHistory(
+    project,
+    // Undo/redo write lanes directly: they are restoring a *recorded* state,
+    // so recording it as a new entry would make the stack fold in half.
+    (lanes) => {
+      setProject('video', lanes.video)
+      setProject('audio', lanes.audio)
+    },
+    () => sel.clear(),
+  )
 
   // --- assets -------------------------------------------------------------
 
@@ -252,13 +136,13 @@ export function createAppState() {
 
   /** Drop a file and every clip that used it. */
   function removeAsset(assetId: AssetId): void {
-    commit()
+    history.commit()
     const keep = (c: Clip) => c.assetId !== assetId
     const before = unwrap(project)
     setProject('video', before.video.filter(keep))
     setProject('audio', before.audio.filter(keep))
     if (selectedAsset() === assetId) setSelectedAsset(null)
-    clearSelection()
+    sel.clear()
     library.remove(assetId)
     notify('info', 'Removed from the project. The file on disk is untouched.')
   }
@@ -273,11 +157,11 @@ export function createAppState() {
   function addAssetToTimeline(assetId: AssetId): void {
     const asset = project.assets[assetId]
     if (!asset) return
-    commit()
+    history.commit()
     const next = appendAsset(unwrap(project), assetId, asset)
     setProject('video', next.video)
     setProject('audio', next.audio)
-    setSelection(next.video.at(-1) ? [next.video.at(-1)!.id] : next.audio.length ? [next.audio.at(-1)!.id] : [])
+    sel.replaceAll(next.video.at(-1) ? [next.video.at(-1)!.id] : next.audio.length ? [next.audio.at(-1)!.id] : [])
 
     const parts = [
       next.video.length ? `${next.video.length} video` : null,
@@ -332,13 +216,13 @@ export function createAppState() {
     const entry = library.get(assetId)
     if (!entry) return
 
-    commit()
+    history.commit()
     const wantVideo = lane === 'video' && asset.hasVideo
     if (wantVideo && !asset.hasAudio) {
       // No audio half to link, so the clip stands alone.
       const clip: Clip = { id: newId('clp'), lane: 'video', assetId, in: 0, out: asset.duration }
       setProject('video', [...unwrap(project).video, clip])
-      setSelection([clip.id])
+      sel.replaceAll([clip.id])
       return
     }
     if (!wantVideo && !asset.hasAudio) {
@@ -361,7 +245,7 @@ export function createAppState() {
     }
     setProject('video', next.video)
     setProject('audio', next.audio)
-    setSelection(wantVideo ? (next.video.at(-1) ? [next.video.at(-1)!.id] : []) : next.audio.length ? [next.audio.at(-1)!.id] : [])
+    sel.replaceAll(wantVideo ? (next.video.at(-1) ? [next.video.at(-1)!.id] : []) : next.audio.length ? [next.audio.at(-1)!.id] : [])
     notify('info', `Added ${asset.name} at ${formatTime(start)}`)
   }
 
@@ -372,7 +256,7 @@ export function createAppState() {
    * nothing selected, whatever is under the playhead in each lane splits.
    */
   function splitAt(time: number, lane?: Lane): void {
-    commit()
+    history.commit()
 
     if (lane) {
       const loc = clipAtLane(laneOf(project, lane), time)
@@ -381,7 +265,7 @@ export function createAppState() {
       return
     }
 
-    const anchor = primary()
+    const anchor = sel.primary()
     if (anchor) {
       const found = findClip(project, anchor)
       if (found) {
@@ -415,7 +299,7 @@ export function createAppState() {
    */
   function splitSelectionAtPlayhead(): void {
     const t = playhead()
-    const clips = selectedClips()
+    const clips = sel.clips()
     if (clips.length === 0) return
 
     // One entry per link group, so a selected pair splits once.
@@ -445,7 +329,7 @@ export function createAppState() {
       notify('info', 'Nothing to split — put the playhead inside a selected clip.')
       return
     }
-    commit()
+    history.commit()
     setProject(replace(next))
     notify('info', `Split ${split} clip${split === 1 ? '' : 's'}.`)
   }
@@ -453,7 +337,7 @@ export function createAppState() {
   /** Trim each selected clip's nearest edge to the playhead. */
   function trimSelectionToPlayhead(): void {
     const t = playhead()
-    const clips = selectedClips()
+    const clips = sel.clips()
     if (clips.length === 0) return
 
     const seen = new Set<string>()
@@ -476,7 +360,7 @@ export function createAppState() {
       return
     }
 
-    commit()
+    history.commit()
     for (const { clip, lane, index } of usable) {
       const laneClips = laneOf(project, lane)
       const loc = { clip, lane, clips: laneClips, index, start: clipStart(laneClips, index) }
@@ -499,9 +383,9 @@ export function createAppState() {
    * quietly mean "delete the pair".
    */
   function deleteSelected(): void {
-    const clips = selectedClips()
+    const clips = sel.clips()
     if (clips.length === 0) return
-    commit()
+    history.commit()
     // Highest index first per lane: removing a clip shifts every later index
     // down, so working backwards means no index is ever stale.
     const doomed = clips
@@ -511,7 +395,7 @@ export function createAppState() {
     for (const { lane, index } of doomed) {
       setProject(replace(removeClip(unwrap(project), lane, index)))
     }
-    clearSelection()
+    sel.clear()
     notify('info', clips.length === 1 ? 'Deleted clip.' : `Deleted ${clips.length} clips.`)
   }
 
@@ -533,10 +417,10 @@ export function createAppState() {
    *  by this, which is the honest outcome of deleting only half. */
   function clearLane(lane: Lane): void {
     if (laneOf(project, lane).length === 0) return
-    commit()
+    history.commit()
     setProject(lane, [])
     // A selected clip on the cleared lane cannot stay selected.
-    setSelection(selection().filter((id) => findClip(project, id)?.lane !== lane))
+    sel.replaceAll(sel.ids().filter((id) => findClip(project, id)?.lane !== lane))
     notify('info', `Cleared the ${lane} lane.`)
   }
 
@@ -547,9 +431,9 @@ export function createAppState() {
    * ctrl+D repeat the operation instead of piling up copies of the first pair.
    */
   function duplicateSelected(): void {
-    const clips = selectedClips()
+    const clips = sel.clips()
     if (clips.length === 0) return
-    commit()
+    history.commit()
     const next = duplicateClips(unwrap(project), clips.map((c) => c.id))
     // The copies are the ones after each original, in the same lane order.
     const copies: ClipId[] = []
@@ -564,13 +448,13 @@ export function createAppState() {
     }
     setProject('video', next.video)
     setProject('audio', next.audio)
-    setSelection(copies)
+    sel.replaceAll(copies)
     notify('info', copies.length === 1 ? 'Duplicated clip.' : `Duplicated ${copies.length} clips.`)
   }
 
   function reorder(lane: Lane, from: number, to: number): void {
     if (from === to) return
-    commit()
+    history.commit()
     setProject(replace(moveClip(unwrap(project), lane, from, to)))
   }
 
@@ -598,7 +482,7 @@ export function createAppState() {
 
   /** Mute or unmute every selected audio clip, leaving video clips alone. */
   function toggleMuteSelected(): void {
-    const clips = selectedClips().filter((c) => c.lane === 'audio')
+    const clips = sel.clips().filter((c) => c.lane === 'audio')
     if (clips.length === 0) return
     // Mute all if any of them is currently audible, so one keypress mutes the
     // selection rather than flipping each clip independently.
@@ -624,21 +508,21 @@ export function createAppState() {
    * mixed selection is normal once ctrl-click is in play.
    */
   function breakSelectedLinks(): void {
-    const linked = selectedClips().filter((c) => c.linkId)
+    const linked = sel.clips().filter((c) => c.linkId)
     if (linked.length === 0) return
-    commit()
+    history.commit()
     for (const clip of linked) setProject(replace(breakLink(unwrap(project), clip)))
     notify('info', `Unlinked ${linked.length} clip${linked.length === 1 ? '' : 's'}.`)
   }
 
-  const selectionHasLinks = (): boolean => selectedClips().some((c) => Boolean(c.linkId))
+  const selectionHasLinks = (): boolean => sel.clips().some((c) => Boolean(c.linkId))
 
   // --- transport ----------------------------------------------------------
 
   const duration = (): number => projectDuration(project)
   const outputFps = (): number => 30
   const selectedClip = (): Clip | null => {
-    const id = primary()
+    const id = sel.primary()
     return id ? (findClip(project, id)?.clip ?? null) : null
   }
   const findClipById = (id: ClipId): Clip | null => findClip(project, id)?.clip ?? null
@@ -708,7 +592,7 @@ export function createAppState() {
   }
 
   function resetView(): void {
-    clearSelection()
+    sel.clear()
     notify('info', 'View reset.')
   }
 
@@ -762,33 +646,38 @@ export function createAppState() {
     else if (typeof a === 'string') applyProject(a as Lane, b as Clip[])
     // A plain two-key set, never `reconcile` — see src/project-store.ts for the
     // media library that reconcile deleted.
-    else applyLanes((lanes) => applyProject(lanes), a as Lanes, pruneSelection)
+    else applyLanes((lanes) => applyProject(lanes), a as Lanes, sel.prune)
   }
 
   return {
     project,
     playhead,
     playing,
-    // `selected` is the primary clip; `selection` is the whole set.
-    selected: primary,
-    selection,
-    primary,
-    isSelected,
-    selectionCount,
-    selectedClips,
-    selectedLanes,
-    selectClip,
-    setPrimary,
-    clearSelection,
-    selectAll,
+    // Selection. `selected` is the primary clip and `selection` is the whole
+    // set — both names predate the slice and are kept so no UI file changed.
+    // Anything new should use the explicit ones below.
+    selected: sel.primary,
+    selection: sel.ids,
+    primary: sel.primary,
+    isSelected: sel.isSelected,
+    selectionCount: sel.count,
+    selectedClips: sel.clips,
+    selectedLanes: sel.lanes,
+    selectClip: sel.select,
+    setPrimary: sel.setPrimary,
+    clearSelection: sel.clear,
+    selectAll: sel.selectAll,
     zoom,
     notices,
     loading,
     snapping,
     selectedAsset,
     peaksBy,
-    canUndo,
-    canRedo,
+    canUndo: history.canUndo,
+    canRedo: history.canRedo,
+    undo: history.undo,
+    redo: history.redo,
+    commit: history.commit,
     setPlayhead,
     setPlaying,
     setZoom: setZoomLevel,
@@ -828,8 +717,6 @@ export function createAppState() {
     togglePlay,
     advanceClock,
     step,
-    undo,
-    redo,
     notify,
     resetView,
     setTransformActive,
@@ -857,7 +744,8 @@ function formatTime(seconds: number): string {
   return `${m}:${String(s).padStart(2, '0')}`
 }
 
-/** How a click changes the selection. */
-export type SelectMode = 'replace' | 'toggle' | 'range'
+// Re-exported so the UI imports selection types from the store rather than
+// reaching into a slice for one.
+export type { SelectMode } from './selection.js'
 
 export type AppState = ReturnType<typeof createAppState>

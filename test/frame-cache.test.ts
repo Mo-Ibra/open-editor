@@ -4,7 +4,7 @@
  * test, so it is tested.
  */
 import assert from 'node:assert/strict'
-import { FrameCache } from '../src/frame-cache.ts'
+import { FrameCache } from '../src/media/frame-cache.ts'
 
 // Canvas-shaped stand-ins. The cache only reads timestamp/duration and stores
 // the object, so no real canvas is needed.

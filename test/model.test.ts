@@ -33,7 +33,7 @@ import {
   type Asset,
   type Clip,
   type Project,
-} from '../src/project.ts'
+} from '../src/model/project.ts'
 
 function check(name: string, fn: () => void): void {
   try {

@@ -1,6 +1,6 @@
 import { render } from 'solid-js/web'
-import { App } from './app.js'
-import { install } from './debug.js'
+import { App } from './app/app.js'
+import { install } from './dev/debug.js'
 
 const root = document.getElementById('root')
 if (!root) throw new Error('index.html is missing #root')

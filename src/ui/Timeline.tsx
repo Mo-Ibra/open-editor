@@ -2,7 +2,7 @@
  * The timeline: two lanes, with a waveform on the audio one.
  *
  * Clip x-positions come from the *derived* start, never a stored value, so a
- * clip cannot drift out of order however it was edited (§3).
+ * clip cannot drift out of order however it was edited (docs/data-model.md).
  *
  * The lanes are the whole reason the model has two. Trimming the picture
  * while keeping the sound, or cutting a voiceover with no picture, are ordinary
@@ -11,19 +11,19 @@
  */
 
 import { createEffect, createSignal, For, onMount, Show } from 'solid-js'
-import { clipAtLane, clipDuration, clipEnd, clipStart, laneOf, type Clip, type Lane } from '../project.js'
-import { drawPeaks, type Peak } from '../peaks.js'
+import { clipAtLane, clipDuration, clipEnd, clipStart, laneOf, type Clip, type Lane } from '../model/project.js'
+import { drawPeaks, type Peak } from '../media/peaks.js'
 import {
   collectTargets,
   describeTarget,
   snapTrimEdge,
   thresholdInSeconds,
   type SnapTarget,
-} from '../snapping.js'
-import type { AppState, SelectMode } from '../state.js'
+} from '../model/snapping.js'
+import type { AppState, SelectMode } from '../app/state.js'
 import type { ContextMenuState } from './ContextMenu.js'
 import { DND_ASSET } from './AssetBin.js'
-import { log } from '../debug.js'
+import { log } from '../dev/debug.js'
 
 const HANDLE = 8
 

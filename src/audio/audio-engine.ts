@@ -19,15 +19,15 @@
  *     after it.
  *
  * Deliberately minimal: per-clip gain and mute, no master bus, no waveform, no
- * speed control. A mixer is a different feature (§8 out of scope lists it) and
+ * speed control. A mixer is a different feature (docs/risks.md#r5--scope-creep-toward-premiere) and
  * the inspector's level control can drive `gain` until then.
  */
 
-import type { Clip, Project } from './project.js'
-import { clipDuration, clipStart } from './project.js'
+import type { Clip, Project } from '../model/project.js'
+import { clipDuration, clipStart } from '../model/project.js'
 import { conformAudioBuffer, OUTPUT_SAMPLE_RATE } from './audio.js'
-import type { MediaLibrary } from './library.js'
-import { log } from './debug.js'
+import type { MediaLibrary } from '../media/library.js'
+import { log } from '../dev/debug.js'
 
 interface ClipPlayback {
   source: AudioBufferSourceNode
@@ -204,7 +204,7 @@ export class AudioEngine {
 
     const sampleRate = buffer.sampleRate
     // Integer sample indices only. Float seconds accumulated across clips is
-    // how A/V drift is born (§6.1).
+    // how A/V drift is born (docs/export.md#av-sync).
     const startSample = Math.round(sourceFrom * sampleRate)
     const sampleCount = Math.round(remaining * sampleRate)
     if (sampleCount <= 0) return false

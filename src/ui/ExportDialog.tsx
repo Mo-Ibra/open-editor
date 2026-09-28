@@ -11,16 +11,16 @@
  *  - **The result plays here before it is offered as a download.** "It
  *    downloaded but won't play" is the worst class of bug, because it looks
  *    like success until someone tries to watch it. We found exactly that with
- *    opus-in-mp4 (§6.8), and the only reason we caught it was this check.
+ *    opus-in-mp4 (docs/decisions/0008-negotiate-never-hardcode-a-codec.md), and the only reason we caught it was this check.
  */
 
 import { createEffect, createSignal, For, onCleanup, Show } from 'solid-js'
-import { Exporter, ExportCancelled, settingsFor, type ExportResult } from '../exporter.js'
-import { buildExportAudio, verifyAudioTrack, type ExportAudioTrack } from '../export-audio.js'
-import { projectDuration } from '../project.js'
-import { availablePlans, bitrateFor, even, type PlanCandidate } from '../codecs.js'
-import { log } from '../debug.js'
-import type { AppState } from '../state.js'
+import { Exporter, ExportCancelled, settingsFor, type ExportResult } from '../output/exporter.js'
+import { buildExportAudio, verifyAudioTrack, type ExportAudioTrack } from '../audio/export-audio.js'
+import { projectDuration } from '../model/project.js'
+import { availablePlans, bitrateFor, even, type PlanCandidate } from '../output/codecs.js'
+import { log } from '../dev/debug.js'
+import type { AppState } from '../app/state.js'
 
 const PRESETS = [
   { label: 'Match source', value: 'source' as const },
@@ -140,7 +140,7 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
     })
 
     try {
-      // Mix first and check it against the §6.1 invariants, so a broken audio
+      // Mix first and check it against the docs/export.md#av-sync invariants, so a broken audio
       // track is reported before we spend a minute encoding video.
       const duration = projectDuration(state.project)
       const track = await buildExportAudio(state.project, duration, {

@@ -82,9 +82,19 @@ export default defineConfig({
       'Cross-Origin-Embedder-Policy': 'require-corp',
     },
   },
-  // Multi-page: / is the editor, /phase0 is the raw encode-loop proof.
   build: {
     target: 'es2022',
-    rollupOptions: { input: { main: 'index.html', phase0: 'phase0.html' } },
+    rollupOptions: {
+      // The editor only. `/phase0` — the raw encode-loop benchmark that settled
+      // ADR-3 — is a *development* page: it exists to be re-run when the
+      // encode-speed question in docs/risks.md#r2--encode-speed is reopened, and
+      // shipping it would put a second entry point and 700+ lines of
+      // non-product code into every production bundle.
+      //
+      // It stays on disk and stays reachable in `npm run dev`, because deleting
+      // the only instrument that produced a load-bearing measurement is how you
+      // end up re-deriving it badly later.
+      input: { main: 'index.html' },
+    },
   },
 })

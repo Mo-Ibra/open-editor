@@ -12,7 +12,7 @@
  */
 
 import { createSignal } from 'solid-js'
-import { log } from './debug.js'
+import { log } from '../dev/debug.js'
 
 const STORAGE_KEY = 'open-editor:layout:v2'
 

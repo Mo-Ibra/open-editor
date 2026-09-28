@@ -7,8 +7,8 @@
  * encoder, or a media file.
  */
 import assert from 'node:assert/strict'
-import { frameTimesForClip, totalFramesFor } from '../src/exporter.ts'
-import { projectDuration, type Clip, type Project } from '../src/project.ts'
+import { frameTimesForClip, totalFramesFor } from '../src/output/exporter.ts'
+import { projectDuration, type Clip, type Project } from '../src/model/project.ts'
 
 const c = (id: string, i: number, o: number): Clip => ({ id, lane: 'video', assetId: 'a', in: i, out: o })
 /** The exporter walks the VIDEO lane; a real project also has an audio lane. */
@@ -72,7 +72,7 @@ console.log('export timestamp assertions passed')
 // a frame index handed to the muxer as if it were seconds.
 // ---------------------------------------------------------------------------
 
-import { sourceTimesForClip } from '../src/exporter.ts'
+import { sourceTimesForClip } from '../src/output/exporter.ts'
 
 const FPS30 = 30
 

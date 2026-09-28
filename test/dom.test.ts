@@ -38,7 +38,7 @@ console.log('dom id assertions passed')
 {
   const { readdirSync, statSync } = await import('node:fs')
   const { join } = await import('node:path')
-  const srcDir = new URL('../src/', import.meta.url).pathname
+  const srcDir = new URL('../src', import.meta.url).pathname
 
   const walk = (dir: string): string[] =>
     readdirSync(dir).flatMap((name) => {
@@ -86,7 +86,7 @@ console.log('wiring assertions passed')
 {
   const { readdirSync, statSync } = await import('node:fs')
   const { join } = await import('node:path')
-  const srcDir = new URL('../src/', import.meta.url).pathname
+  const srcDir = new URL('../src', import.meta.url).pathname
 
   const walk = (dir: string): string[] =>
     readdirSync(dir).flatMap((name) => {
@@ -132,7 +132,7 @@ console.log('no-definite-assertion assertions passed')
 {
   const { readdirSync, statSync } = await import('node:fs')
   const { join } = await import('node:path')
-  const srcDir = new URL('../src/', import.meta.url).pathname
+  const srcDir = new URL('../src', import.meta.url).pathname
 
   const walk = (dir: string): string[] =>
     readdirSync(dir).flatMap((name) => {
@@ -174,7 +174,7 @@ console.log('ref-binding assertions passed')
  * props match. Only the count is wrong. So the count is the assertion.
  */
 {
-  const app = readFileSync(new URL('../src/app.tsx', import.meta.url), 'utf8')
+  const app = readFileSync(new URL('../src/app/app.tsx', import.meta.url), 'utf8')
   // Only JSX usage: the import line and any local variable named e.g. `Timeline`
   // are not element instantiations.
   const singletons = ['AssetBin', 'Preview', 'Timeline', 'ExportDialog', 'ContextMenu']
@@ -236,7 +236,7 @@ console.log('ref-binding assertions passed')
  * looks fine. Opacity is not allowed inside an arbitrary shadow/gradient value.
  */
 {
-  const distDir = new URL('../dist/assets/', import.meta.url).pathname
+  const distDir = new URL('../dist/assets', import.meta.url).pathname
   const css = existsSync(distDir)
     ? readdirSync(distDir)
         .filter((f) => f.endsWith('.css'))
@@ -259,4 +259,72 @@ console.log('ref-binding assertions passed')
     )
     console.log(`  no invalid opacity-on-var() declarations in ${css.length} bytes of CSS`)
   }
+}
+
+/**
+ * Documentation references in the source must resolve.
+ *
+ * Code comments point at docs by path — `docs/data-model.md`,
+ * `docs/decisions/0004-…#drm-audio`. Thirty of them did. When `PLAN.md` was
+ * split into `docs/`, every one of those pointers had to be rewritten, and a
+ * missed rewrite is invisible: the comment still reads fine, the file it names
+ * just does not exist, and the reader loses the reasoning at exactly the moment
+ * they wanted it.
+ *
+ * Also checks the anchor, because `#av-sync` silently becoming wrong is the same
+ * failure as the file being gone.
+ */
+{
+  const repoRoot = new URL('..', import.meta.url).pathname
+  const sources: string[] = []
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) walk(full)
+      else if (/\.tsx?$/.test(entry.name)) sources.push(full)
+    }
+  }
+  walk(join(repoRoot, 'src'))
+  walk(join(repoRoot, 'test'))
+
+  const problems: string[] = []
+  let checked = 0
+
+  for (const file of sources) {
+    const code = readFileSync(file, 'utf8')
+    for (const match of code.matchAll(/(docs\/[a-z0-9./-]+\.md)(#[a-z0-9-]+)?/gi)) {
+      checked += 1
+      const path = match[1]!
+      const anchor = match[2]
+      const target = join(repoRoot, path)
+      if (!existsSync(target)) {
+        problems.push(`${file.replace(repoRoot, '')}: ${path} does not exist`)
+        continue
+      }
+      if (anchor) {
+        const heading = anchor.slice(1)
+        const body = readFileSync(target, 'utf8').toLowerCase()
+        // GitHub anchors, replicated exactly: lowercase, drop punctuation
+        // other than space and hyphen, trim, then EVERY space becomes one
+        // hyphen. Collapsing runs of whitespace looks tidier and is wrong —
+        // "R2 — Encode speed" slugs to "r2--encode-speed" with two hyphens,
+        // because the em-dash is deleted and leaves the two spaces either side
+        // of it intact.
+        const slugs = [...body.matchAll(/^#{1,6}\s+(.+)$/gm)].map((h) =>
+          h[1]!
+            .toLowerCase()
+            .replace(/[^\w\s-]/g, '')
+            .trim()
+            .replace(/ /g, '-'),
+        )
+        if (!slugs.includes(heading)) {
+          problems.push(`${file.replace(repoRoot, '')}: ${path} has no heading '${heading}'`)
+        }
+      }
+    }
+  }
+
+  assert.deepEqual(problems, [], `broken doc references:\n  ${problems.join('\n  ')}`)
+  assert.ok(checked >= 25, `expected the source to reference docs often, found ${checked}`)
+  console.log(`  ${checked} doc references across ${sources.length} files, all resolve`)
 }

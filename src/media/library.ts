@@ -19,9 +19,9 @@ import {
   QuickTimeInputFormat,
 } from 'mediabunny'
 import { loadAsset } from './probe.js'
-import type { Asset, AssetId } from './project.js'
-import { newId } from './project.js'
-import { log, tag } from './debug.js'
+import type { Asset, AssetId } from '../model/project.js'
+import { newId } from '../model/project.js'
+import { log, tag } from '../dev/debug.js'
 
 // MP4 and MOV share a demuxer; MKV and WebM share another.
 const FORMATS: InputFormat[] = [

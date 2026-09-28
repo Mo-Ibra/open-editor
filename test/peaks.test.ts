@@ -7,7 +7,7 @@
  * preserved, not about the picture.
  */
 import assert from 'node:assert/strict'
-import { computePeaks, drawPeaks, findSilence, PEAKS_PER_SECOND } from '../src/peaks.ts'
+import { computePeaks, drawPeaks, findSilence, PEAKS_PER_SECOND } from '../src/media/peaks.ts'
 
 const RATE = 48000
 

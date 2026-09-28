@@ -12,7 +12,7 @@
  *     patchy and the result is needlessly large. Anything above 2 channels
  *     becomes stereo.
  *
- * Mixing stays deterministic (PLAN.md ADR-4): this module only does format
+ * Mixing stays deterministic (docs/decisions/0004-deterministic-audio-mixing.md): this module only does format
  * conversion, using a single `OfflineAudioContext` render per buffer. The
  * actual clip mixing is plain `Float32Array` arithmetic and lives in
  * `mixTimeline` below.
@@ -116,11 +116,11 @@ export function concatAudioBuffers(buffers: AudioBuffer[]): AudioBuffer {
 }
 
 // ---------------------------------------------------------------------------
-// Deterministic mixing (ADR-4)
+// Deterministic mixing (docs/decisions/0004-deterministic-audio-mixing.md)
 //
 // Every position is an integer sample index computed once. Never accumulate
 // float seconds across clips — that is the most common source of A/V drift
-// (PLAN.md §6.1), and it is a five-line bug that costs a day to find.
+// (docs/export.md#av-sync), and it is a five-line bug that costs a day to find.
 // ---------------------------------------------------------------------------
 
 export interface MixSegment {

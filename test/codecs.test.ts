@@ -42,7 +42,7 @@ class FakeAudioEncoder {
 ;(globalThis as { VideoEncoder?: unknown }).VideoEncoder = FakeVideoEncoder
 ;(globalThis as { AudioEncoder?: unknown }).AudioEncoder = FakeAudioEncoder
 
-const { availablePlans, negotiate } = await import('../src/codecs.ts')
+const { availablePlans, negotiate } = await import('../src/output/codecs.ts')
 
 const OPTS = { needsAudio: true, width: 1920, height: 1080, fps: 30, bitrate: 5_000_000 }
 const ids = (plans: { id: string }[]) => plans.map((p) => p.id)

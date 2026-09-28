@@ -1,5 +1,5 @@
 /**
- * The editing model. This is the whole product (PLAN.md §3).
+ * The editing model. This is the whole product (docs/data-model.md).
  *
  * Two lanes, `video` and `audio`, each an ordered array. Splitting a clip
  * with audio attached, cutting the dead air out of a voiceover, or dropping a
@@ -213,7 +213,7 @@ export function sourceTimeAt(loc: ClipLocation, t: number): number {
 // `in`/`out` are floats because a human drags them. They are converted to
 // integer frames and integer samples EXACTLY ONCE, at export time, and the
 // export loops never do float math. Accumulating floats across 200 clips is
-// the most common source of A/V drift (§6.1).
+// the most common source of A/V drift (docs/export.md#av-sync).
 // ---------------------------------------------------------------------------
 
 export function toSampleIndex(seconds: number, sampleRate: number): number {

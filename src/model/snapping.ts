@@ -24,7 +24,7 @@
  */
 
 import { clipDuration, clipStart, laneOf, type Clip, type Lane, type Project } from './project.js'
-import type { SilenceRegion } from './peaks.js'
+import type { SilenceRegion } from '../media/peaks.js'
 
 export type SnapKind = 'clip-start' | 'clip-end' | 'playhead' | 'timeline-start' | 'silence'
 

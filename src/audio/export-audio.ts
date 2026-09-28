@@ -2,20 +2,20 @@
  * The audio track for an export.
  *
  * The whole timeline becomes ONE mixed buffer, assembled with plain
- * Float32Array arithmetic (ADR-4), then handed to the encoder in chunks. No
+ * Float32Array arithmetic (docs/decisions/0004-deterministic-audio-mixing.md), then handed to the encoder in chunks. No
  * Web Audio graph: a graph is stateful, its output depends on construction
  * order, and for trim-and-concatenate it is enormous overkill.
  *
  * The part that matters is arithmetic. Every position is an integer sample
  * index computed once, at the boundary, and the mix loop never does float
  * math. Accumulating float seconds across clips is how A/V drift is born
- * (§6.1) — a five-line bug that costs a day and is invisible in a 5-second test.
+ * (docs/export.md#av-sync) — a five-line bug that costs a day and is invisible in a 5-second test.
  */
 
 import { mixTimeline, OUTPUT_CHANNELS, type MixSegment } from './audio.js'
-import { clipStart, type Project } from './project.js'
-import type { MediaLibrary } from './library.js'
-import { log } from './debug.js'
+import { clipStart, type Project } from '../model/project.js'
+import type { MediaLibrary } from '../media/library.js'
+import { log } from '../dev/debug.js'
 
 export interface BuildAudioOptions {
   library: MediaLibrary
@@ -92,7 +92,7 @@ export async function buildExportAudio(
 }
 
 /**
- * The §6.1 sync assertions, as a function.
+ * The docs/export.md#av-sync sync assertions, as a function.
  *
  * Run after the mix is built so a track that will not hold up to inspection is
  * reported rather than shipped. Tolerance is one *video frame*, not one

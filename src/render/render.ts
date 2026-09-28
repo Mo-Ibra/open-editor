@@ -1,5 +1,5 @@
 /**
- * The single render pass (PLAN.md ADR-1).
+ * The single render pass (docs/decisions/0001-one-render-function.md).
  *
  * Preview and export both call `renderFrame`. There is exactly one
  * implementation, so there is nothing that can drift between what you see and

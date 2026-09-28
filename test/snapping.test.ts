@@ -13,8 +13,8 @@ import {
   snapTrimEdge,
   thresholdInSeconds,
   type SnapTarget,
-} from '../src/snapping.ts'
-import { clipStart, placeClip, emptyProject, type Clip, type Project } from '../src/project.ts'
+} from '../src/model/snapping.ts'
+import { clipStart, placeClip, emptyProject, type Clip, type Project } from '../src/model/project.ts'
 
 const clip = (id: string, inPoint: number, out: number, lane: 'video' | 'audio' = 'video'): Clip => ({
   id,
@@ -139,7 +139,7 @@ check('a snap is sticky, which is what stops the flicker', () => {
 check('a trim edge snaps to a nearby cut', () => {
   // v1 is 0-10 of source and v2 is 12-20, but they butt together on the
   // timeline: v2 STARTS at 10, because position is derived from array order
-  // (§3). So the only boundaries are 0, 10 and 18 — there is no gap, and
+  // (docs/data-model.md). So the only boundaries are 0, 10 and 18 — there is no gap, and
   // "12" is a source in-point, not a timeline position.
   const p = project([clip('v1', 0, 10), clip('v2', 12, 20)])
   const targets = collectTargets(p, { playhead: 0, includePlayhead: false })
@@ -171,7 +171,7 @@ check('an empty timeline still offers the origin', () => {
 // ---------------------------------------------------------------------------
 
 const timelineSource = readFileSync(new URL('../src/ui/Timeline.tsx', import.meta.url), 'utf8')
-const snappingSource = readFileSync(new URL('../src/snapping.ts', import.meta.url), 'utf8')
+const snappingSource = readFileSync(new URL('../src/model/snapping.ts', import.meta.url), 'utf8')
 
 /**
  * The body of one `case` arm of the drag switch, with comments stripped.

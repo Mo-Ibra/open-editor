@@ -1,11 +1,11 @@
 /**
  * Phase 0 — prove the loop closes.
  *
- * No editor UI, no project model, no Solid. Just the question PLAN.md §7
+ * No editor UI, no project model, no Solid. Just the question docs/roadmap.md
  * Phase 0 asks: can a browser demux, decode, draw, encode, mux and download
  * a playable mp4 — and how fast?
  *
- * The answer to the speed question is what settles ADR-3 (re-encode-only vs
+ * The answer to the speed question is what settles docs/decisions/0003-re-encode-only.md (re-encode-only vs
  * building a stream-copy fast path), so it gets measured, not guessed.
  */
 
@@ -32,9 +32,9 @@ import {
   OggInputFormat,
   QuickTimeInputFormat,
 } from 'mediabunny'
-import { loadAsset, type LoadedAsset } from './probe.js'
-import type { Asset } from './project.js'
-import { chunkAudioBuffer, concatAudioBuffers, conformAudioBuffer, OUTPUT_CHANNELS, OUTPUT_SAMPLE_RATE } from './audio.js'
+import { loadAsset, type LoadedAsset } from './media/probe.js'
+import type { Asset } from './model/project.js'
+import { chunkAudioBuffer, concatAudioBuffers, conformAudioBuffer, OUTPUT_CHANNELS, OUTPUT_SAMPLE_RATE } from './audio/audio.js'
 
 const FORMATS: InputFormat[] = [
   new Mp4InputFormat(),
@@ -692,8 +692,8 @@ async function run(): Promise<void> {
   log('')
   log(
     realtime >= 1
-      ? `Verdict: ${realtime.toFixed(2)}x realtime. A 10-min edit exports in ${hms(exportTime(600))}. ADR-3 settled -- no stream-copy needed.`
-      : `Verdict: ${realtime.toFixed(2)}x realtime, i.e. ${slowdown.toFixed(2)}x SLOWER than realtime. 1 min of video -> ${hms(exportTime(60))}; 10 min -> ${hms(exportTime(600))}. ADR-3 needs revisiting.`,
+      ? `Verdict: ${realtime.toFixed(2)}x realtime. A 10-min edit exports in ${hms(exportTime(600))}. docs/decisions/0003-re-encode-only.md settled -- no stream-copy needed.`
+      : `Verdict: ${realtime.toFixed(2)}x realtime, i.e. ${slowdown.toFixed(2)}x SLOWER than realtime. 1 min of video -> ${hms(exportTime(60))}; 10 min -> ${hms(exportTime(600))}. docs/decisions/0003-re-encode-only.md needs revisiting.`,
     realtime >= 1 ? 'ok' : 'warn',
   )
   log('')

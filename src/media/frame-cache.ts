@@ -10,7 +10,7 @@
  *
  * Scrubbing a timeline asks for the same source time dozens of times per
  * second. Asking the decoder each time is what made the Phase 0 harness slow
- * (PLAN.md R2). Holding the last frame and reusing it when the requested time
+ * (docs/risks.md#r2--encode-speed). Holding the last frame and reusing it when the requested time
  * still lands inside it turns a drag from a stutter into a glide.
  *
  * A ring buffer rather than one frame, because a user dragging a trim handle

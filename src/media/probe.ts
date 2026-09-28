@@ -1,7 +1,7 @@
 /**
  * Probing: file -> Asset.
  *
- * This is where PLAN.md §6.3 (VFR) and §6.4 (rotation, pixel aspect ratio)
+ * This is where docs/media.md
  * get solved, once, so no other module has to think about them.
  */
 
@@ -18,9 +18,9 @@ import {
   QuickTimeInputFormat,
   type InputFormat,
 } from 'mediabunny'
-import type { Asset, AssetId, Rotation } from './project.js'
-import { newId } from './project.js'
-import { log } from './debug.js'
+import type { Asset, AssetId, Rotation } from '../model/project.js'
+import { newId } from '../model/project.js'
+import { log } from '../dev/debug.js'
 
 /** A probed file plus the live handles needed to decode it later. */
 export interface LoadedAsset {

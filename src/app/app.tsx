@@ -8,20 +8,20 @@
  */
 
 import { createEffect, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
-import { AssetBin } from './ui/AssetBin.js'
-import { Preview } from './ui/Preview.js'
-import { Timeline } from './ui/Timeline.js'
-import { ExportDialog } from './ui/ExportDialog.js'
+import { AssetBin } from '../ui/AssetBin.js'
+import { Preview } from '../ui/Preview.js'
+import { Timeline } from '../ui/Timeline.js'
+import { ExportDialog } from '../ui/ExportDialog.js'
 import { createAppState, type AppState } from './state.js'
-import { dump, log } from './debug.js'
+import { dump, log } from '../dev/debug.js'
 import { createLayout } from './layout.js'
 import {
   ContextMenu,
   createContextMenu,
   shouldSuppressNativeMenu,
   type MenuItem,
-} from './ui/ContextMenu.js'
-import { Resizer } from './ui/Resizer.js'
+} from '../ui/ContextMenu.js'
+import { Resizer } from '../ui/Resizer.js'
 
 const SHORTCUTS: [string, string][] = [
   ['space', 'play'],

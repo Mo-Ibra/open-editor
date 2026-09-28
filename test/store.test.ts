@@ -20,8 +20,8 @@ import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
 import { createStore } from 'solid-js/store'
 
-import { applyLanes, type Lanes } from '../src/project-store.ts'
-import { emptyProject, splitLinked, removeClip, type Asset, type Project } from '../src/project.ts'
+import { applyLanes, type Lanes } from '../src/model/project-store.ts'
+import { emptyProject, splitLinked, removeClip, type Asset, type Project } from '../src/model/project.ts'
 
 const asset: Asset = {
   id: 'ast_7fdu42uz',

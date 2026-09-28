@@ -27,7 +27,7 @@ const store = new Map<string, string>()
   innerHeight: 900,
 }
 
-const { createLayout, LIMITS } = await import('../src/layout.ts')
+const { createLayout, LIMITS } = await import('../src/app/layout.ts')
 
 // The layout module persists to a shared localStorage, so every test needs a
 // clean one — otherwise a collapsed panel leaks into the next test and the

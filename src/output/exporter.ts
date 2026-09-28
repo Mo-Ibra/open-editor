@@ -2,7 +2,7 @@
  * Export: timeline -> a file you can send to someone.
  *
  * The render pass is `renderFrame` — the same function the preview uses
- * (PLAN.md ADR-1). Preview and export differ only in which source frame is
+ * (docs/decisions/0001-one-render-function.md). Preview and export differ only in which source frame is
  * fetched, never in how it is drawn, so "what I saw" and "what I got" cannot
  * disagree.
  *
@@ -15,16 +15,16 @@
  *
  *  2. **Output timestamps come from the derived `clipStart`,** never from a
  *     stored position, so a clip cannot drift out of order however it was
- *     edited (§3).
+ *     edited (docs/data-model.md).
  */
 
 import { AudioBufferSource, BufferTarget, CanvasSource, Output } from 'mediabunny'
 import type { AudioCodec } from 'mediabunny'
-import { clipDuration, clipStart, projectDuration, type Clip, type Project } from './project.js'
-import { renderBlank, renderFrame } from './render.js'
-import type { MediaLibrary } from './library.js'
+import { clipDuration, clipStart, projectDuration, type Clip, type Project } from '../model/project.js'
+import { renderBlank, renderFrame } from '../render/render.js'
+import type { MediaLibrary } from '../media/library.js'
 import { bitrateFor, even, negotiate, type ExportPlan } from './codecs.js'
-import { log } from './debug.js'
+import { log } from '../dev/debug.js'
 
 export interface ExportSettings {
   width: number
@@ -76,7 +76,7 @@ export interface ExporterOptions {
 }
 
 /**
- * Default settings: the source's own resolution and frame rate (§6.9).
+ * Default settings: the source's own resolution and frame rate (docs/export.md#resolution-and-frame-rate-default-to-the-source-always).
  *
  * A cutter's input is the user's own footage, so the overwhelmingly correct
  * output is the same footage trimmed. Anything else is something the user
@@ -104,7 +104,7 @@ export function settingsFor(sourceSize: { width: number; height: number; frameRa
  * Extracted and pure so the invariant can be tested: timestamps are derived
  * from the clip's position in the array, they are strictly increasing, and the
  * whole timeline yields exactly `ceil(duration × fps)` of them. A stored start
- * position instead of a derived one is how a clip drifts out of order (§3).
+ * position instead of a derived one is how a clip drifts out of order (docs/data-model.md).
  */
 /** Chunk size for feeding the audio encoder. Large enough to be cheap, small
  *  enough that the queue never holds a megabyte of PCM. */
@@ -135,7 +135,7 @@ export function frameTimesForClip(clips: Clip[], index: number, budget: number, 
   // 1/30 is not representable, so the running sum drifts and the last clip
   // emits one frame too many. A 32s timeline at 30fps produced 961 frames
   // instead of 960 — caught by the test, and exactly the float accumulation
-  // §6.1 warns about. Boundaries are rounded to whole frames once, then
+  // docs/export.md#av-sync warns about. Boundaries are rounded to whole frames once, then
   // derived by division.
   // An index that is not there yields no frames rather than throwing. A
   // timeline can legitimately be empty, and an export of nothing is an empty
@@ -237,7 +237,7 @@ export class Exporter {
     const label = `${plan.label} [requested: ${formatId ?? 'default'}]`
     log.info(`export: ${label} ${settings.width}x${settings.height} @ ${settings.fps}`)
     for (const note of plan.notes) log.info(`  skipped ${note}`)
-    if (plan.degraded) log.warn(`export fell back to ${label} — see §6.8`)
+    if (plan.degraded) log.warn(`export fell back to ${label} — see docs/decisions/0008-negotiate-never-hardcode-a-codec.md`)
 
     const out = new Output({ format: plan.format, target: new BufferTarget() })
 

@@ -3,15 +3,15 @@
  *
  * The preview and the exporter call the same `renderFrame`. Preview is only
  * allowed to differ in *which* source frame it fetches — never in how it is
- * drawn (PLAN.md ADR-1).
+ * drawn (docs/decisions/0001-one-render-function.md).
  */
 
 import { createEffect, createSignal, onCleanup, onMount, Show } from 'solid-js'
-import { clipAtLane, sourceTimeAt } from '../project.js'
-import { renderBlank, renderFrame, type SourceImage } from '../render.js'
-import type { AppState } from '../state.js'
+import { clipAtLane, sourceTimeAt } from '../model/project.js'
+import { renderBlank, renderFrame, type SourceImage } from '../render/render.js'
+import type { AppState } from '../app/state.js'
 import type { ContextMenuState } from './ContextMenu.js'
-import { log } from '../debug.js'
+import { log } from '../dev/debug.js'
 
 export function Preview(props: { state: AppState; menu: ContextMenuState }) {
   const state = props.state

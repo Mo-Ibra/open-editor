@@ -1,5 +1,5 @@
 /**
- * The §6.1 sync invariants, and the arithmetic they exist to catch.
+ * The docs/export.md#av-sync sync invariants, and the arithmetic they exist to catch.
  *
  * These were written before the mixing code, on purpose. The plan says the
  * tests come first for A/V sync, and the float-accumulation bug in
@@ -11,9 +11,9 @@
  * `numberOfChannels` and `duration`.
  */
 import assert from 'node:assert/strict'
-import { buildExportAudio, verifyAudioTrack } from '../src/export-audio.ts'
-import { mixTimeline, type MixSegment } from '../src/audio.ts'
-import type { Project } from '../src/project.ts'
+import { buildExportAudio, verifyAudioTrack } from '../src/audio/export-audio.ts'
+import { mixTimeline, type MixSegment } from '../src/audio/audio.ts'
+import type { Project } from '../src/model/project.ts'
 
 const RATE = 48000
 const CHANNELS = 2
@@ -108,7 +108,7 @@ const tone = (seconds: number, value: number) => {
   assert.ok(Math.abs(mixed.getChannelData(0)![0]! - 0.8) < 1e-6, 'overlapping segments sum')
 }
 
-// --- end to end: build a mix and hold it to the §6.1 assertions ----------
+// --- end to end: build a mix and hold it to the docs/export.md#av-sync assertions ----------
 {
   const p = project([clip('a', 0, 4), clip('b', 2, 8), clip('c', 1, 3)])
   const track = await buildExportAudio(p, 12, {
