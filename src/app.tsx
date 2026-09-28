@@ -22,6 +22,7 @@ const SHORTCUTS: [string, string][] = [
   ['←→', 'step'],
   ['D', 'overlay'],
   ['M', 'mute'],
+  ['G', 'snap'],
   ['⌘Z', 'undo'],
 ]
 
@@ -67,6 +68,11 @@ export function App() {
       case 'm':
       case 'M':
         state.audio.setMuted(!state.audio.isMuted)
+        break
+      case 'g':
+      case 'G':
+        state.setSnapping(!state.snapping())
+        state.notify('info', `Snapping ${state.snapping() ? 'on' : 'off'}`)
         break
       case 'z':
       case 'Z':

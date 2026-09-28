@@ -125,6 +125,54 @@ thing to want, and it is inexpressible if a clip carries its audio implicitly.
 - A partner too short to split is **left alone**, rather than halved into a 10 ms clip.
 - `Break link` severs both directions. Thereafter they are independent.
 
+**Gaps (`Clip.offset`).** An offset is silence *before* a clip — an **edit**,
+not a position. It is never written as a side effect of a neighbour moving, so
+it cannot drift the way a stored `start` would; `clipStart` stays derived. The
+distinction is the whole safety argument of §3, and a gap does not weaken it.
+
+- A clip may be moved anywhere **right** of its predecessor, and the gap is stored.
+- It may **never overlap** — moving left past a neighbour is a reorder, not an overlap.
+- A reorder lands the clip **flush**; an old offset does not follow it to a new slot, because a gap is placed deliberately and a reorder is a rearrangement.
+- A gap is real timeline: the video holds **black** for it and the audio holds **silence**. Summing only clip durations would report a timeline shorter than the one on screen, and the export would come out short to match.
+
+**Three places that silently ignore offsets** — each was a real bug, and each is now covered:
+
+1. `clipStart` must include the clip's **own** offset. A gap sits *before* a clip, so the term belongs to it; without it `placeClip` sets an offset that does nothing.
+2. `laneDuration` must include offsets, or the timeline under-reports its own length.
+3. `clipAtLane` must use the derived `clipStart` rather than accumulating durations, or a position inside a gap resolves to the previous clip and preview shows a frame where the timeline is empty.
+
+**Snapping — TRIMMING ONLY.** `src/snapping.ts`. Toggle in the timeline
+toolbar or `G`.
+
+**Snapping is a property of cutting, not of moving.** A trim handle is placed
+by eye, so a small magnetic zone around each cut lets you return to a previous
+cut without pixel-hunting. Moving a whole clip must follow the pointer exactly:
+a clip that leaps sideways as it passes a boundary is not magnetic, it is
+broken, and it makes fine positioning impossible.
+
+The separation is structural, not a convention:
+
+- `snapping.ts` exports **exactly one** snapping function, `snapTrimEdge`. `snapClipMove` was **deleted** — the move path must not snap, so the helper has no caller and keeping it would be an invitation to re-wire it.
+- The `Drag` type carries `locked` on the **trim variants only**, so a move is not physically capable of latching onto a target and the compiler rejects one that tries.
+- The move arm references no snapping symbol, builds no target list, and never sets a guide line.
+- The playhead is not a target either: dragging it to check what is at 1:14 should give 1:14, not 1:14 snapped to a boundary.
+
+**Crossing a neighbour is a swap, not a magnet.** A clip may never overlap its
+predecessor, so dragging left far enough *reorders* — the clip passes through
+rather than sticking on the boundary and refusing to go further.
+
+`test/snapping.test.ts` asserts all ten acceptance criteria against the source,
+including "the only exported snapping function is the trim one". Pure, so the
+behaviour is testable without a mouse. Three things do the work:
+
+1. **The threshold is in pixels, not seconds.** A 10-pixel pull is 0.5 s at 20 px/s and 25 ms at 400 px/s. Converting at the current zoom is what makes the magnet feel identical at every zoom level.
+2. **A snap is sticky.** Once latched, a drag keeps that target until the pointer drifts 1.6x the threshold away. Re-deciding every frame makes a clip flicker as the hand jitters, which reads as broken.
+3. **A clip never snaps to itself,** but the timeline *origin* is still a target for every clip.
+
+**The playhead is deliberately not a snap target.** Snapping places clips; the playhead tells time. A playhead that jumps to the nearest edge stops being a measurement — when you drag it to check what is at 1:14 you want 1:14, not 1:14 snapped to a boundary. `collectTargets` still supports it; the timeline opts out, and a test pins that refusal.
+
+A snap shows an amber guide line labelled with what it caught. **A snap you cannot see is a snap you cannot trust.**
+
 **Waveform.** Peaks at 200/sec, computed once per asset during the audio decode
 we already do, cached, and redrawn only on zoom or trim — never per frame.
 Extremes are preserved when downsampling to pixels, so a transient is never

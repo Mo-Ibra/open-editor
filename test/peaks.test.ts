@@ -7,16 +7,19 @@
  * preserved, not about the picture.
  */
 import assert from 'node:assert/strict'
-import { computePeaks, drawPeaks, findSilence, PEAKS_PER_SECOND, type Peak } from '../src/peaks.ts'
+import { computePeaks, drawPeaks, findSilence, PEAKS_PER_SECOND } from '../src/peaks.ts'
 
 const RATE = 48000
 
+// The parameter type is `Pick<AudioBuffer, ...>`, whose Float32Array is
+// ArrayBuffer-backed; a plain Float32Array is not assignable under strict
+// variance. Cast once, here, rather than loosening the source signature.
 const bufferOf = (values: Float32Array[]) => ({
   length: values[0]?.length ?? 0,
   numberOfChannels: values.length,
   sampleRate: RATE,
   getChannelData: (ch: number) => values[ch]!,
-})
+}) as unknown as Pick<AudioBuffer, 'getChannelData' | 'length' | 'numberOfChannels'>
 
 const seconds = (n: number) => Math.round(n * RATE)
 /** Float32Array round-trips are not exact — 0.8 reads back as 0.80000001. */

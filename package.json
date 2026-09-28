@@ -8,7 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --import ./test/register.mjs test/model.test.ts && node --experimental-strip-types --import ./test/register.mjs test/dom.test.ts && node --experimental-strip-types --import ./test/register.mjs test/frame-cache.test.ts && node --experimental-strip-types --import ./test/register.mjs test/exporter.test.ts && node --experimental-strip-types --import ./test/register.mjs test/export-audio.test.ts && node --experimental-strip-types --import ./test/register.mjs test/peaks.test.ts"
+    "test": "node --experimental-strip-types --import ./test/register.mjs test/model.test.ts && node --experimental-strip-types --import ./test/register.mjs test/dom.test.ts && node --experimental-strip-types --import ./test/register.mjs test/frame-cache.test.ts && node --experimental-strip-types --import ./test/register.mjs test/exporter.test.ts && node --experimental-strip-types --import ./test/register.mjs test/export-audio.test.ts && node --experimental-strip-types --import ./test/register.mjs test/peaks.test.ts && node --experimental-strip-types --import ./test/register.mjs test/snapping.test.ts"
   },
   "dependencies": {
     "idb": "^8.0.3",
@@ -17,6 +17,7 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^26.6.3",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
     "vite": "^8.3.1",

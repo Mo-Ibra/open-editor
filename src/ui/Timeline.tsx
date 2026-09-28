@@ -10,25 +10,65 @@
  * pairs edit together by default; breaking the link is one click.
  */
 
-import { createEffect, For, onMount, Show } from 'solid-js'
-import { clipDuration, clipStart, laneOf, type Clip, type Lane } from '../project.js'
+import { createEffect, createSignal, For, onMount, Show } from 'solid-js'
+import { clipAtLane, clipDuration, clipEnd, clipStart, laneOf, type Clip, type Lane } from '../project.js'
 import { drawPeaks, type Peak } from '../peaks.js'
+import {
+  collectTargets,
+  describeTarget,
+  snapTrimEdge,
+  thresholdInSeconds,
+  type SnapTarget,
+} from '../snapping.js'
 import type { AppState } from '../state.js'
 import { log } from '../debug.js'
 
 const HANDLE = 8
 
+/**
+ * `locked` — the latched snap target — exists on the trim variants ONLY.
+ *
+ * That is the whole architectural statement, expressed in the type: moving a
+ * clip is not physically capable of latching onto a target, so the compiler
+ * rejects a move that tries.
+ */
 type Drag =
   | { kind: 'playhead' }
   | { kind: 'move'; lane: Lane; index: number; grabOffset: number }
-  | { kind: 'trim-in'; lane: Lane; index: number }
-  | { kind: 'trim-out'; lane: Lane; index: number }
+  | { kind: 'trim-in'; lane: Lane; index: number; locked: SnapTarget | null }
+  | { kind: 'trim-out'; lane: Lane; index: number; locked: SnapTarget | null }
 
 export function Timeline(props: { state: AppState }) {
   const state = props.state
   let track!: HTMLDivElement
 
   let drag: Drag | null = null
+  const [guide, setGuide] = createSignal<{ time: number; label: string } | null>(null)
+
+/** Pull radius, in pixels. Converted at the current zoom so the magnet feels
+ *  the same at every zoom level. */
+const SNAP_PIXELS = 10
+
+/**
+ * The snap targets for the current timeline.
+ *
+ * Clip edges from both lanes, so a video edge lines up with an audio edge, plus
+ * the timeline origin. Collected fresh each time rather than cached: a drag
+ * mutates the timeline, and a stale target list is how a snap ends up pointing
+ * at a clip that has moved.
+ *
+ * **The playhead is deliberately not a target.** Snapping is for placing clips;
+ * the playhead is for telling time. A playhead that jumps to the nearest edge
+ * stops being a measurement and starts being a guess — when you drag it to
+ * check what is at 1:14, you want 1:14, not 1:14.00 snapped to a boundary.
+ */
+function targets(): SnapTarget[] {
+  return collectTargets(state.project, {
+    playhead: state.playhead(),
+    includePlayhead: false,
+  })
+}
+
 
   const contentWidth = () => Math.max(600, state.timeToX(state.duration()) + 200)
 
@@ -38,19 +78,6 @@ export function Timeline(props: { state: AppState }) {
 
   function laneStart(lane: Lane, index: number): number {
     return clipStart(laneOf(state.project, lane), index)
-  }
-
-  /** Which index in this lane is under x? */
-  function indexAt(lane: Lane, x: number): number {
-    const t = state.xToTime(x)
-    const clips = laneOf(state.project, lane)
-    let start = 0
-    for (let i = 0; i < clips.length; i++) {
-      const end = start + clipDuration(clips[i]!)
-      if (t < end) return i
-      start = end
-    }
-    return Math.max(0, clips.length - 1)
   }
 
   function onPointerDown(event: PointerEvent): void {
@@ -68,7 +95,7 @@ export function Timeline(props: { state: AppState }) {
     if (target.dataset.handle === 'in' || target.dataset.handle === 'out') {
       if (!lane) return
       const index = Number(target.dataset.index)
-      drag = { kind: target.dataset.handle === 'in' ? 'trim-in' : 'trim-out', lane, index }
+      drag = { kind: target.dataset.handle === 'in' ? 'trim-in' : 'trim-out', lane, index, locked: null }
       return
     }
 
@@ -83,50 +110,101 @@ export function Timeline(props: { state: AppState }) {
 
     // Ruler or empty lane: a plain seek, and dragging keeps scrubbing.
     drag = { kind: 'playhead' }
+    setGuide(null)
   }
 
   function onPointerMove(event: PointerEvent): void {
     if (!drag) return
     const x = localX(event)
+    const t = state.xToTime(x)
 
     switch (drag.kind) {
-      case 'playhead':
-        state.seek(state.xToTime(x))
+      case 'playhead': {
+        // No snapping. The playhead goes exactly where the pointer is.
+        state.seek(t)
         return
+      }
 
       case 'move': {
-        const target = indexAt(drag.lane, x - state.timeToX(drag.grabOffset))
-        if (target !== drag.index) {
-          state.reorder(drag.lane, drag.index, target)
-          drag = { ...drag, index: target }
+        const clips = laneOf(state.project, drag.lane)
+        if (!clips[drag.index]) return
+
+        // FREE MOVEMENT. No snapping, no target list, no latch, no guide line.
+        // The clip goes exactly where the pointer says.
+        const start = t - drag.grabOffset
+        const prevEnd = drag.index > 0 ? clipEnd(clips, drag.index - 1) : 0
+
+        if (start < prevEnd - 1e-6) {
+          // Moving left far enough to overlap the previous clip. Crossing a
+          // neighbour is a SWAP, not a magnet: the clip passes through rather
+          // than sticking on the boundary and refusing to go further.
+          const target = indexAtTime(start + clipDuration(clips[drag.index]!) / 2, drag.lane)
+          if (target !== drag.index && target >= 0) {
+            state.reorder(drag.lane, drag.index, target)
+            drag = { ...drag, index: target }
+          }
+        } else {
+          // Fits after its predecessor, so it is positioned freely. `placeClip`
+          // clamps against overlap; that is a collision constraint, not a
+          // magnetic pull, and it never attracts toward a target.
+          state.place(drag.lane, drag.index, start)
         }
+
+        setGuide(null)
         return
       }
 
-      case 'trim-in': {
-        const clips = laneOf(state.project, drag.lane)
-        const clip = clips[drag.index]
-        if (!clip) return
-        const timelineT = state.xToTime(x)
-        const sourceT = clip.in + (timelineT - laneStart(drag.lane, drag.index))
-        state.trim(drag.lane, drag.index, sourceT, clip.out)
-        return
-      }
-
+      case 'trim-in':
       case 'trim-out': {
+        // THE ONLY SNAPPING IN THE APP. The pull radius is a pixel distance, so
+        // it becomes seconds at the current zoom; otherwise the magnet weakens
+        // as you zoom in and feels broken at high zoom.
+        const threshold = state.snapping() ? thresholdInSeconds(SNAP_PIXELS, state.zoom()) : 0
         const clips = laneOf(state.project, drag.lane)
         const clip = clips[drag.index]
         if (!clip) return
-        const timelineT = state.xToTime(x)
-        const sourceT = clip.in + (timelineT - laneStart(drag.lane, drag.index))
-        state.trim(drag.lane, drag.index, clip.in, sourceT)
+
+        // Snap in TIMELINE space, then convert to source.
+        //
+        // These are two different coordinate systems and mixing them is the
+        // whole bug: `clip.in` is a position in the source file, while every
+        // snap target is a position on the timeline. They coincide only for a
+        // fresh clip at time zero. On an already-trimmed clip, or any clip not
+        // at the start, comparing a source time against timeline targets pulls
+        // the handle toward the wrong place — or nowhere at all.
+        //
+        // The edge follows the pointer, so its proposed position IS its
+        // timeline position.
+        const proposed = t
+        const snapped =
+          threshold > 0
+            ? snapTrimEdge(proposed, targets(), threshold, { clipId: clip.id }, drag.locked)
+            : null
+
+        const laneStartTime = laneStart(drag.lane, drag.index)
+        // Either the snapped timeline position or the raw pointer position,
+        // expressed as an offset from the clip's own start, then as source time.
+        const sourceT = clip.in + ((snapped ? snapped.time : proposed) - laneStartTime)
+
+        if (drag.kind === 'trim-in') state.trim(drag.lane, drag.index, sourceT, clip.out)
+        else state.trim(drag.lane, drag.index, clip.in, sourceT)
+
+        drag.locked = snapped?.target ?? null
+        setGuide(snapped ? { time: snapped.time, label: describeTarget(snapped.target) } : null)
         return
       }
     }
   }
 
+  /** Index in this lane whose span contains time `t`. */
+  function indexAtTime(t: number, lane: Lane): number {
+    const loc = clipAtLane(laneOf(state.project, lane), t)
+    return loc ? loc.index : 0
+  }
+
   function onPointerUp(): void {
     drag = null
+    setGuide(null)
   }
 
   /** Tick spacing that stays readable at any zoom. */
@@ -169,6 +247,17 @@ export function Timeline(props: { state: AppState }) {
         </button>
 
         <span class="mx-1 h-5 w-px bg-line" />
+
+        <button
+          class="btn"
+          classList={{ '!border-accent/50 !text-accent': state.snapping() }}
+          disabled={!anyClips()}
+          onClick={() => state.setSnapping(!state.snapping())}
+          title="Magnetic snapping: align clip edges, the playhead, and the timeline start (G)"
+        >
+          <MagnetIcon on={state.snapping()} />
+          snap
+        </button>
 
         <Show when={state.selectedClip()}>
           {(clip) => (
@@ -231,6 +320,21 @@ export function Timeline(props: { state: AppState }) {
             <p class="pointer-events-none absolute inset-x-0 top-16 text-center text-[11.5px] text-muted">
               Click a file in Media to add it here.
             </p>
+          </Show>
+
+          {/* The guide makes the magnet legible. A snap you cannot see is a
+              snap the user cannot trust, so the reason is labelled. */}
+          <Show when={guide()}>
+            {(g) => (
+              <div
+                class="pointer-events-none absolute bottom-0 top-0 z-30 w-px bg-warn"
+                style={{ left: `${state.timeToX(g().time)}px` }}
+              >
+                <span class="absolute -top-px left-1 rounded bg-warn px-1 text-[9px] font-semibold text-black">
+                  {g().label}
+                </span>
+              </div>
+            )}
           </Show>
 
           <div
@@ -394,3 +498,13 @@ function formatTick(t: number): string {
 }
 
 void log
+
+function MagnetIcon(props: { on: boolean }) {
+  return (
+    <svg viewBox="0 0 16 16" class="size-3.5" fill="none" stroke="currentColor" stroke-width="1.4">
+      <path d="M4 3v5a4 4 0 0 0 8 0V3" stroke-linecap="round" />
+      <path d="M2.5 3h3M10.5 3h3" stroke-linecap="round" opacity={props.on ? 1 : 0.35} />
+      <path d="M4 3h3v5M9 3h3" stroke-linecap="round" opacity={props.on ? 1 : 0.35} />
+    </svg>
+  )
+}

@@ -82,7 +82,7 @@ const tone = (seconds: number, value: number) => {
   const segments: MixSegment[] = [{ buffer: tone(2, 1), start: 5 }]
   const mixed = mixTimeline(segments, 10) as unknown as FakeAudioBuffer
   assert.equal(mixed.getChannelData(0)[0], 0, 'before the clip is silent')
-  assert.equal(mixed.getChannelData(0)[Math.round(5.5 * RATE)], 1, 'the clip starts at 5s')
+  assert.equal(mixed.getChannelData(0)![Math.round(5.5 * RATE)], 1, 'the clip starts at 5s')
   assert.equal(mixed.getChannelData(0)[Math.round(4.99 * RATE)], 0, 'just before the clip is still silent')
   assert.equal(mixed.getChannelData(0)[Math.round(9.99 * RATE)], 0, 'after the clip is silent')
 }
@@ -105,7 +105,7 @@ const tone = (seconds: number, value: number) => {
     { buffer: tone(1, 0.4), start: 0 },
   ]
   const mixed = mixTimeline(segments, 1) as unknown as FakeAudioBuffer
-  assert.ok(Math.abs(mixed.getChannelData(0)[0] - 0.8) < 1e-6, 'overlapping segments sum')
+  assert.ok(Math.abs(mixed.getChannelData(0)![0]! - 0.8) < 1e-6, 'overlapping segments sum')
 }
 
 // --- end to end: build a mix and hold it to the §6.1 assertions ----------

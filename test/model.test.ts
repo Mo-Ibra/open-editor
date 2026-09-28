@@ -11,6 +11,8 @@ import {
   breakLink,
   clipAtLane,
   clipDuration,
+  clipEnd,
+  clipOffset,
   clipStart,
   emptyProject,
   findClip,
@@ -19,6 +21,7 @@ import {
   linkedPartner,
   moveClip,
   parseProject,
+  placeClip,
   projectDuration,
   removeClip,
   splitLinked,
@@ -29,6 +32,16 @@ import {
   type Clip,
   type Project,
 } from '../src/project.ts'
+
+function check(name: string, fn: () => void): void {
+  try {
+    fn()
+  } catch (err) {
+    console.error(`  ✗ ${name}`)
+    throw err
+  }
+  console.log(`  ✓ ${name}`)
+}
 
 const asset = (over: Partial<Asset> = {}): Asset => ({
   id: 'a',
@@ -248,3 +261,83 @@ assert.deepEqual(parseProject('{"version":2,"assets":{},"video":[],"audio":[]}')
 assert.equal(emptyProject().version, 2)
 
 console.log('all model assertions passed')
+
+// ---------------------------------------------------------------------------
+// Gaps. `offset` is silence before a clip — an edit, not a position.
+// ---------------------------------------------------------------------------
+
+check('a gap shifts everything to its right, and position stays derived', () => {
+  // A placed clip carries an offset; nothing after it stores anything.
+  const placed = placeClip({ ...withAsset(), video: [clip('a', 0, 5), clip('b', 0, 5)] }, 'video', 1, 8)
+  assert.equal(placed.video[1]!.offset, 3, 'three seconds of silence before it')
+  assert.equal(clipStart(placed.video, 1), 8, 'and it does start at 8')
+  assert.equal(clipStart(placed.video, 0), 0, 'the first clip did not move')
+  assert.equal(placed.video[0]!.offset, undefined, 'nothing to its left gained an offset')
+})
+
+check('a clip may not overlap its predecessor', () => {
+  const p = { ...withAsset(), video: [clip('a', 0, 5), clip('b', 0, 5)] }
+  // b currently starts at 5. Asking for 3 must clamp, not overlap.
+  const squeezed = placeClip(p, 'video', 1, 3)
+  assert.equal(clipStart(squeezed.video, 1), 5, 'clamped to the end of the previous clip')
+  assert.equal(squeezed.video[1]!.offset, 0, 'so no negative offset is stored')
+
+  // The first clip cannot go before zero either.
+  const first = placeClip(p, 'video', 0, -10)
+  assert.equal(clipStart(first.video, 0), 0)
+})
+
+check('moving a clip by reorder lands it flush', () => {
+  // A gap is placed deliberately; a reorder is a rearrangement, so an old
+  // offset must not follow the clip into a new slot.
+  let p = { ...withAsset(), video: [clip('a', 0, 3), clip('b', 0, 3), clip('c', 0, 3)] }
+  p = placeClip(p, 'video', 2, 12) // leave a gap before c
+  assert.equal(clipStart(p.video, 2), 12)
+
+  const moved = moveClip(p, 'video', 2, 0)
+  assert.equal(moved.video[0]!.id, 'c')
+  assert.equal(moved.video[0]!.offset, 0, 'the gap did not travel with it')
+  assert.equal(clipStart(moved.video, 0), 0)
+  assert.equal(clipStart(moved.video, 1), 3, 'and a now follows immediately')
+})
+
+check('a gap between clips is real silence, not a shortened timeline', () => {
+  const p = placeClip({ ...withAsset(), video: [clip('a', 0, 5), clip('b', 0, 5)] }, 'video', 1, 10)
+  assert.equal(projectDuration(p), 15, '5 + 5 gap + 5')
+  assert.equal(clipEnd(p.video, 0), 5)
+  assert.equal(clipEnd(p.video, 1), 15, 'the lane ends after the gap, not at the last clip end')
+  assert.equal(clipOffset(p.video[1]!), 5, 'the offset is exactly the gap: 5s clip, then 5s of silence')
+  // The gap belongs to neither clip: clipAtLane finds nothing in it.
+  assert.equal(clipAtLane(p.video, 7), null, 'a position inside the gap holds no clip')
+  assert.equal(clipAtLane(p.video, 4)?.clip.id, 'a', 'before the gap is still the first clip')
+  assert.equal(clipAtLane(p.video, 11)?.clip.id, 'b', 'after it is the second')
+})
+
+check('removing a clip takes its gap with it', () => {
+  let p = { ...withAsset(), video: [clip('a', 0, 5), clip('b', 0, 5), clip('c', 0, 5)] }
+  p = placeClip(p, 'video', 1, 8)
+  assert.equal(projectDuration(p), 18)
+  const removed = removeClip(p, 'video', 1)
+  assert.equal(removed.video.length, 2)
+  assert.equal(projectDuration(removed), 10, 'the gap went with the clip that owned it')
+  assert.equal(clipStart(removed.video, 1), 5, 'and c is now flush after a')
+})
+
+check('splitting leaves the right half flush with the left', () => {
+  let p = { ...withAsset(), video: [clip('a', 0, 10)] }
+  p = placeClip(p, 'video', 0, 4) // a gap before it, which is legal
+  assert.equal(clipStart(p.video, 0), 4)
+
+  const split = splitLinked(p, 'video', 0, 4 + 3)
+  assert.equal(split.video.length, 2)
+  assert.equal(split.video[0]!.out, 3, 'left half, trimmed to 3s of source')
+  assert.equal(clipStart(split.video, 1), 7, 'right half starts where the left ends')
+  assert.equal(split.video[1]!.offset, 0, 'and carries no offset of its own')
+})
+
+check('a negative offset is normalised away on the way in', () => {
+  // Defensive: the type allows it, but nothing should ever produce one.
+  const p: Project = { ...withAsset(), video: [clip('a', 0, 5), { ...clip('b', 0, 5), offset: -3 }] }
+  assert.equal(clipOffset(p.video[1]!), 0, 'a negative offset reads as zero')
+  assert.equal(clipStart(p.video, 1), 5, 'so the clip stays flush rather than overlapping its neighbour')
+})

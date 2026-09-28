@@ -253,31 +253,59 @@ export class Exporter {
     try {
       await out.start()
 
+      // Walk the whole timeline, not just the clips. A gap between clips is
+      // still timeline: the video must hold black for its duration, or the
+      // export comes out shorter than the timeline and every frame after the
+      // gap is wrong.
+      let emittedUpTo = 0
+      let cursor = 0
+
+      const emitBlankUntil = async (until: number) => {
+        while (cursor < until && cursor < totalFrames) {
+          renderBlank(ctx, renderOptions)
+          await canvasSource.add((cursor * totalFrames) / totalFrames, frameDuration)
+          cursor++
+          done++
+        }
+        emittedUpTo = until
+      }
+
       for (let index = 0; index < project.video.length; index++) {
         this.#checkCancelled()
 
         const clip = project.video[index]!
-        const times = frameTimesForClip(project.video, index, totalFrames - done, settings.fps)
-        if (!times.length) continue
+        const start = clipStart(project.video, index)
+        const end = start + clipDuration(clip)
+
+        // Silence before this clip.
+        await emitBlankUntil(Math.min(totalFrames, Math.round((start * settings.fps))))
+
+        const remaining = Math.min(totalFrames - cursor, Math.round((end - start) * settings.fps))
+        if (remaining <= 0) continue
+
+        const times: number[] = []
+        for (let i = 0; i < remaining; i++) {
+          times.push(Number(((cursor + i) * totalFrames) / totalFrames))
+        }
 
         const entry = this.#library.get(clip.assetId)
+        void emittedUpTo
 
         if (!entry?.videoSink) {
           // An audio-only clip still occupies its span, so the output needs
-          // that many black frames. Skipping them would shorten the video and
-          // desync everything after it.
+          // that many black frames.
           for (const t of times) {
             this.#checkCancelled()
             renderBlank(ctx, renderOptions)
             await canvasSource.add(t, frameDuration)
+            cursor++
             done++
           }
         } else {
-          // One sequential pass per clip: every packet decoded at most once.
-          let cursor = 0
+          let at = 0
           for await (const wrapped of entry.videoSink.canvasesAtTimestamps(times)) {
             this.#checkCancelled()
-            const t = times[cursor++] ?? 0
+            const t = times[at++] ?? 0
 
             if (wrapped) {
               renderFrame(
@@ -290,9 +318,8 @@ export class Exporter {
               renderBlank(ctx, renderOptions)
             }
 
-            await canvasSource.add(t, frameDuration, {
-              keyFrame: done % (settings.fps * 2) === 0,
-            })
+            await canvasSource.add(t, frameDuration, { keyFrame: done % (settings.fps * 2) === 0 })
+            cursor++
             done++
 
             const nowMs = performance.now()
@@ -301,10 +328,18 @@ export class Exporter {
               this.#tick(done, totalFrames, t0)
             }
           }
+          // A short clip may yield fewer frames than it owns; fill the rest.
+          while (cursor < Math.min(totalFrames, Math.round(end * settings.fps))) {
+            renderBlank(ctx, renderOptions)
+            await canvasSource.add((cursor * totalFrames) / totalFrames, frameDuration)
+            cursor++
+            done++
+          }
         }
-
-        this.#tick(done, totalFrames, t0)
       }
+
+      // Trailing silence.
+      await emitBlankUntil(totalFrames)
 
       // Audio is fed after the video loop. AudioBufferSource appends each
       // buffer directly after the previous one, so order is the only thing that

@@ -27,6 +27,7 @@ import {
   linkedPartner,
   moveClip,
   newId,
+  placeClip,
   projectDuration,
   removeClip,
   setClipGain as applyGain,
@@ -58,6 +59,8 @@ export function createAppState() {
   const [zoom, setZoomLevel] = createSignal(80) // pixels per second
   const [notices, setNotices] = createSignal<Notice[]>([])
   const [loading, setLoading] = createSignal(false)
+  /** Magnetic snapping. Off means every position is exactly where you put it. */
+  const [snapping, setSnapping] = createSignal(true)
   /** Peaks per asset, computed once and reused. The waveform redraws on every
    *  playhead move, so recomputing would make scrubbing unusable. */
   const [peaksBy, setPeaksBy] = createStore<Record<string, Peak[]>>({})
@@ -246,6 +249,14 @@ export function createAppState() {
     setProject(replace(moveClip(unwrap(project), lane, from, to)))
   }
 
+  /**
+   * Move a clip so it starts at `start`, leaving a gap if it moves right.
+   * Clamped so a clip can never overlap the one before it.
+   */
+  function place(lane: Lane, index: number, start: number): void {
+    setProject(replace(placeClip(unwrap(project), lane, index, start)))
+  }
+
   function trim(lane: Lane, index: number, inPoint: number, outPoint: number): void {
     setProject(replace(applyTrim(unwrap(project), lane, index, inPoint, outPoint)))
   }
@@ -377,6 +388,7 @@ export function createAppState() {
     zoom,
     notices,
     loading,
+    snapping,
     peaksBy,
     canUndo,
     canRedo,
@@ -384,6 +396,7 @@ export function createAppState() {
     setPlaying,
     setSelected,
     setZoom: setZoomLevel,
+    setSnapping,
     // non-reactive
     library,
     frameCache,
@@ -400,6 +413,7 @@ export function createAppState() {
     splitAt,
     deleteSelected,
     reorder,
+    place,
     trim,
     setTransform,
     setClipGain,

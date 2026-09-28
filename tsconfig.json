@@ -4,7 +4,7 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "types": ["vite/client"],
+    "types": ["vite/client", "node"],
 
     "jsx": "preserve",
     "jsxImportSource": "solid-js",
@@ -16,10 +16,11 @@
     "noUnusedParameters": true,
     "exactOptionalPropertyTypes": false,
 
+    "allowImportingTsExtensions": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src"]
+  "include": ["src", "test"]
 }

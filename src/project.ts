@@ -76,6 +76,21 @@ export interface Clip {
    * keeping the sound is a normal thing to want.
    */
   linkId?: LinkId
+  /**
+   * Silence before this clip, in seconds. Absent or 0 means "flush against the
+   * previous clip", which is the default and what every edit produces.
+   *
+   * This is the one piece of position the model stores, and the distinction
+   * matters. `offset` is an *edit* — a gap someone deliberately left — not a
+   * position. It is never written as a consequence of a neighbouring clip
+   * moving, so it cannot drift out of sync the way a stored `start` would.
+   * Everything to the right shifts automatically, because position stays
+   * derived (`clipStart`).
+   *
+   * Never negative. A clip may not overlap its predecessor; to move left past
+   * one, reorder instead.
+   */
+  offset?: number
 }
 
 export type CaptionPosition = 'top' | 'center' | 'bottom'
@@ -111,16 +126,41 @@ export function clipDuration(clip: Clip): number {
   return Math.max(0, clip.out - clip.in)
 }
 
-/** Timeline offset of index `i` within one lane, in seconds. */
-export function clipStart(clips: Clip[], index: number): number {
-  let t = 0
-  for (let i = 0; i < index; i++) t += clipDuration(clips[i]!)
-  return t
+/** Silence before a clip. Absent means flush. */
+export function clipOffset(clip: Clip): number {
+  return clip.offset && clip.offset > 0 ? clip.offset : 0
 }
 
+/**
+ * Timeline offset of index `i` within one lane, in seconds.
+ *
+ * The clip's OWN offset is included, because a gap sits *before* the clip, not
+ * after it: the space to the left of clip 5 belongs to clip 5's timeline
+ * position. Forgetting that term makes `placeClip` set an offset that has no
+ * effect on where the clip lands.
+ */
+export function clipStart(clips: Clip[], index: number): number {
+  let t = 0
+  for (let i = 0; i < index; i++) t += clipOffset(clips[i]!) + clipDuration(clips[i]!)
+  const self = clips[index]
+  return self ? t + clipOffset(self) : t
+}
+
+export function clipEnd(clips: Clip[], index: number): number {
+  return clipStart(clips, index) + clipDuration(clips[index]!)
+}
+
+/**
+ * Total span of a lane, gaps included.
+ *
+ * A gap is part of the timeline: the video holds black for it and the audio
+ * holds silence. Summing only clip durations would report a timeline that is
+ * shorter than the one the user is looking at, and the export would come out
+ * short to match.
+ */
 export function laneDuration(clips: Clip[]): number {
   let t = 0
-  for (const clip of clips) t += clipDuration(clip)
+  for (const clip of clips) t += clipOffset(clip) + clipDuration(clip)
   return t
 }
 
@@ -145,14 +185,19 @@ export interface ClipLocation {
   start: number
 }
 
-/** Which clip is under timeline time `t` in this lane? Null means a gap. */
+/**
+ * Which clip is under timeline time `t` in this lane? Null means a gap.
+ *
+ * Uses the derived `clipStart` rather than accumulating durations, so a
+ * position inside a gap correctly returns null. Accumulating here would claim
+ * the previous clip covers the silence, and preview would show a frame where
+ * the timeline is empty.
+ */
 export function clipAtLane(clips: Clip[], t: number): ClipLocation | null {
-  let start = 0
   for (let i = 0; i < clips.length; i++) {
     const clip = clips[i]!
-    const d = clipDuration(clip)
-    if (t < start + d) return { clip, index: i, start }
-    start += d
+    const start = clipStart(clips, i)
+    if (t >= start && t < start + clipDuration(clip)) return { clip, index: i, start }
   }
   return null
 }
@@ -274,12 +319,40 @@ export function removeClip(project: Project, lane: Lane, index: number): Project
   return { ...project, [lane]: clips } as Project
 }
 
+/**
+ * Reorder. The moved clip lands flush against whatever is now before it.
+ *
+ * A gap is something you place deliberately; a reorder is a rearrangement, and
+ * carrying an old offset into a new slot would leave an arbitrary hole. To
+ * leave a gap, drag the clip — that is `placeClip`.
+ */
 export function moveClip(project: Project, lane: Lane, from: number, to: number): Project {
   const clips = laneOf(project, lane)
   if (from === to || from < 0 || to < 0 || from >= clips.length || to >= clips.length) return project
   const next = clips.slice()
   const [clip] = next.splice(from, 1)
-  next.splice(to, 0, clip!)
+  next.splice(to, 0, { ...clip!, offset: 0 })
+  return { ...project, [lane]: next } as Project
+}
+
+/**
+ * Move a clip so it *starts* at `start`, leaving a gap if it moves right.
+ *
+ * Only the moved clip's own offset changes, so nothing to its left shifts and
+ * nothing to its right needs updating — position stays derived. Moving left is
+ * clamped: a clip may not overlap its predecessor, and a negative offset would
+ * push the whole lane before zero.
+ */
+export function placeClip(project: Project, lane: Lane, index: number, start: number): Project {
+  const clips = laneOf(project, lane)
+  const clip = clips[index]
+  if (!clip) return project
+
+  const floor = index === 0 ? 0 : clipEnd(clips, index - 1)
+  const target = Math.max(floor, start)
+
+  const next = clips.slice()
+  next[index] = { ...clip, offset: target - clipStart(clips, index) }
   return { ...project, [lane]: next } as Project
 }
 
@@ -315,7 +388,9 @@ export function splitLinked(project: Project, lane: Lane, index: number, timelin
   if (local < MIN_CLIP || local > clipDuration(clip) - MIN_CLIP) return project
 
   const left: Clip = { ...clip, out: clip.in + local }
-  const right: Clip = { ...clip, id: newId('clp'), in: clip.in + local }
+  // The right half starts where the left ends, so it carries no offset — its
+  // position comes from being next in the array.
+  const right: Clip = { ...clip, id: newId('clp'), in: clip.in + local, offset: 0 }
 
   let next = { ...project, [lane]: [...clips.slice(0, index), left, right, ...clips.slice(index + 1)] } as Project
 
@@ -331,7 +406,7 @@ export function splitLinked(project: Project, lane: Lane, index: number, timelin
       // video but produces a 10 ms audio clip is not a split anyone wanted.
       if (partnerLocal >= MIN_CLIP && partnerLocal <= clipDuration(p) - MIN_CLIP) {
         const pLeft: Clip = { ...p, out: p.in + partnerLocal }
-        const pRight: Clip = { ...p, id: newId('clp'), in: p.in + partnerLocal }
+        const pRight: Clip = { ...p, id: newId('clp'), in: p.in + partnerLocal, offset: 0 }
         const other = [...otherClips.slice(0, partnerIndex), pLeft, pRight, ...otherClips.slice(partnerIndex + 1)]
         next = { ...next, [otherLane]: other } as Project
       }
