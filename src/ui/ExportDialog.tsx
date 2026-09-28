@@ -14,10 +14,11 @@
  *    opus-in-mp4 (§6.8), and the only reason we caught it was this check.
  */
 
-import { createSignal, onCleanup, Show } from 'solid-js'
+import { createEffect, createSignal, For, onCleanup, Show } from 'solid-js'
 import { Exporter, ExportCancelled, settingsFor, type ExportResult } from '../exporter.js'
 import { buildExportAudio, verifyAudioTrack, type ExportAudioTrack } from '../export-audio.js'
 import { projectDuration } from '../project.js'
+import { availablePlans, bitrateFor, even, type PlanCandidate } from '../codecs.js'
 import { log } from '../debug.js'
 import type { AppState } from '../state.js'
 
@@ -38,6 +39,55 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
   const [meta, setMeta] = createSignal('')
   const [error, setError] = createSignal<string | null>(null)
   const [url, setUrl] = createSignal<string>('')
+  /**
+   * What this browser can actually produce, and why the rest is out.
+   *
+   * The list is measured rather than hardcoded, so the dialog never offers a
+   * format the exporter will then refuse. `formatId` is null until the probe
+   * lands, and the export button stays disabled until then — picking from a
+   * list that is about to change underneath is worse than waiting a moment.
+   */
+  const [plans, setPlans] = createSignal<PlanCandidate[]>([])
+  const [rejections, setRejections] = createSignal<string[]>([])
+  const [probed, setProbed] = createSignal(false)
+  const [formatId, setFormatId] = createSignal<string | null>(null)
+
+  const widthFor = (): number => {
+    const base = settingsFor(sourceSize())
+    return preset() === 'source' ? base.width : (preset() as number)
+  }
+
+  // Re-probe whenever the resolution changes: encoder support is per-config, so
+  // what is available at 1080p is not guaranteed at 4K.
+  createEffect(() => {
+    const width = widthFor()
+    const height = Math.round((width * 9) / 16)
+    const size = sourceSize()
+    const fps = size?.frameRate && size.frameRate > 0 ? size.frameRate : 30
+    let cancelled = false
+
+    setProbed(false)
+    void availablePlans({
+      needsAudio: state.project.audio.length > 0,
+      width,
+      height: even(height),
+      fps,
+      bitrate: bitrateFor(width, height, fps),
+    }).then(({ plans: found, notes }) => {
+      if (cancelled) return
+      setPlans(found)
+      setRejections(notes)
+      // Keep the user's choice if it survived the probe; otherwise take the best.
+      setFormatId((current) => (current && found.some((p) => p.id === current) ? current : (found[0]?.id ?? null)))
+      setProbed(true)
+    })
+
+    return () => {
+      cancelled = true
+    }
+  })
+
+  const chosenPlan = (): PlanCandidate | null => plans().find((p) => p.id === formatId()) ?? null
 
   let exporter: Exporter | null = null
   let video!: HTMLVideoElement
@@ -104,7 +154,12 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
       }
       setAudioTrack(track)
 
-      const output = await exporter.run(state.project, settings, track ? { buffer: track.buffer } : null)
+      const output = await exporter.run(
+        state.project,
+        settings,
+        track ? { buffer: track.buffer } : null,
+        formatId() ?? undefined,
+      )
       setResult(output)
 
       lastUrl = URL.createObjectURL(output.blob)
@@ -169,9 +224,88 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
 
               <span class="flex-1" />
 
-              <button class="btn btn-primary !px-4 !py-1.5" onClick={() => void start()}>
+              <button
+                class="btn btn-primary !px-4 !py-1.5"
+                onClick={() => void start()}
+                disabled={!probed() || !formatId()}
+              >
                 Start export
               </button>
+            </div>
+
+            {/* Format.
+                Shown because the browser's choice is not the user's, and the
+                two are not the same thing: on Linux there is no AAC encoder, so
+                an unattended export lands on WebM — correct, but not what
+                Instagram will take. Every row is a combination this browser
+                has confirmed it can encode, so nothing here can fail on click. */}
+            <div class="mt-4 flex flex-col gap-1.5">
+              <span class="panel-label">Format</span>
+              <Show
+                when={plans().length > 0}
+                fallback={<p class="text-[11px] text-warn">Checking what this browser can encode…</p>}
+              >
+                <div class="flex flex-col gap-1">
+                  <For each={plans()}>
+                    {(plan) => (
+                      <label
+                        class="flex cursor-pointer items-start gap-2.5 rounded-md border px-2.5 py-1.5 transition-colors"
+                        classList={{
+                          'border-accent/50 bg-accent/10': formatId() === plan.id,
+                          'border-line hover:bg-raised': formatId() !== plan.id,
+                        }}
+                      >
+                        <input
+                          type="radio"
+                          name="export-format"
+                          class="mt-0.5 accent-[#5b8cff]"
+                          checked={formatId() === plan.id}
+                          onChange={() => setFormatId(plan.id)}
+                        />
+                        <span class="flex min-w-0 flex-col">
+                          <span class="flex items-center gap-2 text-[12px]">
+                            {plan.label}
+                            <Show when={plan.compatibility === 'partial'}>
+                              <span class="rounded bg-[#3a3320] px-1 text-[9px] font-semibold uppercase text-warn">
+                                not all platforms
+                              </span>
+                            </Show>
+                            <Show when={plan.compatibility === 'silent'}>
+                              <span class="rounded bg-[#2f2a3a] px-1 text-[9px] font-semibold uppercase text-muted">
+                                no sound
+                              </span>
+                            </Show>
+                          </span>
+                          <span class="truncate text-[10.5px] text-muted">{plan.blurb}</span>
+                        </span>
+                      </label>
+                    )}
+                  </For>
+                </div>
+              </Show>
+
+              {/* Say why the other options are gone. A format list that silently
+                  omits MP4 reads as "this app cannot do MP4", which is a
+                  different and much more annoying claim. */}
+              <Show when={rejections().length > 0}>
+                <details class="mt-1 text-[10.5px] text-muted">
+                  <summary class="cursor-pointer select-none hover:text-fg">
+                    Why not the other formats?
+                  </summary>
+                  <ul class="mt-1 flex flex-col gap-0.5 pl-4">
+                    <For each={rejections()}>{(note) => <li>· {note}</li>}</For>
+                  </ul>
+                </details>
+              </Show>
+
+              <Show when={chosenPlan()}>
+                {(plan) => (
+                  <p class="mt-1 text-[10.5px] text-muted">
+                    Will be saved as <span class="timecode text-fg">export.{plan().extension}</span>
+                    {plan().audio ? '' : ' (no audio track)'}
+                  </p>
+                )}
+              </Show>
             </div>
 
             <p class="mt-4 text-[11.5px] leading-relaxed text-muted">
@@ -261,8 +395,8 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
 
                   <dl class="space-y-1.5 text-[11.5px]">
                     <Row label="format">
-                      {output().plan.extension}/{output().plan.video}
-                      {output().hasAudio ? ` + ${output().audioCodec}` : ' · no audio'}
+                      {output().plan.label}
+                      {output().plan.id !== formatId() ? ' · not your choice' : ''}
                     </Row>
                     <Row label="size">{(output().size / 1e6).toFixed(2)} MB</Row>
                     <Row label="frames">{output().frames}</Row>

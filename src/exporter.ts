@@ -195,7 +195,18 @@ export class Exporter {
     this.#cancelled = true
   }
 
-  async run(project: Project, settings: ExportSettings, audio: ExportAudio | null): Promise<ExportResult> {
+  /**
+   * `formatId` is the user's pick from the dialog's format list. It is a hint,
+   * not a command: if that combination is not encodable here, the best
+   * available one is used, because a request the browser cannot satisfy should
+   * degrade rather than fail.
+   */
+  async run(
+    project: Project,
+    settings: ExportSettings,
+    audio: ExportAudio | null,
+    formatId?: string,
+  ): Promise<ExportResult> {
     this.#cancelled = false
     const t0 = performance.now()
 
@@ -209,18 +220,21 @@ export class Exporter {
 
     this.#onProgress({ stage: 'preparing', progress: 0, framesDone: 0, framesTotal: 0, fps: 0, eta: 0 })
 
-    const plan = await negotiate({
-      needsAudio: audio !== null,
-      width: settings.width,
-      height: settings.height,
-      fps: settings.fps,
-      bitrate: settings.bitrate,
-    })
+    const plan = await negotiate(
+      {
+        needsAudio: audio !== null,
+        width: settings.width,
+        height: settings.height,
+        fps: settings.fps,
+        bitrate: settings.bitrate,
+      },
+      formatId,
+    )
     if (!plan) {
       throw new Error('This browser cannot encode H.264 or VP9, so there is nothing to export with.')
     }
 
-    const label = `${plan.extension}/${plan.video}${plan.audio ? ` + ${plan.audio}` : ' (silent)'}`
+    const label = `${plan.label} [requested: ${formatId ?? 'default'}]`
     log.info(`export: ${label} ${settings.width}x${settings.height} @ ${settings.fps}`)
     for (const note of plan.notes) log.info(`  skipped ${note}`)
     if (plan.degraded) log.warn(`export fell back to ${label} — see §6.8`)
