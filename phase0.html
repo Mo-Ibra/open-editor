@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Phase 0 — encode loop proof</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; padding: 24px; min-height: 100vh;
+        font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+        background: #0b0b0d; color: #e6e6e6;
+      }
+      h1 { font-size: 16px; margin: 0 0 4px; letter-spacing: .02em; }
+      .sub { color: #8a8a94; margin: 0 0 24px; }
+      #drop {
+        border: 1px dashed #3a3a44; border-radius: 8px; padding: 40px;
+        text-align: center; color: #8a8a94; cursor: pointer; margin-bottom: 20px;
+        transition: border-color .15s, background .15s;
+      }
+      #drop.hot { border-color: #5b8cff; background: #12141c; color: #e6e6e6; }
+      canvas { background: #000; border-radius: 6px; max-width: 480px; width: 100%; display: block; }
+      pre { background: #12141c; border: 1px solid #22242c; border-radius: 6px; padding: 12px; overflow-x: auto; white-space: pre-wrap; margin: 8px 0 0; }
+      .row { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; margin-bottom: 20px; }
+      .col { flex: 1 1 320px; min-width: 0; }
+      button {
+        background: #5b8cff; color: #fff; border: 0; border-radius: 6px;
+        padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer; margin-right: 8px;
+      }
+      button:disabled { background: #2a2c36; color: #666; cursor: not-allowed; }
+      label { color: #8a8a94; margin-right: 10px; }
+      select { background: #12141c; color: #e6e6e6; border: 1px solid #2a2c36; border-radius: 4px; font: inherit; padding: 3px 6px; }
+      a.btn { display: inline-block; background: #2ea043; color: #fff; text-decoration: none; border-radius: 6px; padding: 8px 14px; font-weight: 600; }
+      .ok { color: #3fb950; } .bad { color: #f85149; } .warn { color: #d29922; }
+    </style>
+  </head>
+  <body>
+    <h1>Phase 0 — can the browser encode a playable mp4?</h1>
+    <p class="sub">
+      Drop a file. It gets probed, decoded, re-encoded, muxed, and downloaded.
+      The point is the loop closing, not the output looking good.
+    </p>
+
+    <div id="drop">Drop a video file here, or click to choose<br /><small>mp4 / mov / webm / mkv — H.264 or VP9</small></div>
+
+    <div class="row">
+      <div class="col">
+        <canvas id="preview" width="640" height="360"></canvas>
+      </div>
+      <div class="col">
+        <div style="margin-bottom:10px">
+          <label>out <select id="res"></select></label>
+          <label>fps <select id="fps"></select></label>
+        </div>
+        <div>
+          <button id="run" disabled>Run encode (10s)</button>
+          <a id="dl" class="btn" hidden download="phase0.mp4">Download</a>
+        </div>
+        <pre id="log">waiting for a file…</pre>
+        <div id="playwrap" hidden style="margin-top:12px">
+          <video id="play" controls style="width:100%;max-width:480px;border-radius:6px;background:#000"></video>
+          <pre id="playinfo" style="margin-top:8px">not played yet</pre>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/phase0.ts"></script>
+  </body>
+</html>

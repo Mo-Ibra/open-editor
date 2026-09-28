@@ -128,7 +128,7 @@ src/
   decode.ts      WebCodecs VideoDecoder + keyframe-accurate seek
   render.ts      ONE function: (state) → pixels on a Canvas2D context
   text.ts        Canvas2D text layout + caption rendering
-  audio.ts       decode → trim → mix into one Float32Array
+  audio.ts       conform (48k/stereo) → trim → mix into one Float32Array
   export.ts      the frame loop, the audio loop, the encode queue, the mux
   preview.ts     playhead → clip → source time → frame → render.ts
   ui/            SolidJS components
@@ -162,7 +162,9 @@ Every export re-encodes. Stream copying (remuxing without re-encoding) is deferr
 
 **Why.** Concatenating clips from two different files with different codecs or resolutions *must* re-encode. Stream copy only survives the narrow case of one source file, cuts only, no zoom, no text. That is not a headline feature.
 
-**Revisit if the FPS measurement in Phase 0 is bad.** If 1080p re-encodes at 30+ FPS in a worker, this decision is settled for good and stream-copy is never needed. If it's under 5 FPS, build the fast path immediately — it would need keyframe snapping in the timeline, which is a visible UX cost.
+**Revisit if the FPS measurement in Phase 0 is bad.** ~~If 1080p re-encodes at 30+ FPS...~~
+
+**Settled by measurement (2026-09-28):** 7.27× realtime at 720p on the Phase 0 benchmark. Even discounting heavily for that being the easy case (§R2), re-encoding is comfortably faster than realtime, so the fast path is not needed and **stream-copy is not going to be built.** The timeline stays frame-accurate and the user never sees a cut snap to a keyframe — which is worth more than the speed would have been.
 
 ### ADR-4: Deterministic audio mixing, not Web Audio graphs
 
@@ -170,7 +172,13 @@ Every export re-encodes. Stream copying (remuxing without re-encoding) is deferr
 
 **Why.** A graph is stateful, hard to reason about, and its output depends on graph construction order. Float32 arithmetic is exact, order-independent, and testable with a three-line assertion. For a cutter that only needs trim-and-concatenate, a graph is enormous overkill.
 
-### ADR-5: Backpressure via the `dequeue` event, never a spin loop
+### ADR-5: Backpressure — *handled by mediabunny, keep the rule anyway*
+
+> **Correction (2026-09-28).** This ADR was written assuming we would drive a
+> raw `VideoEncoder`. mediabunny's `CanvasSource.add()` / `AudioBufferSource.add()`
+> return a promise that resolves when the source can accept more, so the
+> library owns the queue and its backpressure. The rule below is now a
+> constraint on how we *call* it, not something we implement.
 
 The export loop must not enqueue frames faster than the encoder drains them. A 3-minute 1080p export is 5,400 frames; unconstrained, that is 5,400 live `VideoFrame` objects holding GPU memory.
 
@@ -232,6 +240,8 @@ A correct export aligns two independent streams: video cut at **frame** boundari
   const lengthSample = Math.round((clip.out - clip.in) * SAMPLE_RATE)
   ```
   Never accumulate. One rounding, at the boundary.
+- **Sample rate and channel count must be conformed.** AAC via WebCodecs only accepts 44.1 and 48 kHz. Camera and screen-capture files are frequently 96 kHz, and feeding the source rate straight to the encoder throws `This specific encoder configuration is not supported in this environment` and kills the export. Resample to 48 kHz and downmix anything above stereo. See `src/audio.ts`.
+- **Chunk pacing is not the video clock's problem.** The audio encoder places each buffer directly after the previous one. Pacing chunks by hand against the frame loop accumulates a rate mismatch and the audio runs short. Assemble the decoded range first, then hand the encoder one correctly-sized chunk per interval.
 - **AAC encoder delay.** The encoder emits ~1024 samples of priming. The muxer must record it, or playback starts with a click or a truncated first second.
 - **Duration mismatch at the tail.** Video ends at `ceil(duration × fps)` frames; audio at `ceil(duration × sampleRate)` samples. They will not agree. Pad the shorter one.
 
@@ -245,7 +255,15 @@ A correct export aligns two independent streams: video cut at **frame** boundari
 
 If those five pass, sync is right. If any fails, no other work matters.
 
-### 6.2 Frame-accurate seeking
+### 6.2 Frame-accurate seeking — *solved by mediabunny, not by us*
+
+> **Correction (2026-09-28).** This section originally specified hand-rolling
+> a keyframe index and a decode-forward loop. mediabunny 1.60 does both inside
+> `CanvasSink.getCanvas(t)`, including flushing and reconfiguring the decoder
+> between seeks. The only thing we own is a frame ring buffer for scrubbing.
+> The reference implementation below is kept because it explains *why* the
+> library call is trustworthy, and because the A/V drift risks in §6.1 are the
+> same class of problem.
 
 Files are stored in groups of pictures. To get the frame at time *T*:
 
@@ -310,12 +328,8 @@ for (let i = 0; i < totalFrames; i++) {
     ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H)
   }
 
-  const vf = new VideoFrame(canvas, {
-    timestamp: Math.round(i * 1_000_000 / outFps),
-    duration:  Math.round(1_000_000 / outFps),
-  })
-  encoder.encode(vf, { keyFrame: i % (outFps * 2) === 0 })   // GOP of 2s
-  vf.close()                                                  // mandatory, or you leak GPU memory
+  // mediabunny takes SECONDS, not microseconds, and captures the canvas itself:
+  await canvasSource.add(i / outFps, 1 / outFps, { keyFrame: i % (outFps * 2) === 0 })
 
   if (encoder.encodeQueueSize > 16) await waitForDequeue(encoder)
   if (i % 10 === 0) onProgress(i / totalFrames)
@@ -332,19 +346,73 @@ Audio runs in parallel: build the full mix, chunk into 1024-sample `AudioData`, 
 ### 6.7 Export output
 
 ```ts
-new VideoEncoder({ output, error }, {
-  codec: 'avc1.42001f',       // baseline — maximum device support
-  width, height,
+const source = new CanvasSource(canvas, {
+  codec: 'avc',               // mediabunny resolves the full codec string for us
   bitrate: 8_000_000,         // ~5 Mbps for 1080p30, tune later
-  framerate: outFps,
-  avc: { format: 'avc' },     // needed for MP4, not Annex-B
+  keyFrameInterval: outFps * 2,   // a keyframe every 2 s
 })
 ```
 
-- `avc: { format: 'avc' }` is mandatory for MP4 output. The default Annex-B will not mux.
-- `avc1.42001f` (Baseline 3.1) encodes everywhere. Try High (`avc1.4d0028`) as a preference with a fallback — better compression, near-universal support.
-- **Feature-detect, do not assume.** `await VideoEncoder.isConfigSupported(cfg)`. Safari and older Chromium lack some codecs; fall back to VP9/WebM or tell the user honestly.
-- AAC at 128 kbps, 48 kHz. Not 44.1 kHz — it avoids a resample.
+- mediabunny takes friendly codec names (`'avc' | 'hevc' | 'vp9' | 'av1' | 'vp8' | 'prores'`) and builds the `avc1.*` string, MP4 `avcC` box, and annex-B handling itself.
+- Codec capability lives on the *format*, not the `Output`, and is **synchronous**: `format.getSupportedVideoCodecs()` / `format.getSupportedAudioCodecs()`.
+- Audio: `new AudioBufferSource({ codec: 'aac', bitrate: 128_000 })` — but see the sample-rate trap in §6.1 before you feed it anything.
+
+### 6.9 Output resolution and frame rate — **default to the source, always**
+
+> **Finding (2026-09-28).** The Phase 0 harness hardcoded 1280×720 and silently
+> downscaled a 1920×1080 source. The user's reaction — *"I don't want it to lose
+> any frames or drop the quality like that"* — is the correct reaction, and it
+> should never be possible to trigger.
+
+A cutter's input is the user's own footage. The overwhelmingly correct output
+is the same footage, trimmed. **Any deviation must be something the user chose**,
+never a default the product made on their behalf. A tool that quietly re-encodes
+someone's wedding video at half resolution is worse than a tool that fails.
+
+**Defaults:**
+- **Resolution = source resolution.** Presets ("1080p", "720p", …) are available and are scaled to preserve the source aspect ratio, so choosing 720p for a 21:9 clip letterboxes rather than crops.
+- **Dimensions are rounded to even integers** — odd widths fail `isConfigSupported` on most encoders.
+- **Frame rate = source frame rate** for CFR. For VFR, the average rate is meaningless (3.75 fps for a screen recording) and emitting at it produces a slideshow, so target 30 and hold frames.
+- **Bitrate derived from resolution × fps**, not a fixed constant. A fixed bitrate is simultaneously wasteful at 4K and visibly blocky at 480p.
+
+**Proving no frames were dropped.** Frame accounting is a first-class output, not a debug log. Track the gap between every pair of consecutive *distinct* source frames; the median is the source frame interval and the worst gap is the number to watch. A worst case far above the median means a frame was skipped, and that is a bug worth failing loudly over. Duplicated output frames (a held frame, because the source is slow) are not dropped frames and must not be reported as such — the distinction is source-side, and conflating them makes the check useless.
+
+**Always play the tool's own output before offering the download.** "It downloaded but won't play" is the worst class of bug, because it looks like success until someone tries to watch the result.
+
+### 6.8 Codec negotiation — *not optional, and it bit us in Phase 0*
+
+> **Finding (2026-09-28).** The Phase 0 export failed twice on a valid-looking AAC config. The second failure was not a parameter problem at all.
+
+**AAC encoding is not universally available.** Chrome and Edge only encode AAC on **macOS, iOS and Windows**, via the platform encoder. On **Linux** there is no AAC encoder, so `AudioEncoder.isConfigSupported({ codec: 'mp4a.40.2', sampleRate: 48000, numberOfChannels: 2, bitrate: 128000 })` returns `supported: false` and the encoder throws:
+
+```
+This specific encoder configuration (mp4a.40.2, 128000 bps, 2 channels, 48000 Hz)
+is not supported in this environment.
+```
+
+Every parameter is valid. The encoder simply does not exist. Firefox has the same gap. A tool that hardcodes AAC works on the developer's Mac and fails for everyone on Linux — which is most of the people who would install it.
+
+**Therefore: never hardcode a codec.** Negotiate at export time, taking the first combination that survives all three filters:
+
+1. The container can hold it — `format.getSupportedCodecs()`
+2. The browser can encode it — `VideoEncoder.isConfigSupported` / `AudioEncoder.isConfigSupported`
+3. The user actually has audio to encode
+
+```ts
+const COMBINATIONS = [
+  { format: 'mp4',  video: 'avc', audio: 'aac'  },  // the target, near-universal
+  { format: 'mp4',  video: 'avc', audio: 'opus' },
+  { format: 'webm', video: 'vp9', audio: 'opus' },  // what Linux actually gets
+  { format: 'webm', video: 'vp8', audio: 'opus' },
+  { format: 'webm', video: 'vp9', audio: null   },  // video-only, last resort
+]
+```
+
+**Note the container switch is not optional either.** Opus-in-MP4 will not open in QuickShot. Falling back to Opus while still muxing MP4 produces a file that looks fine and silently fails for the user. Switch to WebM with it, and say so in the UI.
+
+**Never put Opus in MP4.** Measured in Phase 0: `mp4 / avc + opus` muxes without complaint and produces a file that **will not play** — Firefox refuses it, QuickShot certainly will. A valid container holding a codec nobody's player opens is the worst possible failure, because it looks like success until someone tries to watch it. If AAC is unavailable, switch the *container*, not just the codec.
+
+**Log every rejected combination and show it.** A user who gets a `.webm` instead of the `.mp4` they expected deserves to know why, and a developer needs it to debug. Never fail silently to a worse format.
 
 ---
 
@@ -365,6 +433,19 @@ new VideoEncoder({ output, error }, {
 **Exit:** a correct, playable 10-second 1080p mp4, generated in the browser, and a recorded FPS number.
 
 If this phase fails, nothing else matters and you find out in three days instead of three weeks.
+
+**Result: complete.** 300 frames muxed, downloaded, and **played back successfully in-browser** at 1920×1080 / 10.02 s. **154 fps — 5.13× realtime** — after fixing a 13× miss caused by using mediabunny's per-frame seek path in a loop instead of its single-pass iterator.
+
+Delivered along the way, all of which are product code rather than throwaway harness:
+- Codec negotiation across container + encoder capability (§6.8)
+- Source-derived output resolution and frame rate, with loud warnings on downscale or fps loss (§6.9)
+- Frame accounting that distinguishes *held* frames from *dropped* frames (§6.9)
+- A self-playback check so "downloaded but won't play" can't ship
+- `src/audio.ts`: 48 kHz conform + stereo downmix + deterministic mixing (ADR-4)
+- `src/project.ts`: the editing model, with 25 assertions pinning the derived-position rules
+- `test/dom.test.ts`: every `$('id')` in the script exists in the HTML
+
+**Still outstanding, and it is the one honest gap in this result:** the benchmark file is a 3.75 fps VFR screen recording with near-static content — the cheapest possible input. A 30 fps camera clip with real motion is ~8× the frames and far more bitrate. Headroom at 5.13× is large enough that this is unlikely to bite, but it has not been measured. Re-run on a genuine camera file before quoting any speed number to a user.
 
 ### Phase 1 — Project model + preview (1–2 weeks)
 - `project.ts` and the three derived-duration functions
@@ -412,11 +493,86 @@ Stream-copy export · version history · proxy editing for 4K · waveform displa
 ### R1 — A/V sync
 **The project fails here or it doesn't ship.** §6.1 lists six ways it breaks. The sync tests are written before the export code, not after.
 
-### R2 — Encode speed
-Unknown until Phase 0. Mitigations in order: measure, then progress-with-ETA (cheap, buys a lot of patience), then a decode worker pool. Do not build the worker pool before you have a number.
+### R2 — Encode speed — **RESOLVED. 13× faster. ADR-3 settled.**
 
-### R3 — Browser fragmentation
-WebCodecs support is uneven. Safari has had it since 16.4 but is less battle-tested for encoding. Feature-detect everything and degrade loudly, not silently. Decide explicitly whether this is Chromium-first.
+**Phase 0 result (2026-09-28).** Linux laptop, 1280×720 output, single-threaded, on the main thread, source = 3.75 fps VFR screen recording.
+
+| Metric | Value |
+|---|---|
+| Throughput | **15.8 fps** against a 30 fps output |
+| Realtime factor | **0.53×** — *slower than realtime* |
+| 1-minute edit | ~3.8 s |
+| 10-minute edit | ~6.3 min |
+| Trend | **degrading**: 27.9 → 18.7 → 16.2 fps across the run |
+| Container | mp4 / avc + opus (no AAC encoder on Linux, §6.8) |
+
+Video encoding itself worked; only the audio codec had to fall back.
+
+**Before / after the fix:**
+
+| | Before | After (720p) | After (1080p, final) |
+|---|---|---|---|
+| Throughput | 15.8 fps | 218 fps | **154 fps** |
+| Realtime factor | 0.53× | 7.27× | **5.13×** |
+| 300 frames | 17.84 s | 1.38 s | **1.95 s** |
+| 10-minute edit | ~6.3 min | ~1m 23s | **~1m 57s** |
+| Decode | 99% of wall clock | ~0% | ~0% |
+| Encode | 1% | 100% | 100% |
+| Trend | degrading 22.5 → 13.6 fps | stable | **stable** |
+| Draws | 300 | 49 | **49** (84% skipped) |
+| Output size | 0.78 MB | 2.24 MB | 4.44 MB |
+
+Frame accounting at 1080p: 49 distinct source frames used, 251 output frames held, median gap 183 ms, worst 500 ms against a ~267 ms source interval — **no dropped frames.** Note the "83,565 fps" decode figure is the frame-reuse path being timed, not real decoding; the metric is only meaningful on frames that actually decoded.
+
+Output verified: the page plays its own result via a `<video>` element — `OK — 1920x1080, duration 10.02s`. Do this every time (§6.9).
+
+**Instrumented result that found it — where the time actually went:**
+
+```
+decode  17.66s  99%   (sink.getCanvas + draw)
+encode  0.13s   1%   (canvasSource.add)
+decode rate  first half 22.5 fps -> second half 13.6 fps   (degrading)
+```
+
+**The encoder is not the problem. Decoding is, entirely.** Lowering the output resolution would buy almost nothing.
+
+**Root cause found.** The loop called `CanvasSink.getCanvas(t)` once per output frame. mediabunny's docs are explicit that this is the slow path and that there is a fast one:
+
+> `canvasesAtTimestamps`: *"uses an optimized decoding pipeline if these timestamps are monotonically sorted, **decoding each packet at most once**, and is therefore more efficient than manually getting the canvas for every timestamp."*
+
+Each individual `getCanvas()` re-seeks and re-decodes from the preceding keyframe. On a sparse-keyframe VFR source that cost grows with `t` — which is precisely the degradation measured. Switching to a single `canvasesAtTimestamps()` pass over monotonically increasing timestamps decodes each packet once.
+
+**Second, independent win.** `WrappedCanvas` exposes `.timestamp` and `.duration`. On a 3.75 fps source producing 30 fps, the same source frame is correct for ~8 consecutive output frames, so the redraw is pure waste. Skip the draw when the timestamp is unchanged.
+
+**The lesson worth keeping:** a 13× miss on the critical path came from not reading the library's docs for a function that was right there in the type definitions. Check the API surface before optimising around it.
+
+**⚠️ This benchmark is the easy case. Do not treat 218 fps as the product number.**
+
+| Flattering factor | Reality |
+|---|---|
+| Source is 3.75 fps VFR | A real 30 fps camera video is 8× the frames |
+| Content is near-static | Screen recording compresses to almost nothing; motion does not |
+| Output is 720p VP9 | 1080p is 2.25× the pixels; 4K is 9× |
+| Single-threaded, main thread | Not the shipping configuration, but it doesn't matter now |
+
+A realistic estimate for 1080p30 with real motion is somewhere well below 218 fps, plausibly 40–80×. **Re-run on a genuine 30 fps camera clip at 1080p before treating R2 as closed for good.** If it lands above 30 fps, stream-copy is definitively dead and a worker pool is unnecessary. If it lands under, the next lever is a parallel decode pool — but not before the measurement.
+
+**Mitigations, in order of cost:**
+1. ~~Split decode from encode time~~ — **done.** 99% decode, 1% encode. Points squarely at the decode path, not the encoder.
+2. ~~Use `canvasesAtTimestamps` instead of per-frame `getCanvas`~~ — **done.** Expect a large jump; re-measure before deciding anything else.
+3. **Re-test on a normal CFR 30 fps file** to separate the VFR pathology from a real ceiling. Still outstanding.
+4. **Re-measure.** If decode is still dominant after the iterator fix, a parallel decode worker pool is the next real option — but do not build it before seeing the new number.
+3. Honest progress + ETA. Cheap, buys patience. Not a fix, and not optional either.
+4. Offload **decode only** to a parallel worker pool. Much easier than parallel compositing, and seeking is the expensive part (§6.2).
+5. `OffscreenCanvas` worker pool for decode + composite. Stops the tab freezing during a 6-minute export. **Buys no throughput** — it is a UX fix and must not be confused with a speed fix.
+6. Default exports to 1080p and make 4K an explicit choice, rather than assuming it.
+
+### R3 — Browser fragmentation — **confirmed real, in Phase 0**
+This is not theoretical. Phase 0 could not encode AAC on Linux at all (§6.8), and the fallback chain is now load-bearing product code rather than a nice-to-have.
+
+Safari has had WebCodecs since 16.4 but is less battle-tested for encoding. Feature-detect everything and degrade loudly, with the reason shown. Decide explicitly whether this is Chromium-first.
+
+Corollary: **the output format cannot be fixed at build time.** `export.mp4` is a *preference*, not a guarantee, and the schema's `format` field in §3 is aspirational until negotiation runs.
 
 ### R4 — Format coverage
 This tool cannot open ProRes, DNxHD, AC-3, or 10-bit HEVC, and never will without a GPL fight (§5). This is a permanent scope limit, not a phase. Say it on the README.
@@ -431,7 +587,7 @@ Multi-track compositing, transitions, and an effects pipeline are each a week an
 
 ## 9. Open questions
 
-- [ ] **What is the measured 1080p30 encode FPS?** (Phase 0. Settles ADR-3.)
+- [x] **What is the measured 1080p30 encode FPS?** — 154 fps, 5.13× realtime. ADR-3 settled; no stream-copy. (R2)
 - [ ] **Does export work in Safari and Firefox?** (R3. Spike it in week one.)
 - [ ] Which browsers do we actually claim to support — and do we say so on the README?
 - [ ] Is a canvas zoom (`transform.scale`) good enough, or do users want crop-to-zoom where the framing is fixed?
