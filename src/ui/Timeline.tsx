@@ -313,6 +313,15 @@ function targets(): SnapTarget[] {
           {state.selectionHasLinks() ? 'Break link' : 'unlinked'}
         </button>
 
+        {/* A multi-selection is easy to miss when the clips are small or in
+            different lanes, so the toolbar states the number outright rather
+            than making the user count rings. */}
+        <Show when={count() > 1}>
+          <span class="rounded-full border border-accent/50 bg-accent/15 px-2 py-0.5 text-[10.5px] font-semibold text-accent">
+            {count()} clips selected
+          </span>
+        </Show>
+
         <span class="mx-1 h-5 w-px bg-line" />
 
         <button
@@ -501,11 +510,21 @@ function ClipView(props: { clip: Clip; index: number; state: AppState; lane: Lan
       class="group absolute top-1.5 cursor-grab overflow-hidden rounded-md border transition-shadow active:cursor-grabbing"
       classList={{
         selected: isSelected(),
-        // The primary clip carries the loud ring; the rest of the selection gets
-        // a quieter one. A uniform highlight cannot say which clip a solo
-        // action will hit, and "which one is this?" is the first question asked.
-        'border-[#ffffff]/70 shadow-[0_0_0_1px_#ffffff,0_4px_14px_-4px_#000]': isPrimary(),
-        'border-[#ffffff]/45 shadow-[0_0_0_1px_#ffffff/45]': isSelected() && !isPrimary(),
+        // Every selected clip gets a solid accent ring, so a multi-selection is
+        // unmistakable at a glance. The primary clip additionally gets a white
+        // ring, which is how you tell which one a solo action will hit.
+        //
+        // Solid colours via ring utilities. An opacity modifier written inside
+        // an arbitrary shadow value is compiled by Tailwind into an opacity
+        // applied to a var() reference, which is invalid CSS and silently drops
+        // the whole box-shadow — the class exists, the ring does not. That is
+        // why a multi-selection used to look like a single selected clip.
+        //
+        // (Written without a literal class name on purpose: Tailwind scans
+        // comments too, so "here is the broken class" in a comment is enough to
+        // generate it.)
+        'ring-2 ring-accent': isSelected() && !isPrimary(),
+        'ring-2 ring-accent ring-offset-1 ring-offset-[#0b0b0e]': isPrimary(),
         'border-transparent': !isSelected(),
       }}
       data-clip-index={props.index}
@@ -524,6 +543,28 @@ function ClipView(props: { clip: Clip; index: number; state: AppState; lane: Lan
       }}
       title={`${asset()?.name ?? 'missing'} — ${props.clip.in.toFixed(2)}s → ${props.clip.out.toFixed(2)}s`}
     >
+      {/* A tick on every selected clip but the primary, so a group selection
+          reads as a group even when the rings are only a couple of pixels. */}
+      <Show when={isSelected() && !isPrimary()}>
+        <span
+          class="pointer-events-none absolute left-1 top-1 z-30 flex size-3.5 items-center justify-center rounded-full bg-accent text-[9px] font-bold text-black"
+          aria-label="selected"
+        >
+          ✓
+        </span>
+      </Show>
+
+      {/* Muting is invisible on a waveform otherwise: the peaks just get
+          dimmer, which reads as "quieter", not "muted". */}
+      <Show when={props.clip.muted && props.lane === 'audio'}>
+        <span
+          class="pointer-events-none absolute right-1 top-1 z-30 rounded bg-[#d29922] px-1 text-[9px] font-bold uppercase text-black"
+          aria-label="muted"
+        >
+          mute
+        </span>
+      </Show>
+
       <div
         class="absolute inset-y-0 left-0 z-20 cursor-ew-resize bg-white/0 transition-colors group-hover:bg-white/10"
         style={{ width: `${HANDLE}px` }}

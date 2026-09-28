@@ -496,9 +496,18 @@ export function setClipGain(project: Project, clipId: ClipId, gain: number): Pro
   return { ...project, [found.lane]: next } as Project
 }
 
+/**
+ * Mute or unmute a clip.
+ *
+ * **Audio lane only.** A video clip has nothing to mute, and letting one carry
+ * a `muted` flag is worse than a no-op: the flag shows up in the UI as a mute
+ * badge on a clip with no sound, and it silently changes the audio mixer's
+ * gain for a clip that was never in it. Refusing here means no caller can
+ * produce that state, rather than relying on each one to remember the rule.
+ */
 export function toggleMute(project: Project, clipId: ClipId): Project {
   const found = findClip(project, clipId)
-  if (!found) return project
+  if (!found || found.lane !== 'audio') return project
   const next = laneOf(project, found.lane).slice()
   next[found.index] = { ...next[found.index]!, muted: !next[found.index]!.muted }
   return { ...project, [found.lane]: next } as Project

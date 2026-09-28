@@ -4,7 +4,8 @@
  * null dereference in an unrelated function, minutes later.
  */
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 const html = readFileSync(new URL('../phase0.html', import.meta.url), 'utf8')
 const ts = readFileSync(new URL('../src/phase0.ts', import.meta.url), 'utf8')
@@ -217,4 +218,45 @@ console.log('ref-binding assertions passed')
   }
   assert.deepEqual(problems, [], `context menu wiring:\n  ${problems.join('\n  ')}`)
   console.log(`  context menus open on right click only (${files.length} components)`)
+}
+
+/**
+ * An arbitrary Tailwind value must produce a *valid* declaration.
+ *
+ * A selection ring written as `shadow-[0_0_0_1px_#ffffff/45]` compiles to:
+ *
+ *   --tw-shadow: 0 0 0 1px var(--tw-shadow-color,#fff)/45
+ *
+ * The opacity modifier lands on the `var()`, not the colour, so the browser
+ * discards the whole `box-shadow`. The class exists in the stylesheet, so no
+ * build or type error fires — the ring is simply never drawn, and a
+ * multi-selection looks like a single selected clip.
+ *
+ * This checks the generated CSS rather than the source, because the source
+ * looks fine. Opacity is not allowed inside an arbitrary shadow/gradient value.
+ */
+{
+  const distDir = new URL('../dist/assets/', import.meta.url).pathname
+  const css = existsSync(distDir)
+    ? readdirSync(distDir)
+        .filter((f) => f.endsWith('.css'))
+        .map((f) => readFileSync(join(distDir, f), 'utf8'))
+        .join('\n')
+    : ''
+
+  if (!css) {
+    console.log('  (no built CSS found — run `vite build` to check arbitrary values)')
+  } else {
+    // `var(--tw-…)/NN` is never valid: an opacity modifier cannot apply to a
+    // custom property reference. The optional fallback inside the var() has to
+    // be allowed for, or the pattern silently matches nothing and this guard
+    // passes on the exact CSS it exists to reject.
+    const broken = [...css.matchAll(/var\(--[a-z-]+(?:,[^)]*)?\)\s*\/\s*\d+/g)].map((m) => m[0])
+    assert.deepEqual(
+      broken,
+      [],
+      `opacity modifier applied to a var(), which is invalid CSS:\n  ${[...new Set(broken)].join('\n  ')}`,
+    )
+    console.log(`  no invalid opacity-on-var() declarations in ${css.length} bytes of CSS`)
+  }
 }

@@ -160,6 +160,23 @@ export function frameTimesForClip(clips: Clip[], index: number, budget: number, 
  * audio clip that outlasts the picture is not something to pad the video with
  * black for; it is simply not heard past the last frame.
  */
+/**
+ * Where to read each frame of a clip from in the SOURCE file.
+ *
+ * Distinct from `frameTimesForClip`, which answers "when does this frame appear
+ * on the timeline". A clip cut from 10s to 25s of a seven-minute file starts its
+ * first frame at source 10s, not source 0s — conflating the two exports the
+ * whole source from its beginning, which is what a 15s trim turned into a
+ * 7-minute file.
+ */
+export function sourceTimesForClip(clip: Clip, count: number, fps: number): number[] {
+  const times: number[] = []
+  for (let i = 0; i < count; i++) {
+    times.push(Number((clip.in + i / fps).toFixed(6)))
+  }
+  return times
+}
+
 export function totalFramesFor(project: Project, fps: number): number {
   return Math.ceil(projectDuration(project) * fps)
 }
@@ -260,14 +277,18 @@ export class Exporter {
       let emittedUpTo = 0
       let cursor = 0
 
-      const emitBlankUntil = async (until: number) => {
-        while (cursor < until && cursor < totalFrames) {
+      // `untilFrame` and `cursor` are FRAME indices. The timestamp handed to
+      // `add()` is seconds, so it must be converted — multiplying and dividing
+      // by totalFrames cancels to 1 and yields the bare frame index, which
+      // silently turned a 15s timeline into a 449s file.
+      const emitBlankUntil = async (untilFrame: number) => {
+        while (cursor < untilFrame && cursor < totalFrames) {
           renderBlank(ctx, renderOptions)
-          await canvasSource.add((cursor * totalFrames) / totalFrames, frameDuration)
+          await canvasSource.add(cursor * frameDuration, frameDuration)
           cursor++
           done++
         }
-        emittedUpTo = until
+        emittedUpTo = untilFrame
       }
 
       for (let index = 0; index < project.video.length; index++) {
@@ -280,13 +301,13 @@ export class Exporter {
         // Silence before this clip.
         await emitBlankUntil(Math.min(totalFrames, Math.round((start * settings.fps))))
 
-        const remaining = Math.min(totalFrames - cursor, Math.round((end - start) * settings.fps))
+        // `frameTimesForClip` is the tested mapping from clip to output frame
+        // timestamps; `sourceTimesForClip` is the matching seek into the media
+        // file. They are different numbers and must not share an array.
+        const outTimes = frameTimesForClip(project.video, index, totalFrames - cursor, settings.fps)
+        const remaining = outTimes.length
         if (remaining <= 0) continue
-
-        const times: number[] = []
-        for (let i = 0; i < remaining; i++) {
-          times.push(Number(((cursor + i) * totalFrames) / totalFrames))
-        }
+        const sourceTimes = sourceTimesForClip(clip, remaining, settings.fps)
 
         const entry = this.#library.get(clip.assetId)
         void emittedUpTo
@@ -294,7 +315,7 @@ export class Exporter {
         if (!entry?.videoSink) {
           // An audio-only clip still occupies its span, so the output needs
           // that many black frames.
-          for (const t of times) {
+          for (const t of outTimes) {
             this.#checkCancelled()
             renderBlank(ctx, renderOptions)
             await canvasSource.add(t, frameDuration)
@@ -303,9 +324,10 @@ export class Exporter {
           }
         } else {
           let at = 0
-          for await (const wrapped of entry.videoSink.canvasesAtTimestamps(times)) {
+          for await (const wrapped of entry.videoSink.canvasesAtTimestamps(sourceTimes)) {
             this.#checkCancelled()
-            const t = times[at++] ?? 0
+            // The frame's place on the OUTPUT timeline, not in the source.
+            const t = outTimes[at++] ?? cursor * frameDuration
 
             if (wrapped) {
               renderFrame(
@@ -331,7 +353,7 @@ export class Exporter {
           // A short clip may yield fewer frames than it owns; fill the rest.
           while (cursor < Math.min(totalFrames, Math.round(end * settings.fps))) {
             renderBlank(ctx, renderOptions)
-            await canvasSource.add((cursor * totalFrames) / totalFrames, frameDuration)
+            await canvasSource.add(cursor * frameDuration, frameDuration)
             cursor++
             done++
           }

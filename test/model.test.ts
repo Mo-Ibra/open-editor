@@ -28,6 +28,7 @@ import {
   splitLinked,
   toFrameIndex,
   toSampleIndex,
+  toggleMute,
   trimClip,
   type Asset,
   type Clip,
@@ -440,4 +441,43 @@ check('a duplicate does not disturb the clips around it', () => {
   // consequence of inserting a clip in front of it.
   assert.equal(clipStart(out.video, out.video.indexOf(b)), 10)
   assert.equal(out.video[0]!.id, 'a')
+})
+
+// ---------------------------------------------------------------------------
+// Muting is an audio-lane thing
+//
+// `toggleMute` used to accept any clip, so a right-click on a video clip could
+// set `muted` on it. Nothing then rendered that state as an error — the clip
+// simply grew a mute badge and sat in the audio mixer's gain list despite
+// having no sound. The flag was meaningless and visible at the same time.
+// ---------------------------------------------------------------------------
+
+check('a video clip cannot be muted', () => {
+  const p: Project = { ...withAsset(), video: [clip('a', 0, 5)] }
+  const out = toggleMute(p, 'a')
+  assert.equal(out.video[0]!.muted, undefined, 'no mute flag on a clip with no sound')
+  assert.equal(out, p, 'and the project is returned untouched')
+})
+
+check('an audio clip can be muted, and unmuted again', () => {
+  const p: Project = { ...withAsset(), audio: [clip('a', 0, 5, { lane: 'audio' })] }
+
+  const muted = toggleMute(p, 'a')
+  assert.equal(muted.audio[0]!.muted, true)
+
+  const unmuted = toggleMute(muted, 'a')
+  assert.equal(unmuted.audio[0]!.muted, false)
+})
+
+check('muting an audio clip leaves the video lane alone', () => {
+  const p = appendAsset(withAsset(), 'a', asset())
+  const out = toggleMute(p, p.audio[0]!.id)
+  assert.equal(out.audio[0]!.muted, true)
+  assert.equal(out.video[0]!.muted, undefined, 'the picture half is untouched')
+  assert.equal(out.video[0]!.linkId, p.video[0]!.linkId, 'and still linked')
+})
+
+check('muting a clip that does not exist changes nothing', () => {
+  const p: Project = { ...withAsset(), audio: [clip('a', 0, 5, { lane: 'audio' })] }
+  assert.equal(toggleMute(p, 'nope'), p)
 })

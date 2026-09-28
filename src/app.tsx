@@ -311,12 +311,19 @@ function menuItems(
         disabled: !linked,
         run: () => state.breakSelectedLinks(),
       },
-      {
-        label: allMuted ? count('Unmute', 'Unmute %d clips') : count('Mute', 'Mute %d clips'),
-        shortcut: 'M',
-        disabled: !hasAudio,
-        run: () => state.toggleMuteSelected(),
-      },
+      // Omitted entirely, not disabled: a "Mute" row on a video clip is a
+      // promise the app cannot keep, and a greyed-out row still reads as
+      // "this is a thing that exists here".
+      ...(hasAudio
+        ? [
+            {
+              label: allMuted ? count('Unmute', 'Unmute %d clips') : count('Mute', 'Mute %d clips'),
+              shortcut: 'M',
+              disabled: false,
+              run: () => state.toggleMuteSelected(),
+            },
+          ]
+        : []),
       { separator: true, label: '', run: () => undefined },
       { label: count('Delete clip', 'Delete %d clips'), shortcut: '⌫', danger: true, disabled: n === 0, run: () => state.deleteSelected() },
     ]

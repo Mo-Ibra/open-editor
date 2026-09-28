@@ -1,6 +1,20 @@
 @import 'tailwindcss';
 
 /*
+ * Tests are not UI.
+ *
+ * Tailwind scans the whole project for class names, including this repo's test
+ * files — and a test that documents a broken class in a comment ("this compiles
+ * to invalid CSS") is enough to make Tailwind *generate* it. The class then
+ * exists in the stylesheet forever, and a test asserting the stylesheet is
+ * clean fails on its own documentation.
+ *
+ * Excluding the directory removes that whole class of surprise: nothing under
+ * test/ can ever reach the browser.
+ */
+@source not '../test';
+
+/*
  * Design tokens.
  *
  * A video editor's job is to get out of the way of the picture. Everything
