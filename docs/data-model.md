@@ -164,6 +164,32 @@ Three things do the work:
 A snap shows an amber guide line labelled with what it caught. **A snap you
 cannot see is a snap you cannot trust.**
 
+The pixel threshold is why zoom has to be anchored properly: the magnet is
+measured in pixels, so it must convert at the zoom the user is actually looking
+at, or it weakens as they zoom in and feels broken.
+
+## Zoom
+
+`app/zoom.ts`. `Ctrl`+wheel over the timeline, about the pointer. A trackpad
+pinch arrives as a ctrl+wheel event, so that works with no special case; a
+plain wheel still scrolls.
+
+- **Ratio, not pixels.** One notch is 1.15× at every zoom level. A fixed pixel
+  step feels progressively more sluggish as you zoom in, and the user cannot
+  tell whether the wheel broke or the app did.
+- **Anchored to the pointer.** The instant under the cursor stays under the
+  cursor. Zooming about the origin also changes the zoom — and moves whatever
+  you were looking at, which reads as the app ignoring you.
+- **Bounded to 10–400 px/s**, the same range the preview's slider offers, and
+  clamped in the store so the two can never disagree.
+- Registered as a **native non-passive** listener, because `preventDefault` is
+  the only thing stopping the browser's own page zoom, and a passive listener
+  cannot call it.
+
+`test/zoom.test.ts` pins the geometry, including a test that the naive
+scale-the-scroll implementation really does drift — otherwise "it zooms" would
+be indistinguishable from "it zooms correctly".
+
 Crossing a neighbour is a **swap**, not a magnet: a clip may never overlap its
 predecessor, so dragging left far enough reorders — the clip passes through
 rather than sticking on the boundary and refusing to go further.

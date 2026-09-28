@@ -100,6 +100,10 @@ export function createShortcuts({ state, closeMenu }: ShortcutContext): Shortcut
     // select modes by test/keyboard.test.ts so the two cannot disagree.
     { keys: [], hint: '^click', label: 'add to selection', gesture: true, run: () => undefined },
     { keys: [], hint: '⇧click', label: 'extend selection', gesture: true, run: () => undefined },
+    // Handled by a wheel listener on the timeline, not by a key. Listed here
+    // because the legend is the only place the user looks for "what can I do",
+    // and an undiscoverable zoom is the same as no zoom.
+    { keys: [], hint: '^scroll', label: 'zoom timeline', gesture: true, run: () => undefined },
   ]
 }
 

@@ -10,7 +10,7 @@
  * pairs edit together by default; breaking the link is one click.
  */
 
-import { createEffect, createSignal, For, onMount, Show } from 'solid-js'
+import { createEffect, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
 import { clipAtLane, clipDuration, clipEnd, clipStart, laneOf, type Clip, type Lane } from '../model/project.js'
 import { drawPeaks, type Peak } from '../media/peaks.js'
 import {
@@ -23,6 +23,7 @@ import {
 import type { AppState, SelectMode } from '../app/state.js'
 import type { ContextMenuState } from './ContextMenu.js'
 import { DND_ASSET } from './AssetBin.js'
+import { clampZoom, scrollLeftAfterZoom, zoomFactor } from '../app/zoom.js'
 import { log } from '../dev/debug.js'
 
 const HANDLE = 8
@@ -43,6 +44,7 @@ type Drag =
 export function Timeline(props: { state: AppState; menu: ContextMenuState }) {
   const state = props.state
   let track!: HTMLDivElement
+  let scroller!: HTMLDivElement
 
   let drag: Drag | null = null
   const [guide, setGuide] = createSignal<{ time: number; label: string } | null>(null)
@@ -135,6 +137,41 @@ function targets(): SnapTarget[] {
     state.clearSelection()
     drag = { kind: 'playhead' }
     setGuide(null)
+  }
+
+  /**
+   * Ctrl + wheel zooms the timeline, about the pointer.
+   *
+   * A plain wheel still scrolls, so this does not steal the gesture people
+   * already use for panning. A pinch on a trackpad arrives as a ctrl+wheel
+   * event, so that works too and needs no special case.
+   *
+   * Registered as a native non-passive listener rather than JSX `onWheel`,
+   * because the only thing this handler must guarantee is that the browser's
+   * own page-zoom does not also happen.
+   */
+  function onWheel(event: WheelEvent): void {
+    if (!event.ctrlKey && !event.metaKey) return
+    event.preventDefault()
+
+    const before = state.zoom()
+    const after = clampZoom(before * zoomFactor(event.deltaY, event.deltaMode))
+    if (after === before) return
+
+    // Pointer position inside the visible area, which is where the content's
+    // left edge was before the scroll offset is added.
+    const localX = event.clientX - scroller.getBoundingClientRect().left
+    const nextScroll = scrollLeftAfterZoom({
+      scrollLeft: scroller.scrollLeft,
+      localX,
+      zoomBefore: before,
+      zoomAfter: after,
+    })
+
+    state.setZoom(after)
+    // After setting the zoom, so the track has already re-laid out at the new
+    // width. The browser clamps a negative or overflowing value for us.
+    scroller.scrollLeft = Math.max(0, nextScroll)
   }
 
   /**
@@ -258,6 +295,15 @@ function targets(): SnapTarget[] {
     setGuide(null)
   }
 
+  // Native, non-passive: `preventDefault` in the handler is the whole point, and
+  // a passive listener would let the browser page-zoom underneath us.
+  onMount(() => {
+    scroller.addEventListener('wheel', onWheel, { passive: false })
+  })
+  onCleanup(() => {
+    scroller.removeEventListener('wheel', onWheel)
+  })
+
   /** How many clips are selected, for labels that name their own count. */
   const count = (): number => state.selectionCount()
 
@@ -366,11 +412,16 @@ function targets(): SnapTarget[] {
       </div>
 
       {/* ruler + lanes */}
-      <div class="min-h-0 flex-1 overflow-auto">
+      <div ref={scroller} class="min-h-0 flex-1 overflow-auto">
         <div
           ref={track}
           class="relative min-h-full select-none touch-none"
           style={{ width: `${contentWidth()}px` }}
+          // The zoom, exactly. The preview's slider is `step="10"`, so it can
+          // only report multiples of ten and cannot be used to read a precise
+          // zoom level — which makes this the only exact readout, and the only
+          // way a test can verify the pointer anchor.
+          data-zoom={state.zoom()}
           onPointerDown={onPointerDown}
           onContextMenu={onContextMenu}
           onPointerMove={onPointerMove}

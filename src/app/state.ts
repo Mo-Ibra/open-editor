@@ -45,6 +45,7 @@ import { createEdits } from './edits.js'
 import { createHistory } from './history.js'
 import { createSelection } from './selection.js'
 import { createTransport } from './transport.js'
+import { clampZoom, ZOOM_DEFAULT } from './zoom.js'
 
 export interface Notice {
   kind: 'info' | 'warn' | 'error'
@@ -54,7 +55,7 @@ export interface Notice {
 export function createAppState() {
   const library = new MediaLibrary()
   const [project, applyProject] = createStore<Project>(emptyProject())
-  const [zoom, setZoomLevel] = createSignal(80) // pixels per second
+  const [zoom, setZoomLevel] = createSignal(ZOOM_DEFAULT) // pixels per second
   const [notices, setNotices] = createSignal<Notice[]>([])
   /** Magnetic snapping. Off means every position is exactly where you put it. */
   const [snapping, setSnapping] = createSignal(true)
@@ -177,7 +178,7 @@ export function createAppState() {
     zoom,
     notices,
     snapping,
-    setZoom: setZoomLevel,
+    setZoom: (value: number) => setZoomLevel(clampZoom(value)),
     setSnapping,
     canUndo: history.canUndo,
     canRedo: history.canRedo,

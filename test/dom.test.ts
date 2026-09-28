@@ -368,3 +368,50 @@ console.log('ref-binding assertions passed')
   }
   console.log('  legend gestures match the timeline\'s select modes')
 }
+
+/**
+ * Ctrl+wheel must be handled natively, and non-passively.
+ *
+ * Two failure modes, neither visible to a type checker:
+ *
+ *  1. A passive listener cannot call `preventDefault`, so ctrl+wheel zooms the
+ *     timeline *and* the whole browser page.
+ *  2. Binding it through JSX `onWheel` makes that passive-ness the default on
+ *     some engines, and gives no way to be explicit.
+ *
+ * Also pinned: a plain wheel must still be left alone, because panning is a
+ * gesture people already have.
+ */
+{
+  const timeline = readFileSync(new URL('../src/ui/Timeline.tsx', import.meta.url), 'utf8')
+
+  assert.match(
+    timeline,
+    /addEventListener\('wheel', onWheel, \{ passive: false \}\)/,
+    'the wheel listener must be registered natively and non-passively',
+  )
+  assert.match(
+    timeline,
+    /removeEventListener\('wheel', onWheel\)/,
+    'and removed again — a leaked listener outlives the component',
+  )
+  assert.ok(
+    !/onWheel=\{/.test(timeline),
+    'there should be no JSX onWheel binding; the native one is the whole point',
+  )
+
+  const handler = timeline.match(/function onWheel[\s\S]*?\n  \}/)?.[0] ?? ''
+  assert.ok(handler, 'onWheel should exist')
+  assert.match(
+    handler,
+    /if \(!event\.ctrlKey && !event\.metaKey\) return/,
+    'a plain wheel must be left alone so it still scrolls',
+  )
+  assert.match(handler, /event\.preventDefault\(\)/, 'and ctrl+wheel must stop the browser zooming the page')
+  assert.match(handler, /scrollLeftAfterZoom\(/, 'and it must zoom about the pointer, not the origin')
+
+  // The legend advertises it, so the feature is discoverable.
+  const shortcuts = readFileSync(new URL('../src/app/shortcuts.ts', import.meta.url), 'utf8')
+  assert.ok(shortcuts.includes('^scroll'), 'the legend should advertise ctrl+scroll')
+  console.log('  ctrl+wheel zoom is wired natively, non-passively, and advertised')
+}
