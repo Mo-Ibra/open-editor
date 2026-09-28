@@ -19,6 +19,15 @@ export interface MenuItem {
   label: string
   /** Renders a divider instead of a row. */
   separator?: boolean
+  /**
+   * Information, not an action — rendered as plain text with no pointer.
+   *
+   * The alternative is a permanently disabled row, which is the dead-row
+   * pattern this file argues against everywhere else: it looks clickable and
+   * does nothing, so it teaches the reader that the menu contains features
+   * rather than facts. "unlinked" is a fact about the selection.
+   */
+  status?: boolean
   shortcut?: string
   disabled?: boolean
   danger?: boolean
@@ -115,6 +124,8 @@ export function ContextMenu(props: {
             {(item) =>
               item.separator ? (
                 <div class="my-1 h-px bg-line" />
+              ) : item.status ? (
+                <div class="px-3 py-1 text-[11px] text-muted">{item.label}</div>
               ) : (
                 <button
                   class="flex w-full items-center gap-3 px-3 py-1 text-left text-[12px] transition-colors hover:bg-accent/15 disabled:pointer-events-none disabled:opacity-35"

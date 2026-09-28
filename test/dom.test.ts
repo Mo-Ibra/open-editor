@@ -328,3 +328,43 @@ console.log('ref-binding assertions passed')
   assert.ok(checked >= 25, `expected the source to reference docs often, found ${checked}`)
   console.log(`  ${checked} doc references across ${sources.length} files, all resolve`)
 }
+
+/**
+ * The legend's mouse gestures must describe what the timeline actually does.
+ *
+ * `^click` and `⇧click` appear in the status bar as shortcuts, but no keypress
+ * produces them — they are handled in the timeline's pointerdown. Nothing
+ * connects the two, so renaming a select mode, or dropping the ctrl branch,
+ * would leave the footer confidently describing a gesture the app no longer
+ * has.
+ *
+ * Checked from the source, because the alternative is a browser.
+ */
+{
+  const timeline = readFileSync(new URL('../src/ui/Timeline.tsx', import.meta.url), 'utf8')
+
+  assert.match(
+    timeline,
+    /state\.selectClip\(clip\.id, selectModeOf\(event\)\)/,
+    'a clip click must go through selectModeOf, or the modifier rules below are dead code',
+  )
+
+  // Order matters: shift wins, then ctrl/cmd, else replace. Pinned because a
+  // rewrite that checks ctrl first silently changes ctrl+shift behaviour.
+  const mode = timeline.match(/function selectModeOf[\s\S]*?\n}/)?.[0] ?? ''
+  assert.ok(mode, 'selectModeOf should exist')
+  const shiftAt = mode.indexOf('shiftKey')
+  const ctrlAt = mode.indexOf('ctrlKey')
+  const metaAt = mode.indexOf('metaKey')
+  assert.ok(shiftAt >= 0 && ctrlAt >= 0 && metaAt >= 0, 'all three modifiers must be honoured')
+  assert.ok(shiftAt < ctrlAt, 'shift must be tested first — it is the more specific intent')
+  assert.ok(mode.includes("'range'") && mode.includes("'toggle'") && mode.includes("'replace'"),
+    'range, toggle and replace must all be reachable')
+
+  // And the legend must still name both gestures.
+  const shortcuts = readFileSync(new URL('../src/app/shortcuts.ts', import.meta.url), 'utf8')
+  for (const gesture of ['^click', '⇧click']) {
+    assert.ok(shortcuts.includes(gesture), `the legend should still advertise ${gesture}`)
+  }
+  console.log('  legend gestures match the timeline\'s select modes')
+}

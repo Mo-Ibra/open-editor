@@ -74,11 +74,17 @@ audible during an export.
 
 | Module | Responsibility |
 |---|---|
-| `app/state.ts` | Composes the store: project, assets, clip edits, transport, notices. |
+| `app/state.ts` | **Composition root.** Builds the slices, wires them, exposes one flat surface. |
 | `app/selection.ts` | Clip selection. Multi-select policy; testable with no store. |
 | `app/history.ts` | Undo. A stack of lane snapshots. |
+| `app/assets.ts` | Import, remove, and getting files onto the timeline. |
+| `app/edits.ts` | Every clip operation. Intent here, meaning in `model/project.ts`. |
+| `app/transport.ts` | Playhead, playback, and what is derived from them. |
+| `app/shortcuts.ts` | The shortcut list — the single source for handler and legend. |
+| `app/keyboard.ts` | Matching and legend derivation. Pure, no browser. |
+| `app/menu-items.ts` | The context menu, as a pure function of (state, target). |
+| `app/layout.ts` | Panel geometry. A *preference*, not project data. |
 | `model/project-store.ts` | The single point the project is written. See the warning inside. |
-| `app/layout.ts` | Panel sizes and collapse. A *preference*, not project data. |
 | `dev/debug.ts` | Logging that also streams to the dev-server terminal at `/__debug`. |
 
 ### UI
@@ -87,7 +93,7 @@ SolidJS components, no VDOM.
 
 | Component | Responsibility |
 |---|---|
-| `app.tsx` | Shell, keyboard handling, menu item construction. |
+| `app/app.tsx` | The shell. Wiring and markup only. |
 | `ui/Timeline.tsx` | Lanes, clips, drag state machine, snapping, ruler, toolbar, waveform. |
 | `ui/Preview.tsx` | The canvas, playhead-driven rendering, playback. |
 | `ui/ExportDialog.tsx` | The export modal. Plays its own output before offering the download. |
@@ -130,6 +136,9 @@ These are not enforced by anything, so they are worth stating:
 1. `model/project.ts` must not import from any other module in the app.
 2. `render/render.ts` must not know what a playhead is. It draws one image.
 3. UI components may read anything and write only through `app/state.ts`.
+4. `app/state.ts` holds no behaviour of its own. It builds slices and wires
+   them; a `project.ts` call that appears there is a bug, because it would
+   bypass the slice that owns the policy around it.
 4. No module may hardcode an output codec. See
    [ADR-8](decisions/0008-negotiate-never-hardcode-a-codec.md).
 

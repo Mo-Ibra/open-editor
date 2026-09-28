@@ -88,16 +88,24 @@ are not UI, and nothing under `test/` should be able to reach the browser.
 
 ## Adding a store slice
 
-`state.ts` is being decomposed into cohesive slices that take their dependencies
-as arguments and return an object — `app/selection.ts` and `app/history.ts` are
-the two so far. The pattern:
+`state.ts` is a composition root. The behaviour lives in `selection.ts`,
+`history.ts`, `assets.ts`, `edits.ts` and `transport.ts`, each of which takes its
+dependencies as arguments and returns an object. The pattern:
 
 - The slice owns its own signals, and nobody outside it writes to them.
 - It takes the project as an argument to *read*, and explicit callbacks for the
   few things it must *do* (`createHistory` takes a `restore` and an `onRestore`
   rather than reaching for the store).
-- `state.ts` re-exports under the names the UI already uses, so a new slice
-  never forces a change to a component.
+- Slices take the *interface* of their collaborators, not the whole store.
+  `EditDeps` lists six dependencies; that list is the slice's coupling, written
+  down, instead of hidden by reaching for a closure.
+- `state.ts` presents one flat object under the names the UI already uses, so a
+  new slice never forces a change to a component. The slices are an
+  implementation detail; `state.ts` is the seam.
+- Construction order is load-bearing and is commented at each step. `edits` and
+  `transport` need each other, so one holds a deferred `() => transport.…`
+  closure. `test/state.test.ts` exists because **a type checker cannot see a
+  use-before-assign inside a closure** — it builds the real store instead.
 
 A comment that describes a behaviour the code does not have is worse than no
 comment: it is the one failure mode tests written after the fact tend to catch,
