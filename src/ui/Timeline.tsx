@@ -20,7 +20,9 @@ import {
   thresholdInSeconds,
   type SnapTarget,
 } from '../snapping.js'
-import type { AppState } from '../state.js'
+import type { AppState, SelectMode } from '../state.js'
+import type { ContextMenuState } from './ContextMenu.js'
+import { DND_ASSET } from './AssetBin.js'
 import { log } from '../debug.js'
 
 const HANDLE = 8
@@ -38,12 +40,14 @@ type Drag =
   | { kind: 'trim-in'; lane: Lane; index: number; locked: SnapTarget | null }
   | { kind: 'trim-out'; lane: Lane; index: number; locked: SnapTarget | null }
 
-export function Timeline(props: { state: AppState }) {
+export function Timeline(props: { state: AppState; menu: ContextMenuState }) {
   const state = props.state
   let track!: HTMLDivElement
 
   let drag: Drag | null = null
   const [guide, setGuide] = createSignal<{ time: number; label: string } | null>(null)
+  /** Where a dragged file would land, while a drag is over the timeline. */
+  const [dropAt, setDropAt] = createSignal<{ lane: Lane; time: number } | null>(null)
 
 /** Pull radius, in pixels. Converted at the current zoom so the magnet feels
  *  the same at every zoom level. */
@@ -62,6 +66,18 @@ const SNAP_PIXELS = 10
  * stops being a measurement and starts being a guess — when you drag it to
  * check what is at 1:14, you want 1:14, not 1:14.00 snapped to a boundary.
  */
+/**
+ * How a click changes the selection.
+ *
+ * Shift wins over ctrl when both are held: shift means "extend from where I
+ * already am", which is the more specific intent of the two.
+ */
+function selectModeOf(event: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }): SelectMode {
+  if (event.shiftKey) return 'range'
+  if (event.ctrlKey || event.metaKey) return 'toggle'
+  return 'replace'
+}
+
 function targets(): SnapTarget[] {
   return collectTargets(state.project, {
     playhead: state.playhead(),
@@ -74,6 +90,11 @@ function targets(): SnapTarget[] {
 
   function localX(event: PointerEvent | MouseEvent): number {
     return event.clientX - track.getBoundingClientRect().left
+  }
+
+  /** Origin of the (scrolled) track, for drop coordinates. */
+  function trackLeft(): number {
+    return track.getBoundingClientRect().left
   }
 
   function laneStart(lane: Lane, index: number): number {
@@ -103,14 +124,44 @@ function targets(): SnapTarget[] {
       const index = Number(target.dataset.clipIndex)
       const clip = laneOf(state.project, lane)[index]
       if (!clip) return
-      state.setSelected(clip.id)
+      state.selectClip(clip.id, selectModeOf(event))
       drag = { kind: 'move', lane, index, grabOffset: state.xToTime(x) - laneStart(lane, index) }
       return
     }
 
-    // Ruler or empty lane: a plain seek, and dragging keeps scrubbing.
+    // Ruler or empty lane: a plain seek, and dragging keeps scrubbing. The
+    // selection is dropped, because a left click on nothing means "I am done
+    // with those clips" — and the next Delete should not take them.
+    state.clearSelection()
     drag = { kind: 'playhead' }
     setGuide(null)
+  }
+
+  /**
+   * Right-click.
+   *
+   * Selection follows the *target*, not the click: right-clicking a clip that is
+   * already part of a multi-selection keeps the whole selection, so the menu can
+   * act on all of it. Right-clicking outside the selection narrows to that one
+   * clip, which is what makes a right click feel like "act on this".
+   */
+  function onContextMenu(event: MouseEvent): void {
+    event.preventDefault()
+    const target = event.target as HTMLElement
+    const laneEl = target.closest('[data-lane]')
+    const lane = (laneEl?.getAttribute('data-lane') as Lane | null) ?? undefined
+    const clipEl = target.closest('[data-clip-index]')
+
+    if (clipEl && lane) {
+      const clipId = clipEl.getAttribute('data-clip-id')
+      if (!clipId) return
+      if (!state.isSelected(clipId)) state.selectClip(clipId, 'replace')
+      else state.setPrimary(clipId)
+      props.menu.show({ kind: 'clip', lane, clipId, x: event.clientX, y: event.clientY })
+      return
+    }
+
+    props.menu.show({ kind: lane ? 'lane' : 'timeline', lane, x: event.clientX, y: event.clientY })
   }
 
   function onPointerMove(event: PointerEvent): void {
@@ -207,6 +258,9 @@ function targets(): SnapTarget[] {
     setGuide(null)
   }
 
+  /** How many clips are selected, for labels that name their own count. */
+  const count = (): number => state.selectionCount()
+
   /** Tick spacing that stays readable at any zoom. */
   const MIN_GAP = 90
   const TICK_INTERVALS = [0.04, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800]
@@ -234,16 +288,29 @@ function targets(): SnapTarget[] {
         <button class="btn" onClick={() => state.splitAt(state.playhead())} disabled={!anyClips()}>
           Split
         </button>
-        <button class="btn" onClick={() => state.deleteSelected()} disabled={!state.selected()}>
-          Delete
+        <button
+          class="btn"
+          onClick={() => state.duplicateSelected()}
+          disabled={count() === 0}
+          title="Copy the selection. A linked pair is copied as a pair (Ctrl+D)"
+        >
+          {count() > 1 ? `Duplicate ${count()}` : 'Duplicate'}
         </button>
         <button
           class="btn"
-          disabled={!state.selectedIsLinked()}
-          onClick={() => state.breakSelectedLink()}
-          title="Cut this clip and its pair apart, so they edit independently"
+          onClick={() => state.deleteSelected()}
+          disabled={count() === 0}
+          title="Delete the selection. Only selected clips go — not their pairs"
         >
-          {state.selectedIsLinked() ? 'Break link' : 'unlinked'}
+          {count() > 1 ? `Delete ${count()}` : 'Delete'}
+        </button>
+        <button
+          class="btn"
+          disabled={!state.selectionHasLinks()}
+          onClick={() => state.breakSelectedLinks()}
+          title="Cut these clips and their pairs apart, so they edit independently"
+        >
+          {state.selectionHasLinks() ? 'Break link' : 'unlinked'}
         </button>
 
         <span class="mx-1 h-5 w-px bg-line" />
@@ -296,6 +363,7 @@ function targets(): SnapTarget[] {
           class="relative min-h-full select-none touch-none"
           style={{ width: `${contentWidth()}px` }}
           onPointerDown={onPointerDown}
+          onContextMenu={onContextMenu}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerUp}
@@ -313,13 +381,31 @@ function targets(): SnapTarget[] {
             </For>
           </div>
 
-          <LaneView lane="video" label="video" state={state} height={56} />
-          <LaneView lane="audio" label="audio" state={state} height={62} />
+          <LaneView lane="video" label="video" state={state} height={56}
+            setDropAt={setDropAt} isDropTarget={() => dropAt()?.lane === 'video'}
+            xToTime={state.xToTime} trackLeft={trackLeft} />
+          <LaneView lane="audio" label="audio" state={state} height={62}
+            setDropAt={setDropAt} isDropTarget={() => dropAt()?.lane === 'audio'}
+            xToTime={state.xToTime} trackLeft={trackLeft} />
 
           <Show when={!anyClips()}>
             <p class="pointer-events-none absolute inset-x-0 top-16 text-center text-[11.5px] text-muted">
               Click a file in Media to add it here.
             </p>
+          </Show>
+
+          {/* Where a dragged file would land. */}
+          <Show when={dropAt()}>
+            {(at) => (
+              <div
+                class="pointer-events-none absolute bottom-0 top-0 z-30 w-0.5 bg-accent"
+                style={{ left: `${state.timeToX(at().time)}px` }}
+              >
+                <span class="absolute -top-px left-1 rounded bg-accent px-1 text-[9px] font-semibold text-black">
+                  drop into {at().lane}
+                </span>
+              </div>
+            )}
           </Show>
 
           {/* The guide makes the magnet legible. A snap you cannot see is a
@@ -353,15 +439,44 @@ function targets(): SnapTarget[] {
   }
 }
 
-function LaneView(props: { lane: Lane; label: string; state: AppState; height: number }) {
+function LaneView(props: {
+  lane: Lane
+  label: string
+  state: AppState
+  height: number
+  setDropAt: (value: { lane: Lane; time: number } | null) => void
+  isDropTarget: () => boolean
+  xToTime: (x: number) => number
+  trackLeft: () => number
+}) {
   const state = props.state
   const clips = () => laneOf(state.project, props.lane)
+
+  function onDragOver(event: DragEvent): void {
+    // Without preventDefault the browser refuses the drop outright.
+    if (!event.dataTransfer?.types.includes(DND_ASSET)) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'copy'
+    props.setDropAt({ lane: props.lane, time: props.xToTime(event.clientX - props.trackLeft()) })
+  }
+
+  function onDrop(event: DragEvent): void {
+    const assetId = event.dataTransfer?.getData(DND_ASSET)
+    if (!assetId) return
+    event.preventDefault()
+    state.addAssetAt(assetId, props.lane, props.xToTime(event.clientX - props.trackLeft()))
+    props.setDropAt(null)
+  }
 
   return (
     <div
       class="relative border-b border-line-soft last:border-b-0"
+      classList={{ 'ring-1 ring-inset ring-accent/60': props.isDropTarget?.() }}
       data-lane={props.lane}
       style={{ height: `${props.height}px` }}
+      onDragOver={onDragOver}
+      onDragLeave={() => props.setDropAt(null)}
+      onDrop={onDrop}
     >
       <span class="panel-label pointer-events-none absolute right-2 top-1.5 z-10">{props.label}</span>
       <For each={clips()}>
@@ -377,7 +492,8 @@ function ClipView(props: { clip: Clip; index: number; state: AppState; lane: Lan
   const state = props.state
   const rect = () => state.clipRect(props.lane, props.index)
   const asset = () => state.getAsset(props.clip.assetId)
-  const isSelected = () => state.selected() === props.clip.id
+  const isSelected = () => state.isSelected(props.clip.id)
+  const isPrimary = () => state.primary() === props.clip.id
   const linked = () => (props.clip.linkId ? state.selectedPartner()?.linkId === props.clip.linkId : false)
 
   return (
@@ -385,10 +501,15 @@ function ClipView(props: { clip: Clip; index: number; state: AppState; lane: Lan
       class="group absolute top-1.5 cursor-grab overflow-hidden rounded-md border transition-shadow active:cursor-grabbing"
       classList={{
         selected: isSelected(),
-        'border-[#ffffff]/70 shadow-[0_0_0_1px_#ffffff,0_4px_14px_-4px_#000]': isSelected(),
+        // The primary clip carries the loud ring; the rest of the selection gets
+        // a quieter one. A uniform highlight cannot say which clip a solo
+        // action will hit, and "which one is this?" is the first question asked.
+        'border-[#ffffff]/70 shadow-[0_0_0_1px_#ffffff,0_4px_14px_-4px_#000]': isPrimary(),
+        'border-[#ffffff]/45 shadow-[0_0_0_1px_#ffffff/45]': isSelected() && !isPrimary(),
         'border-transparent': !isSelected(),
       }}
       data-clip-index={props.index}
+      data-clip-id={props.clip.id}
       style={{
         left: `${rect().left}px`,
         width: `${Math.max(2, rect().width)}px`,

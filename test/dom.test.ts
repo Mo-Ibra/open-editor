@@ -160,3 +160,61 @@ console.log('no-definite-assertion assertions passed')
 }
 
 console.log('ref-binding assertions passed')
+
+/**
+ * A panel rendered twice.
+ *
+ * This shipped once: the layout rewrite added a resizable timeline inside the
+ * main grid but left the original fixed-position one in place below it. Two
+ * timelines, both live, both wired to the same state.
+ *
+ * It type-checked cleanly and no unit test could see it, because a second
+ * `<Timeline state={state} menu={menu} />` is a perfectly valid element — the
+ * props match. Only the count is wrong. So the count is the assertion.
+ */
+{
+  const app = readFileSync(new URL('../src/app.tsx', import.meta.url), 'utf8')
+  // Only JSX usage: the import line and any local variable named e.g. `Timeline`
+  // are not element instantiations.
+  const singletons = ['AssetBin', 'Preview', 'Timeline', 'ExportDialog', 'ContextMenu']
+
+  const problems: string[] = []
+  for (const name of singletons) {
+    const uses = [...app.matchAll(new RegExp(`<${name}[\\s/>]`, 'g'))].length
+    if (uses !== 1) {
+      problems.push(`${name} is rendered ${uses} times, expected exactly 1`)
+    }
+  }
+  assert.deepEqual(problems, [], `duplicate or missing panels:\n  ${problems.join('\n  ')}`)
+  console.log(`  ${singletons.length} singleton panels rendered exactly once each`)
+}
+
+/**
+ * The context menu must open on a right click and only a right click.
+ *
+ * It once hung off `onPointerDown`, so every left click on a clip popped the
+ * menu open — which made clicking a clip to select it impossible. Nothing about
+ * that is visible to the type checker, and no unit test renders the timeline.
+ *
+ * The check is structural: a menu must not be opened from a pointerdown.
+ */
+{
+  const files = ['../src/ui/Timeline.tsx', '../src/ui/AssetBin.tsx', '../src/ui/Preview.tsx']
+  const problems: string[] = []
+  for (const rel of files) {
+    const code = readFileSync(new URL(rel, import.meta.url), 'utf8')
+    // Find each onPointerDown body and look for a menu being opened inside it.
+    const bodies = code.match(/onPointerDown=\{[^}]*\}[^>]*>|function onPointerDown[\s\S]*?\n  \}/g) ?? []
+    for (const body of bodies) {
+      if (/\bmenu\.(show|toggle)\(/.test(body)) {
+        problems.push(`${rel}: a context menu is opened from a pointer-down handler`)
+      }
+    }
+    // And the handler must exist, or right click has no menu at all.
+    if (/menu\.(show|toggle)\(/.test(code) && !/onContextMenu=/.test(code)) {
+      problems.push(`${rel}: opens a context menu but binds no onContextMenu`)
+    }
+  }
+  assert.deepEqual(problems, [], `context menu wiring:\n  ${problems.join('\n  ')}`)
+  console.log(`  context menus open on right click only (${files.length} components)`)
+}

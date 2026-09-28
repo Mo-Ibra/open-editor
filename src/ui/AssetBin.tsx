@@ -8,8 +8,9 @@
 
 import { For, Show } from 'solid-js'
 import type { AppState } from '../state.js'
+import type { ContextMenuState } from './ContextMenu.js'
 
-export function AssetBin(props: { state: AppState }) {
+export function AssetBin(props: { state: AppState; menu: ContextMenuState }) {
   const state = props.state
   let input!: HTMLInputElement
 
@@ -76,14 +77,36 @@ export function AssetBin(props: { state: AppState }) {
                     {(e) => (
                       <li>
                         <button
-                          class="group w-full rounded-md border border-transparent px-2 py-1.5 text-left
-                                 transition-colors hover:border-line hover:bg-raised"
-                          title={`Add ${e().asset.name} to the timeline`}
+                          class="group w-full rounded-md border px-2 py-1.5 text-left transition-colors hover:border-line hover:bg-raised"
+                          classList={{
+                            'border-accent/50 bg-accent/10': state.selectedAsset() === id,
+                            'border-transparent': state.selectedAsset() !== id,
+                          }}
+                          title={`${e().asset.name} — drag onto a lane, or double-click to append`}
+                          draggable={true}
+                          onDragStart={(ev) => {
+                            // HTML5 drag rather than pointer events: it gives a
+                            // native drag image and does not collide with the
+                            // timeline's pointer-capture drags.
+                            ev.dataTransfer?.setData(DND_ASSET, id)
+                            ev.dataTransfer?.setData('text/plain', e().asset.name)
+                            if (ev.dataTransfer) ev.dataTransfer.effectAllowed = 'copy'
+                          }}
                           onClick={(ev) => {
-                            state.addAssetToTimeline(id)
-                            // Hand focus back to the document so space is a
-                            // transport key again, not a re-trigger of this button.
+                            // A click only SELECTS. Adding to the timeline is a
+                            // double-click or a drag, so a stray click cannot
+                            // mutate the edit.
+                            state.setSelectedAsset(state.selectedAsset() === id ? null : id)
                             ev.currentTarget.blur()
+                          }}
+                          onDblClick={(ev) => {
+                            state.addAssetToTimeline(id)
+                            ev.currentTarget.blur()
+                          }}
+                          onContextMenu={(ev) => {
+                            ev.preventDefault()
+                            state.setSelectedAsset(id)
+                            props.menu.show({ kind: 'asset', assetId: id, x: ev.clientX, y: ev.clientY })
                           }}
                         >
                           <span class="flex items-center gap-1.5">
@@ -117,12 +140,17 @@ export function AssetBin(props: { state: AppState }) {
             </For>
           </ul>
 
-          <p class="px-2 py-2 text-[10.5px] text-muted">Click a file to append it to the timeline.</p>
+          <p class="px-2 py-2 text-[10.5px] leading-relaxed text-muted">
+            Drag a file onto a lane, or double-click to append it.
+          </p>
         </Show>
       </div>
     </aside>
   )
 }
+
+/** Shared with the timeline's drop handling. */
+export const DND_ASSET = 'application/x-open-editor-asset'
 
 function DropIcon() {
   return (

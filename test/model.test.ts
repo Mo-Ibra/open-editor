@@ -14,6 +14,7 @@ import {
   clipEnd,
   clipOffset,
   clipStart,
+  duplicateClips,
   emptyProject,
   findClip,
   isLinked,
@@ -340,4 +341,103 @@ check('a negative offset is normalised away on the way in', () => {
   const p: Project = { ...withAsset(), video: [clip('a', 0, 5), { ...clip('b', 0, 5), offset: -3 }] }
   assert.equal(clipOffset(p.video[1]!), 0, 'a negative offset reads as zero')
   assert.equal(clipStart(p.video, 1), 5, 'so the clip stays flush rather than overlapping its neighbour')
+})
+
+// ---------------------------------------------------------------------------
+// Duplicating
+//
+// A duplicate is only useful if the copy behaves like the original in every
+// respect *except* being a separate object. The trap is links: a copy that
+// keeps the original's linkId is not a copy, it is a second handle on the same
+// pair, and trimming it silently trims the original.
+// ---------------------------------------------------------------------------
+
+check('duplicating a clip puts the copy directly after it', () => {
+  const p: Project = { ...withAsset(), video: [clip('a', 0, 5)] }
+  const out = duplicateClips(p, ['a'])
+
+  assert.equal(out.video.length, 2)
+  assert.equal(out.video[0]!.id, 'a', 'the original stays first and untouched')
+  assert.equal(out.video[1]!.in, 0)
+  assert.equal(out.video[1]!.out, 5, 'the copy has the same source range')
+  assert.notEqual(out.video[1]!.id, 'a', 'but it is a different clip')
+  assert.equal(clipStart(out.video, 1), 5, 'the copy starts where the original ends')
+})
+
+check('duplicating a linked pair keeps the pair linked, and unlinked from the original', () => {
+  const p = appendAsset(withAsset(), 'a', asset())
+  assert.equal(p.video.length, 1)
+  assert.equal(p.audio.length, 1)
+  const originalLink = p.video[0]!.linkId
+  assert.ok(originalLink, 'appendAsset makes a linked pair')
+
+  const out = duplicateClips(p, [p.video[0]!.id, p.audio[0]!.id])
+
+  assert.equal(out.video.length, 2)
+  assert.equal(out.audio.length, 2)
+
+  const [v0, v1] = out.video
+  const [a0, a1] = out.audio
+  assert.equal(v0!.linkId, originalLink, 'the original pair is untouched')
+  assert.equal(v1!.linkId, a1!.linkId, 'the copies share one link')
+  assert.notEqual(v1!.linkId, originalLink, 'and it is a different link from the original')
+  assert.equal(v0!.linkId, a0!.linkId, 'the original halves still match each other')
+})
+
+check('a duplicated pair can be split without touching the original', () => {
+  // The whole point of a fresh linkId: editing the copy must not reach back.
+  const p = appendAsset(withAsset(), 'a', asset())
+  const out = duplicateClips(p, [p.video[0]!.id, p.audio[0]!.id])
+
+  const copyIndex = out.video.indexOf(out.video[1]!)
+  // The copy sits after the original, which is a full asset long, so the split
+  // point has to be measured from the copy's own start.
+  const cut = clipStart(out.video, copyIndex) + 2
+  const split = splitLinked(out, 'video', copyIndex, cut)
+  assert.equal(split.video.length, 3, 'the copy split into two')
+  assert.equal(split.audio.length, 3, 'and its partner split with it')
+  assert.equal(split.video[0]!.out, out.video[0]!.out, 'the original is exactly as it was')
+  assert.equal(split.video[0]!.linkId, out.video[0]!.linkId)
+  assert.notEqual(split.video[1]!.linkId, out.video[0]!.linkId)
+})
+
+check('duplicating an unlinked clip leaves it unlinked', () => {
+  const p: Project = { ...withAsset(), audio: [clip('a1', 0, 5, { lane: 'audio' })] }
+  const out = duplicateClips(p, ['a1'])
+  assert.equal(out.audio.length, 2)
+  assert.equal(out.audio[1]!.linkId, undefined, 'no link is invented where there was none')
+})
+
+check('duplicating several clips at once copies each of them', () => {
+  const p: Project = { ...withAsset(), video: [clip('a', 0, 5), clip('b', 0, 5), clip('c', 0, 5)] }
+  const out = duplicateClips(p, ['a', 'c'])
+  const ids = out.video.map((c) => c.id)
+  assert.equal(out.video.length, 5, 'three originals plus two copies')
+  assert.deepEqual(
+    ids.filter((id) => !['a', 'b', 'c'].includes(id)).length,
+    2,
+    'exactly two new clips',
+  )
+  // 'b' was not selected, so nothing was inserted next to it.
+  assert.equal(out.video.filter((c) => c.id === 'b').length, 1)
+})
+
+check('duplicating nothing changes nothing', () => {
+  const p: Project = { ...withAsset(), video: [clip('a', 0, 5)] }
+  assert.equal(duplicateClips(p, []), p, 'the same object, not a copy')
+})
+
+check('duplicating a clip that does not exist changes nothing', () => {
+  const p: Project = { ...withAsset(), video: [clip('a', 0, 5)] }
+  assert.equal(duplicateClips(p, ['nope']), p)
+})
+
+check('a duplicate does not disturb the clips around it', () => {
+  const p: Project = { ...withAsset(), video: [clip('a', 0, 5), clip('b', 0, 5)] }
+  const out = duplicateClips(p, ['a'])
+  const b = out.video.find((c) => c.id === 'b')!
+  // 'b' now starts after the copy instead of after 'a', which is the honest
+  // consequence of inserting a clip in front of it.
+  assert.equal(clipStart(out.video, out.video.indexOf(b)), 10)
+  assert.equal(out.video[0]!.id, 'a')
 })

@@ -10,9 +10,10 @@ import { createEffect, createSignal, onCleanup, onMount, Show } from 'solid-js'
 import { clipAtLane, sourceTimeAt } from '../project.js'
 import { renderBlank, renderFrame, type SourceImage } from '../render.js'
 import type { AppState } from '../state.js'
+import type { ContextMenuState } from './ContextMenu.js'
 import { log } from '../debug.js'
 
-export function Preview(props: { state: AppState }) {
+export function Preview(props: { state: AppState; menu: ContextMenuState }) {
   const state = props.state
   let canvas!: HTMLCanvasElement
   let cachedContext: CanvasRenderingContext2D | null = null
@@ -460,6 +461,10 @@ export function Preview(props: { state: AppState }) {
             width={1280}
             height={Math.round(1280 / aspect())}
             class="size-full cursor-col-resize rounded-md bg-black shadow-[0_0_0_1px_#23242c,0_18px_50px_-12px_#000]"
+            onContextMenu={(e) => {
+              e.preventDefault()
+              props.menu.show({ kind: 'preview', x: e.clientX, y: e.clientY })
+            }}
             onPointerDown={(e) => {
               e.currentTarget.setPointerCapture(e.pointerId)
               onScrub(e)
@@ -477,7 +482,7 @@ export function Preview(props: { state: AppState }) {
                       <span class="font-semibold">
                         {state.assetIds().length} file{state.assetIds().length === 1 ? '' : 's'} ready.
                       </span>{' '}
-                      Click one under <span class="text-accent">Media</span> to put it on the timeline.
+                      Double-click one under <span class="text-accent">Media</span>, or drag it onto a lane.
                     </>
                   ) : (
                     'Drop a video file anywhere to begin.'

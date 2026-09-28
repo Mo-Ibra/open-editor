@@ -356,6 +356,70 @@ export function placeClip(project: Project, lane: Lane, index: number, start: nu
   return { ...project, [lane]: next } as Project
 }
 
+/**
+ * Copy clips, placing each copy immediately after its original.
+ *
+ * A linked pair is copied *as a pair*: both halves get one fresh `linkId`, so
+ * the duplicate can be split or trimmed without dragging the original along.
+ * Giving each half its own id would silently break the link the moment anyone
+ * touched the copy.
+ *
+ * Each half is placed against its own lane, so a copy can overlap the clip
+ * that followed the original. That is not a new hazard — dragging a clip right
+ * already allows it — and resolving it here would mean inventing a ripple rule
+ * the model deliberately does not have.
+ */
+export function duplicateClips(project: Project, clipIds: Iterable<ClipId>): Project {
+  const ids = new Set(clipIds)
+  if (ids.size === 0) return project
+
+  // One new link id per original link, shared by the copies of both halves.
+  const copyLink = new Map<LinkId, LinkId>()
+  const nextCopyId = (clip: Clip): LinkId => {
+    if (!clip.linkId) return newId('lnk')
+    let made = copyLink.get(clip.linkId)
+    if (!made) {
+      made = newId('lnk')
+      copyLink.set(clip.linkId, made)
+    }
+    return made
+  }
+
+  // Only allocate once something actually matches, so a request for a clip
+  // that is not there returns the very same project. Callers rely on that to
+  // skip a history entry for a no-op.
+  let out: Project | null = null
+  let copied = 0
+
+  // Walk each lane front to back and insert directly after the source clip, so
+  // later indices are never invalidated by an earlier insert.
+  for (const lane of ['video', 'audio'] as const) {
+    const source = project[lane]
+    const next: Clip[] = []
+    for (let index = 0; index < source.length; index += 1) {
+      const clip = source[index]!
+      next.push(clip)
+      if (!ids.has(clip.id)) continue
+      if (!out) out = { ...project, video: project.video.slice(), audio: project.audio.slice() }
+
+      // The copy starts where the original ends.
+      const start = clipStart(source, index) + clipDuration(clip)
+      const copy: Clip = {
+        ...clip,
+        id: newId('clp'),
+        linkId: clip.linkId ? nextCopyId(clip) : undefined,
+      }
+      // Offset is relative to the end of whatever precedes the *copy*, which is
+      // the original — so this is a plain duration, not a timeline lookup.
+      next.push({ ...copy, offset: start - clipEnd(source, index) })
+      copied += 1
+    }
+    if (out) out[lane] = next
+  }
+
+  return copied === 0 ? project : out!
+}
+
 export function trimClip(project: Project, lane: Lane, index: number, inPoint: number, outPoint: number): Project {
   const clips = laneOf(project, lane)
   const clip = clips[index]

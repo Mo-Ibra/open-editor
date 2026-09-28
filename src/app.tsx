@@ -12,16 +12,28 @@ import { AssetBin } from './ui/AssetBin.js'
 import { Preview } from './ui/Preview.js'
 import { Timeline } from './ui/Timeline.js'
 import { ExportDialog } from './ui/ExportDialog.js'
-import { createAppState } from './state.js'
+import { createAppState, type AppState } from './state.js'
 import { dump, log } from './debug.js'
+import { createLayout } from './layout.js'
+import {
+  ContextMenu,
+  createContextMenu,
+  shouldSuppressNativeMenu,
+  type MenuItem,
+} from './ui/ContextMenu.js'
+import { Resizer } from './ui/Resizer.js'
 
 const SHORTCUTS: [string, string][] = [
   ['space', 'play'],
   ['S', 'split'],
+  ['⌘D', 'duplicate'],
   ['⌫', 'delete'],
   ['←→', 'step'],
-  ['D', 'overlay'],
-  ['M', 'mute'],
+  ['^click', 'add to selection'],
+  ['⇧click', 'extend selection'],
+  ['⌘A', 'select all'],
+  ['esc', 'deselect'],
+  ['M', 'mute selection'],
   ['G', 'snap'],
   ['⌘Z', 'undo'],
 ]
@@ -29,6 +41,8 @@ const SHORTCUTS: [string, string][] = [
 export function App() {
   const state = createAppState()
   const [exportOpen, setExportOpen] = createSignal(false)
+  const layout = createLayout()
+  const menu = createContextMenu()
 
   function onKeyDown(event: KeyboardEvent): void {
     const target = event.target as HTMLElement
@@ -37,14 +51,39 @@ export function App() {
     // one keypress both activate the button and do whatever it means globally.
     if (target.tagName === 'BUTTON' && (event.key === ' ' || event.key === 'Enter')) return
 
+    const accel = event.ctrlKey || event.metaKey
+
     switch (event.key) {
       case ' ':
         event.preventDefault()
         void state.togglePlay()
         break
+      case 'd':
+      case 'D':
+        // Duplicate, the one command worth a modifier: it is the only edit here
+        // that is both frequent and irreversible-feeling without undo.
+        if (!accel) break
+        event.preventDefault()
+        state.duplicateSelected()
+        break
+      case 'a':
+      case 'A':
+        if (!accel) break
+        event.preventDefault()
+        state.selectAll()
+        break
+      case 'Escape':
+        state.clearSelection()
+        menu.hide()
+        break
       case 's':
       case 'S':
-        if (state.project.video.length || state.project.audio.length) state.splitAt(state.playhead())
+        if (state.project.video.length || state.project.audio.length) {
+          // With several clips selected, S splits all of them; with one (or
+          // none) it keeps the old behaviour of splitting under the playhead.
+          if (state.selectionCount() > 1) state.splitSelectionAtPlayhead()
+          else state.splitAt(state.playhead())
+        }
         break
       case 'Backspace':
       case 'Delete':
@@ -67,7 +106,10 @@ export function App() {
         break
       case 'm':
       case 'M':
-        state.audio.setMuted(!state.audio.isMuted)
+        // M mutes the selection when there is one, and the master otherwise —
+        // otherwise you could never mute the whole project mid-edit.
+        if (state.selectedLanes().includes('audio')) state.toggleMuteSelected()
+        else state.audio.setMuted(!state.audio.isMuted)
         break
       case 'g':
       case 'G':
@@ -84,7 +126,18 @@ export function App() {
     }
   }
 
-  onMount(() => window.addEventListener('keydown', onKeyDown))
+  onMount(() => {
+    window.addEventListener('keydown', onKeyDown)
+    // The native menu is suppressed on app chrome only — see
+    // `shouldSuppressNativeMenu` for why text fields are excluded.
+    window.addEventListener(
+      'contextmenu',
+      (e) => {
+        if (shouldSuppressNativeMenu(e)) e.preventDefault()
+      },
+      { capture: true },
+    )
+  })
   onCleanup(() => {
     window.removeEventListener('keydown', onKeyDown)
     state.library.dispose()
@@ -146,15 +199,40 @@ export function App() {
       </header>
 
       {/* ---- body ---- */}
-      <div class="grid min-h-0 flex-1 grid-cols-[236px_minmax(0,1fr)]">
-        <AssetBin state={state} />
-        <main class="grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto]">
-          <Preview state={state} />
+      <div
+        class="relative grid min-h-0 flex-1"
+        style={{ 'grid-template-columns': `${layout.sidebarTrack()} minmax(0, 1fr)` }}
+      >
+        <div class="relative min-h-0 min-w-0 overflow-hidden">
+          <AssetBin state={state} menu={menu} />
+        </div>
+
+        {/* Drag or double-click to resize; double-click collapses. */}
+        <Resizer
+          axis="x"
+          // The boundary between the sidebar track and the rest.
+          at={{ left: layout.sidebarTrack() }}
+          onDrag={(e) => layout.beginSidebarDrag(e)}
+          onToggle={() => layout.toggleSidebar()}
+          collapsed={layout.sidebarCollapsed()}
+          title="Drag to resize · double-click to collapse"
+        />
+
+        <main class="grid min-h-0 min-w-0" style={{ 'grid-template-rows': `minmax(0, 1fr) ${layout.timelineTrack()}` }}>
+          <Preview state={state} menu={menu} />
+          <div class="relative min-h-0 min-w-0 overflow-hidden">
+            <Timeline state={state} menu={menu} />
+            <Resizer
+              axis="y"
+              at={{ top: '0px' }}
+              onDrag={(e) => layout.beginTimelineDrag(e)}
+              onToggle={() => layout.toggleTimeline()}
+              collapsed={layout.timelineCollapsed()}
+              title="Drag to resize · double-click to collapse"
+            />
+          </div>
         </main>
       </div>
-
-      {/* ---- timeline ---- */}
-      <Timeline state={state} />
 
       {/* ---- status ---- */}
       <footer class="flex h-7 shrink-0 items-center gap-3 border-t border-line bg-panel px-3 text-[10.5px] text-muted">
@@ -167,6 +245,8 @@ export function App() {
           )}
         </For>
       </footer>
+
+      <ContextMenu state={menu} items={() => menuItems(state, menu, layout)} />
 
       <Show when={exportOpen()}>
         <ExportDialog state={state} onClose={() => setExportOpen(false)} />
@@ -192,4 +272,108 @@ export function App() {
       </div>
     </div>
   )
+}
+
+/**
+ * The menu, built from what was right-clicked.
+ *
+ * Every row does something real. A context menu of disabled placeholders is
+ * worse than no context menu: it teaches people that the feature does not
+ * exist.
+ */
+function menuItems(
+  state: AppState,
+  menu: ReturnType<typeof createContextMenu>,
+  layout: ReturnType<typeof createLayout>,
+): MenuItem[] {
+  const target = menu.open()
+
+  if (target?.kind === 'clip') {
+    // The timeline's right-click already made the selection match the target,
+    // so these act on the whole selection — one clip, or a ctrl-clicked group.
+    const n = state.selectionCount()
+    const many = n > 1
+    const clips = state.selectedClips()
+    const linked = state.selectionHasLinks()
+    const hasAudio = clips.some((c) => c.lane === 'audio')
+    const allMuted = clips.filter((c) => c.lane === 'audio').every((c) => c.muted)
+    const count = (one: string, manyLabel: string) => (many ? manyLabel.replace('%d', String(n)) : one)
+
+    return [
+      // Disabled rather than hidden when nothing is selected, so the menu does
+      // not change shape as the pointer moves between clips.
+      { label: count('Split at playhead', 'Split %d clips at playhead'), shortcut: 'S', disabled: n === 0, run: () => state.splitSelectionAtPlayhead() },
+      { label: count('Duplicate', 'Duplicate %d clips'), shortcut: '⌘D', disabled: n === 0, run: () => state.duplicateSelected() },
+      { separator: true, label: '', run: () => undefined },
+      { label: count('Trim to playhead', 'Trim %d clips to playhead'), disabled: n === 0, run: () => state.trimSelectionToPlayhead() },
+      {
+        label: linked ? count('Break link', 'Break %d links') : 'unlinked',
+        disabled: !linked,
+        run: () => state.breakSelectedLinks(),
+      },
+      {
+        label: allMuted ? count('Unmute', 'Unmute %d clips') : count('Mute', 'Mute %d clips'),
+        shortcut: 'M',
+        disabled: !hasAudio,
+        run: () => state.toggleMuteSelected(),
+      },
+      { separator: true, label: '', run: () => undefined },
+      { label: count('Delete clip', 'Delete %d clips'), shortcut: '⌫', danger: true, disabled: n === 0, run: () => state.deleteSelected() },
+    ]
+  }
+
+  if (target?.kind === 'lane') {
+    const lane = target.lane ?? 'video'
+    const selectedFile = state.selectedAsset()
+    const file = selectedFile ? state.project.assets[selectedFile] : undefined
+    return [
+      {
+        label: file ? `Add "${file.name}" here` : 'Add the selected file here',
+        disabled: !file,
+        // Disabled rather than hidden when nothing is selected, so the menu
+        // does not change shape as the user moves between lanes.
+        run: () => selectedFile && state.addAssetAt(selectedFile, lane, state.playhead()),
+      },
+      { separator: true, label: '', run: () => undefined },
+      {
+        label: `Clear ${lane} lane`,
+        danger: true,
+        disabled: state.laneOf(state.project, lane).length === 0,
+        run: () => state.clearLane(lane),
+      },
+    ]
+  }
+
+  if (target?.kind === 'asset') {
+    return [
+      { label: 'Add to timeline', run: () => target.assetId && state.addAssetToTimeline(target.assetId) },
+      { label: 'Select', run: () => target.assetId && state.setSelectedAsset(target.assetId) },
+      { separator: true, label: '', run: () => undefined },
+      {
+        label: 'Remove from project',
+        danger: true,
+        run: () => target.assetId && state.removeAsset(target.assetId),
+      },
+    ]
+  }
+
+  if (target?.kind === 'preview') {
+    return [
+      { label: 'Fit to window', run: () => state.resetView() },
+      { label: 'Reset zoom', run: () => state.setTransformActive({ scale: 1, x: 0, y: 0 }) },
+      { separator: true, label: '', run: () => undefined },
+      { label: 'Copy logs', run: () => void navigator.clipboard?.writeText(dump()) },
+    ]
+  }
+
+  return [
+    { label: 'Undo', shortcut: '⌘Z', disabled: !state.canUndo(), run: state.undo },
+    { label: 'Redo', shortcut: '⇧⌘Z', disabled: !state.canRedo(), run: state.redo },
+    { separator: true, label: '', run: () => undefined },
+    { label: state.snapping() ? 'Snapping: on' : 'Snapping: off', shortcut: 'G', run: () => state.setSnapping(!state.snapping()) },
+    { label: state.audio.isMuted ? 'Unmute' : 'Mute', shortcut: 'M', run: () => state.audio.setMuted(!state.audio.isMuted) },
+    { separator: true, label: '', run: () => undefined },
+    { label: 'Reset panels', run: () => layout.reset() },
+    { label: 'Copy logs', run: () => void navigator.clipboard?.writeText(dump()) },
+  ]
 }
