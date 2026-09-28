@@ -448,79 +448,145 @@ export function Preview(props: { state: AppState }) {
   }
 
   return (
-    <div class="preview">
-      <div class="preview-stage" style={{ 'aspect-ratio': String(aspect()) }}>
-        <canvas
-          ref={canvas}
-          width={1280}
-          height={Math.round(1280 / aspect())}
-          onPointerDown={(e) => {
-            e.currentTarget.setPointerCapture(e.pointerId)
-            onScrub(e)
-          }}
-          onPointerMove={(e) => e.buttons === 1 && onScrub(e)}
-        />
+    <div class="flex min-h-0 flex-col bg-black">
+      {/* stage */}
+      <div class="relative grid min-h-0 flex-1 place-items-center overflow-hidden p-4">
+        <div
+          class="relative max-h-full max-w-full"
+          style={{ 'aspect-ratio': String(aspect()), width: 'min(100%, calc((100cqh) * ' + aspect() + '))' }}
+        >
+          <canvas
+            ref={canvas}
+            width={1280}
+            height={Math.round(1280 / aspect())}
+            class="size-full cursor-col-resize rounded-md bg-black shadow-[0_0_0_1px_#23242c,0_18px_50px_-12px_#000]"
+            onPointerDown={(e) => {
+              e.currentTarget.setPointerCapture(e.pointerId)
+              onScrub(e)
+            }}
+            onPointerMove={(e) => e.buttons === 1 && onScrub(e)}
+          />
+
+          {/* Empty state, rather than a black rectangle with no explanation. */}
+          <Show when={state.project.video.length === 0}>
+            <div class="absolute inset-0 grid place-items-center">
+              <div class="max-w-[38ch] text-center">
+                <p class="text-[13px] text-fg">
+                  {state.assetIds().length > 0 ? (
+                    <>
+                      <span class="font-semibold">
+                        {state.assetIds().length} file{state.assetIds().length === 1 ? '' : 's'} ready.
+                      </span>{' '}
+                      Click one under <span class="text-accent">Media</span> to put it on the timeline.
+                    </>
+                  ) : (
+                    'Drop a video file anywhere to begin.'
+                  )}
+                </p>
+              </div>
+            </div>
+          </Show>
+        </div>
       </div>
 
-      <div class="transport">
-        <button
-          onClick={() => state.togglePlay()}
-          title={state.duration() > 0 ? 'Play / pause (space)' : 'Add a clip to the timeline first'}
-        >
-          {state.playing() ? '❚❚' : '▶'}
-        </button>
-        <button onClick={() => state.step(-1)} title="Previous frame (←)">◀|</button>
-        <button onClick={() => state.step(1)} title="Next frame (→)">|▶</button>
-        <button
-          classList={{ muted: state.audio.isMuted }}
-          title={state.audio.isMuted ? 'Unmute (M)' : 'Mute (M)'}
-          onClick={() => state.audio.setMuted(!state.audio.isMuted)}
-        >
-          {state.audio.isMuted ? '🔇' : '🔊'}
-        </button>
+      {/* transport */}
+      <div class="flex h-12 shrink-0 items-center gap-3 border-t border-line bg-panel px-3">
+        <div class="flex items-center gap-1">
+          <button class="btn !px-2" onClick={() => state.step(-1)} title="Previous frame (←)">
+            <SkipIcon dir="left" />
+          </button>
+          <button
+            class="grid size-7 place-items-center rounded-full bg-fg text-bg transition-transform hover:scale-105 active:scale-95"
+            onClick={() => void state.togglePlay()}
+            title={state.playing() ? 'Pause (space)' : 'Play (space)'}
+          >
+            {state.playing() ? <PauseIcon /> : <PlayIcon />}
+          </button>
+          <button class="btn !px-2" onClick={() => state.step(1)} title="Next frame (→)">
+            <SkipIcon dir="right" />
+          </button>
+          <button
+            classList={{ 'btn !px-2': true, 'text-warn!': state.audio.isMuted }}
+            onClick={() => state.audio.setMuted(!state.audio.isMuted)}
+            title={state.audio.isMuted ? 'Unmute (M)' : 'Mute (M)'}
+          >
+            <SpeakerIcon muted={state.audio.isMuted} />
+          </button>
+        </div>
 
-        <span class="time">
-          {formatTime(state.playhead())} <span class="dim">/ {formatTime(state.duration())}</span>
-        </span>
+        <div class="timecode flex items-baseline gap-1.5 text-[12px]">
+          <span>{formatTime(state.playhead())}</span>
+          <span class="text-muted">/</span>
+          <span class="text-muted">{formatTime(state.duration())}</span>
+        </div>
 
-        <span class="spacer" />
+        <span class="flex-1" />
 
-        <span class="debug" title="playback state — tick count proves the rAF loop is running">
-          {state.project.video.length} video · {state.project.audio.length} audio
-          {' · '}
-          {state.playing() ? `playing (${ticks()} frames)` : 'stopped'}
-          {' · '}
-          ph {state.playhead().toFixed(3)}
-        </span>
-
-
-        <label class="zoom">
-          zoom
+        <label class="flex items-center gap-2 text-[10.5px] text-muted">
+          <span>zoom</span>
           <input
             type="range"
             min="10"
             max="400"
             step="10"
+            class="w-28"
             value={state.zoom()}
             onInput={(e) => state.setZoom(Number(e.currentTarget.value))}
           />
         </label>
-      </div>
 
-      <Show when={state.project.video.length === 0}>
-        <div class="empty">
-          <Show
-            when={state.assetIds().length > 0}
-            fallback={<p>Drop a video file anywhere to begin.</p>}
-          >
-            <p>
-              <strong>{state.assetIds().length} file{state.assetIds().length === 1 ? '' : 's'} ready.</strong>{' '}
-              Click one under <em>Media</em> to put it on the timeline.
-            </p>
-          </Show>
-        </div>
-      </Show>
+        <span
+          class="timecode rounded border border-line bg-raised px-1.5 py-0.5 text-[10px] text-muted"
+          title="playback state — the tick count proves the clock is running"
+        >
+          {state.playing() ? `playing ${ticks()}` : 'stopped'} · ph {state.playhead().toFixed(2)}
+        </span>
+      </div>
     </div>
+  )
+}
+
+function PlayIcon() {
+  return (
+    <svg viewBox="0 0 16 16" class="size-3" fill="currentColor">
+      <path d="M4 2.5v11l9-5.5-9-5.5Z" />
+    </svg>
+  )
+}
+
+function PauseIcon() {
+  return (
+    <svg viewBox="0 0 16 16" class="size-3" fill="currentColor">
+      <rect x="3.5" y="2.5" width="3.5" height="11" rx="1" />
+      <rect x="9" y="2.5" width="3.5" height="11" rx="1" />
+    </svg>
+  )
+}
+
+function SkipIcon(props: { dir: 'left' | 'right' }) {
+  return (
+    <svg viewBox="0 0 16 16" class="size-3.5" fill="currentColor" style={{ transform: props.dir === 'left' ? 'scaleX(-1)' : undefined }}>
+      <path d="M3 3h1.6v10H3V3Zm9 0v10l-6-5 6-5Z" />
+    </svg>
+  )
+}
+
+function SpeakerIcon(props: { muted: boolean }) {
+  return (
+    <svg viewBox="0 0 16 16" class="size-3.5" fill="currentColor">
+      <path d="M7 2.5 4.2 5H2v6h2.2L7 13.5v-11Z" />
+      {props.muted ? (
+        <path d="M10 6l3 4M13 6l-3 4" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round" />
+      ) : (
+        <path
+          d="M9.5 5.5a3.4 3.4 0 0 1 0 5M11.5 3.5a6 6 0 0 1 0 9"
+          stroke="currentColor"
+          stroke-width="1.3"
+          fill="none"
+          stroke-linecap="round"
+        />
+      )}
+    </svg>
   )
 }
 

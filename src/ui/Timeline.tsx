@@ -17,8 +17,6 @@ import type { AppState } from '../state.js'
 import { log } from '../debug.js'
 
 const HANDLE = 8
-const VIDEO_LANE_HEIGHT = 46
-const AUDIO_LANE_HEIGHT = 52
 
 type Drag =
   | { kind: 'playhead' }
@@ -57,9 +55,15 @@ export function Timeline(props: { state: AppState }) {
 
   function onPointerDown(event: PointerEvent): void {
     const target = event.target as HTMLElement
+    const lane = target.closest('[data-lane]')?.getAttribute('data-lane') as Lane | undefined
     track.setPointerCapture(event.pointerId)
 
-    const lane = (target.closest('[data-lane]')?.getAttribute('data-lane') as Lane | undefined) ?? null
+    // Every click positions the playhead, wherever it lands: ruler, empty lane,
+    // or on top of a clip. Position first, gesture second — a press is a seek
+    // that may turn into a drag, not one or the other.
+    const x = localX(event)
+    if (state.playing()) state.setPlaying(false)
+    state.seek(state.xToTime(x))
 
     if (target.dataset.handle === 'in' || target.dataset.handle === 'out') {
       if (!lane) return
@@ -67,17 +71,18 @@ export function Timeline(props: { state: AppState }) {
       drag = { kind: target.dataset.handle === 'in' ? 'trim-in' : 'trim-out', lane, index }
       return
     }
+
     if (target.dataset.clipIndex !== undefined && lane) {
       const index = Number(target.dataset.clipIndex)
-      const clip = laneOf(state.project, lane)[index]!
+      const clip = laneOf(state.project, lane)[index]
+      if (!clip) return
       state.setSelected(clip.id)
-      drag = { kind: 'move', lane, index, grabOffset: state.xToTime(localX(event)) - laneStart(lane, index) }
+      drag = { kind: 'move', lane, index, grabOffset: state.xToTime(x) - laneStart(lane, index) }
       return
     }
 
+    // Ruler or empty lane: a plain seek, and dragging keeps scrubbing.
     drag = { kind: 'playhead' }
-    state.setPlaying(false)
-    state.seek(state.xToTime(localX(event)))
   }
 
   function onPointerMove(event: PointerEvent): void {
@@ -145,15 +150,17 @@ export function Timeline(props: { state: AppState }) {
   })
 
   return (
-    <section class="timeline">
-      <div class="timeline-bar">
-        <button onClick={() => state.splitAt(state.playhead())} disabled={!state.project.video.length && !state.project.audio.length}>
+    <section class="flex h-[236px] shrink-0 flex-col border-t border-line bg-panel">
+      {/* toolbar */}
+      <div class="flex h-9 shrink-0 items-center gap-1.5 border-b border-line-soft px-2">
+        <button class="btn" onClick={() => state.splitAt(state.playhead())} disabled={!anyClips()}>
           Split
         </button>
-        <button onClick={() => state.deleteSelected()} disabled={!state.selected()}>Delete</button>
-
+        <button class="btn" onClick={() => state.deleteSelected()} disabled={!state.selected()}>
+          Delete
+        </button>
         <button
-          classList={{ ghost: !state.selectedIsLinked() }}
+          class="btn"
           disabled={!state.selectedIsLinked()}
           onClick={() => state.breakSelectedLink()}
           title="Cut this clip and its pair apart, so they edit independently"
@@ -161,67 +168,85 @@ export function Timeline(props: { state: AppState }) {
           {state.selectedIsLinked() ? 'Break link' : 'unlinked'}
         </button>
 
-        <span class="spacer" />
+        <span class="mx-1 h-5 w-px bg-line" />
 
         <Show when={state.selectedClip()}>
           {(clip) => (
-            <label class="level" title="Level of the selected audio clip">
-              level
-              <input
-                type="range"
-                min="0"
-                max="2"
-                step="0.01"
-                value={clip().gain ?? 1}
-                onInput={(e) => state.setClipGain(clip().id, Number(e.currentTarget.value))}
-              />
-              <span class="dim">{Math.round((clip().gain ?? 1) * 100)}%</span>
-              <Show when={clip().lane === 'audio'}>
-                <button classList={{ ghost: !clip().muted }} onClick={() => state.toggleMute(clip().id)}>
+            <Show when={clip().lane === 'audio'}>
+              <label class="flex items-center gap-2 text-[10.5px] text-muted">
+                level
+                <input
+                  type="range"
+                  min="0"
+                  max="2"
+                  step="0.01"
+                  class="w-24"
+                  value={clip().gain ?? 1}
+                  onInput={(e) => state.setClipGain(clip().id, Number(e.currentTarget.value))}
+                />
+                <span class="timecode w-8">{Math.round((clip().gain ?? 1) * 100)}%</span>
+                <button class="btn !py-0.5" onClick={() => state.toggleMute(clip().id)}>
                   {clip().muted ? 'muted' : 'live'}
                 </button>
-              </Show>
-            </label>
+              </label>
+            </Show>
           )}
         </Show>
 
-        <span class="dim">
+        <span class="flex-1" />
+
+        <span class="timecode pr-1 text-[10.5px] text-muted">
           {state.project.video.length} video · {state.project.audio.length} audio
         </span>
       </div>
 
-      <div class="scroller">
+      {/* ruler + lanes */}
+      <div class="min-h-0 flex-1 overflow-auto">
         <div
-          class="track"
           ref={track}
+          class="relative min-h-full select-none touch-none"
           style={{ width: `${contentWidth()}px` }}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerUp}
         >
-          <div class="ruler">
+          <div class="sticky top-0 h-6 border-b border-line bg-raised/80 backdrop-blur">
             <For each={ticks()}>
               {(tick) => (
-                <span class="tick" style={{ left: `${state.timeToX(tick)}px` }}>
+                <span
+                  class="absolute top-0 h-full border-l border-line pl-1.5 pt-1 timecode text-[9.5px] text-muted"
+                  style={{ left: `${state.timeToX(tick)}px` }}
+                >
                   {formatTick(tick)}
                 </span>
               )}
             </For>
           </div>
 
-          <LaneView lane="video" label="video" state={state} height={VIDEO_LANE_HEIGHT} />
-          <LaneView lane="audio" label="audio" state={state} height={AUDIO_LANE_HEIGHT} />
+          <LaneView lane="video" label="video" state={state} height={56} />
+          <LaneView lane="audio" label="audio" state={state} height={62} />
 
-          <Show when={!state.project.video.length && !state.project.audio.length}>
-            <p class="hint pad">Click a file in Media to add it here.</p>
+          <Show when={!anyClips()}>
+            <p class="pointer-events-none absolute inset-x-0 top-16 text-center text-[11.5px] text-muted">
+              Click a file in Media to add it here.
+            </p>
           </Show>
 
-          <div class="playhead" style={{ left: `${state.timeToX(state.playhead())}px` }} />
+          <div
+            class="pointer-events-none absolute bottom-0 top-0 z-20 w-px bg-accent"
+            style={{ left: `${state.timeToX(state.playhead())}px` }}
+          >
+            <span class="absolute -left-[5px] top-0 border-x-[5px] border-t-[6px] border-x-transparent border-t-accent" />
+          </div>
         </div>
       </div>
     </section>
   )
+
+  function anyClips(): boolean {
+    return state.project.video.length > 0 || state.project.audio.length > 0
+  }
 }
 
 function LaneView(props: { lane: Lane; label: string; state: AppState; height: number }) {
@@ -229,10 +254,16 @@ function LaneView(props: { lane: Lane; label: string; state: AppState; height: n
   const clips = () => laneOf(state.project, props.lane)
 
   return (
-    <div class="lane" data-lane={props.lane} style={{ height: `${props.height}px` }}>
-      <span class="lane-label">{props.label}</span>
+    <div
+      class="relative border-b border-line-soft last:border-b-0"
+      data-lane={props.lane}
+      style={{ height: `${props.height}px` }}
+    >
+      <span class="panel-label pointer-events-none absolute right-2 top-1.5 z-10">{props.label}</span>
       <For each={clips()}>
-        {(clip, index) => <ClipView clip={clip} index={index()} state={state} lane={props.lane} height={props.height - 12} />}
+        {(clip, index) => (
+          <ClipView clip={clip} index={index()} state={state} lane={props.lane} height={props.height - 12} />
+        )}
       </For>
     </div>
   )
@@ -247,30 +278,57 @@ function ClipView(props: { clip: Clip; index: number; state: AppState; lane: Lan
 
   return (
     <div
-      class="clip"
-      classList={{ selected: isSelected(), linked: linked() }}
+      class="group absolute top-1.5 cursor-grab overflow-hidden rounded-md border transition-shadow active:cursor-grabbing"
+      classList={{
+        selected: isSelected(),
+        'border-[#ffffff]/70 shadow-[0_0_0_1px_#ffffff,0_4px_14px_-4px_#000]': isSelected(),
+        'border-transparent': !isSelected(),
+      }}
       data-clip-index={props.index}
       style={{
         left: `${rect().left}px`,
         width: `${Math.max(2, rect().width)}px`,
         height: `${props.height}px`,
-        '--tint': props.lane === 'video' ? 'hsl(215 65% 52%)' : 'hsl(160 60% 42%)',
+        // Tint is a low-chroma wash; the waveform and the picture carry the colour.
+        'background-color': props.lane === 'video' ? '#1b2c47' : '#16342a',
+        'border-color': isSelected()
+          ? 'transparent'
+          : props.lane === 'video'
+            ? '#2a4674'
+            : '#1f5541',
       }}
       title={`${asset()?.name ?? 'missing'} — ${props.clip.in.toFixed(2)}s → ${props.clip.out.toFixed(2)}s`}
     >
-      <div class="handle in" data-handle="in" data-index={props.index} style={{ width: `${HANDLE}px` }} />
+      <div
+        class="absolute inset-y-0 left-0 z-20 cursor-ew-resize bg-white/0 transition-colors group-hover:bg-white/10"
+        style={{ width: `${HANDLE}px` }}
+        data-handle="in"
+        data-index={props.index}
+      />
 
       <Show when={props.lane === 'audio'}>
         <Waveform clip={props.clip} state={state} />
       </Show>
 
-      <span class="clip-name">{asset()?.name ?? '?'}</span>
+      <span class="pointer-events-none absolute left-2 top-1 z-10 max-w-[calc(100%-34px)] truncate text-[10.5px] text-fg/90 [text-shadow:0_1px_2px_#000a]">
+        {asset()?.name ?? '?'}
+      </span>
 
       <Show when={linked()}>
-        <span class="link-badge" title="Linked to its pair — edits apply to both">⛓</span>
+        <span
+          class="pointer-events-none absolute right-1.5 top-0.5 z-10 text-[9px] text-fg/60"
+          title="Linked to its pair — edits apply to both"
+        >
+          ⛓
+        </span>
       </Show>
 
-      <div class="handle out" data-handle="out" data-index={props.index} style={{ width: `${HANDLE}px` }} />
+      <div
+        class="absolute inset-y-0 right-0 z-20 cursor-ew-resize bg-white/0 transition-colors group-hover:bg-white/10"
+        style={{ width: `${HANDLE}px` }}
+        data-handle="out"
+        data-index={props.index}
+      />
     </div>
   )
 }
@@ -325,7 +383,7 @@ function Waveform(props: { clip: Clip; state: AppState }) {
     paint()
   })
 
-  return <canvas class="waveform" ref={canvas} style={{ width: `${rectWidth()}px` }} />
+  return <canvas ref={canvas} class="pointer-events-none absolute inset-0 size-full" style={{ width: `${rectWidth()}px` }} />
 }
 
 function formatTick(t: number): string {

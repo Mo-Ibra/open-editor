@@ -117,3 +117,46 @@ console.log('wiring assertions passed')
 }
 
 console.log('no-definite-assertion assertions passed')
+
+/**
+ * Every `let x!: DOMType` must actually be bound to a `ref={x}`.
+ *
+ * A dropped `ref` is the worst kind of bug: the `!` makes it compile, the
+ * variable stays `undefined`, and the first event that touches it throws
+ * somewhere unrelated. This shipped once — the timeline lost its `ref` during a
+ * rewrite, and clicking anywhere stopped working while split and delete kept
+ * working, so it read as "the playhead is broken" rather than "an exception is
+ * being thrown on every pointerdown".
+ */
+{
+  const { readdirSync, statSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const srcDir = new URL('../src/', import.meta.url).pathname
+
+  const walk = (dir: string): string[] =>
+    readdirSync(dir).flatMap((name) => {
+      const full = join(dir, name)
+      return statSync(full).isDirectory() ? walk(full) : full.endsWith('.tsx') ? [full] : []
+    })
+
+  const DOM_TYPE = /(HTML\w+Element|OffscreenCanvas|CanvasRenderingContext2D|SVG\w+Element)/
+  const problems: string[] = []
+
+  for (const file of walk(srcDir)) {
+    const raw = readFileSync(file, 'utf8')
+    const code = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+    const relative = file.replace(srcDir, 'src/')
+
+    for (const match of code.matchAll(/\blet\s+(\w+)!\s*:\s*([\w.]+)/g)) {
+      const [, name, type] = match
+      if (!DOM_TYPE.test(type ?? '')) continue
+      // Bound by a ref, or it is a lie to the compiler and a runtime throw.
+      const bound = new RegExp(`ref=\\{${name}\\}`).test(code) || new RegExp(`ref=\\{${name} as`).test(code)
+      if (!bound) problems.push(`${relative}: \`let ${name}!: ${type}\` has no ref={${name}}`)
+    }
+  }
+
+  assert.deepEqual(problems, [], `unbound definite-assignment assertions:\n  ${problems.join('\n  ')}`)
+}
+
+console.log('ref-binding assertions passed')

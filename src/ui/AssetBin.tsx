@@ -1,5 +1,9 @@
 /**
- * Asset bin: the dropped files, with real probed metadata.
+ * The media bin.
+ *
+ * Densely packed, because a folder of clips is a list, not a gallery — a
+ * thumbnail grid is prettier and slower to scan, and the metadata is what
+ * people actually compare on.
  */
 
 import { For, Show } from 'solid-js'
@@ -10,82 +14,122 @@ export function AssetBin(props: { state: AppState }) {
   let input!: HTMLInputElement
 
   const ids = () => state.assetIds()
+  const hasFiles = () => ids().length > 0
+
+  function choose(): void {
+    input.click()
+  }
+
+  function useFiles(files: File[]): void {
+    if (files.length) void state.addFiles(files)
+  }
 
   return (
-    <aside class="bin" onDragOver={(e) => e.preventDefault()} onDrop={(e) => {
-      e.preventDefault()
-      const files = [...(e.dataTransfer?.files ?? [])]
-      if (files.length) void state.addFiles(files)
-    }}>
-      <header>
-        <h2>Media</h2>
-        <button class="ghost" onClick={() => input.click()}>Add…</button>
+    <aside
+      class="flex min-h-0 flex-col border-r border-line bg-panel"
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={(e) => {
+        e.preventDefault()
+        useFiles([...(e.dataTransfer?.files ?? [])])
+      }}
+    >
+      <div class="flex h-9 shrink-0 items-center gap-2 border-b border-line-soft px-3">
+        <span class="panel-label">Media</span>
+        <span class="flex-1" />
+        <button class="btn btn-ghost !px-1.5 !py-0.5 text-[11px]" onClick={choose} disabled={state.loading()}>
+          {state.loading() ? 'reading…' : 'add'}
+        </button>
         <input
           ref={input}
           type="file"
-          accept="video/*"
+          accept="video/*,audio/*"
           multiple
           hidden
           onChange={(e) => {
-            const files = [...(e.currentTarget.files ?? [])]
-            if (files.length) void state.addFiles(files)
+            useFiles([...(e.currentTarget.files ?? [])])
             e.currentTarget.value = ''
           }}
         />
-      </header>
+      </div>
 
-      <Show when={ids().length === 0}>
-        <p class="hint pad">Drop video files here.</p>
-      </Show>
+      <div class="min-h-0 flex-1 overflow-y-auto p-1.5">
+        <Show
+          when={hasFiles()}
+          fallback={
+            <button
+              class="flex h-full w-full flex-col items-center justify-center gap-1.5 rounded-md border border-dashed
+                     border-line px-4 text-center text-muted transition-colors hover:border-[#3a3d4a] hover:text-fg"
+              onClick={choose}
+            >
+              <DropIcon />
+              <span class="text-[12px]">Drop files here</span>
+              <span class="text-[10.5px] opacity-70">or click to browse</span>
+            </button>
+          }
+        >
+          <ul class="flex flex-col gap-px">
+            <For each={ids()}>
+              {(id) => {
+                const entry = () => state.entryFor(id)
+                return (
+                  <Show when={entry()}>
+                    {(e) => (
+                      <li>
+                        <button
+                          class="group w-full rounded-md border border-transparent px-2 py-1.5 text-left
+                                 transition-colors hover:border-line hover:bg-raised"
+                          title={`Add ${e().asset.name} to the timeline`}
+                          onClick={(ev) => {
+                            state.addAssetToTimeline(id)
+                            // Hand focus back to the document so space is a
+                            // transport key again, not a re-trigger of this button.
+                            ev.currentTarget.blur()
+                          }}
+                        >
+                          <span class="flex items-center gap-1.5">
+                            <span
+                              class={`grid size-4 shrink-0 place-items-center rounded-[3px] text-[9px] font-bold ${
+                                e().asset.hasVideo ? 'bg-[#1e3a63] text-[#8fb6ff]' : 'bg-[#14402f] text-[#6fd39a]'
+                              }`}
+                            >
+                              {e().asset.hasVideo ? 'V' : 'A'}
+                            </span>
+                            <span class="truncate text-[12px]">{e().asset.name}</span>
+                          </span>
+                          <span class="mt-0.5 block pl-[22px] timecode text-[10px] text-muted">
+                            {e().asset.hasVideo && `${e().asset.width}×${e().asset.height} · `}
+                            {e().asset.variableFrameRate
+                              ? `vfr ~${e().asset.frameRate.toFixed(1)}`
+                              : `${e().asset.frameRate.toFixed(0)}fps`}
+                            {' · '}
+                            {formatDuration(e().asset.duration)}
+                            {e().asset.rotation !== 0 && ` · ${e().asset.rotation}°`}
+                          </span>
+                          <Show when={e().error}>
+                            <span class="mt-0.5 block pl-[22px] text-[10px] text-danger">{e().error}</span>
+                          </Show>
+                        </button>
+                      </li>
+                    )}
+                  </Show>
+                )
+              }}
+            </For>
+          </ul>
 
-      <Show when={state.loading()}>
-        <p class="hint pad">Reading…</p>
-      </Show>
-
-      <ul class="assets">
-        <For each={ids()}>
-          {(id) => {
-            const entry = state.entryFor(id)
-            if (!entry) return null
-            return (
-            <li>
-              <button
-                class="asset"
-                disabled={!!entry.error}
-                title={entry.error ?? `${entry.asset.width}×${entry.asset.height}`}
-                onDblClick={() => state.addClip(entry.asset.id)}
-                onClick={(e) => {
-                  state.addClip(entry.asset.id)
-                  // Hand focus back to the document, so space is a transport
-                  // key again instead of re-triggering this button.
-                  e.currentTarget.blur()
-                }}
-              >
-                <span class="name">{entry.asset.name}</span>
-                <span class="meta">
-                  {entry.asset.width}×{entry.asset.height}
-                  {' · '}
-                  {entry.asset.variableFrameRate
-                    ? `VFR ~${entry.asset.frameRate.toFixed(1)}`
-                    : `${entry.asset.frameRate.toFixed(0)}fps`}
-                  {' · '}
-                  {formatDuration(entry.asset.duration)}
-                  {entry.asset.rotation !== 0 && ` · ${entry.asset.rotation}°`}
-                </span>
-                <Show when={entry.error}>
-                  <span class="err">{entry.error}</span>
-                </Show>
-              </button>
-            </li>
-            )
-          }}
-        </For>
-      </ul>
-
-      <Show when={ids().length > 0}>
-        <p class="hint pad">Click to append to the timeline.</p>
-      </Show>
+          <p class="px-2 py-2 text-[10.5px] text-muted">Click a file to append it to the timeline.</p>
+        </Show>
+      </div>
     </aside>
+  )
+}
+
+function DropIcon() {
+  return (
+    <svg viewBox="0 0 24 24" class="size-5 opacity-60" fill="none" stroke="currentColor" stroke-width="1.5">
+      <path d="M12 16V4m0 0L8 8m4-4 4 4" stroke-linecap="round" stroke-linejoin="round" />
+      <path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" stroke-linecap="round" />
+    </svg>
   )
 }
 

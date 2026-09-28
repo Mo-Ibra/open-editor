@@ -228,6 +228,23 @@ if (encoder.encodeQueueSize > 16) {
 
 ---
 
+## 4a. UI
+
+Tailwind v4 (`@tailwindcss/vite`, no config file), design tokens declared in
+`src/index.css` under `@theme`. Four custom utilities: `btn`, `btn-primary`,
+`btn-ghost`, `panel-label`, `timecode`.
+
+**The one rule the visual design follows: the picture is the only thing that
+gets colour and space.** Every surface is a low-chroma near-neutral, clip tints
+are dark washes rather than saturated blocks, and the only strong colours in
+the app are the video, the playhead, and the primary button. An editor that
+decorates its own chrome is competing with the thing the user is looking at.
+
+Layout: top bar (44px) · media bin (236px) + preview · timeline (236px) ·
+status strip. Export is a **modal**, not a permanent bar — it is a task with a
+beginning and an end, and keeping it off the main surface gives the timeline
+its pixels back.
+
 ## 5. Stack
 
 Deliberately thin. Every dependency here is load-bearing.

@@ -1,5 +1,6 @@
 import { defineConfig, type Plugin } from 'vite'
 import solid from 'vite-plugin-solid'
+import tailwindcss from '@tailwindcss/vite'
 
 /**
  * Print the browser's debug logs in this terminal.
@@ -71,7 +72,7 @@ function terminalLogger(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [solid(), terminalLogger()],
+  plugins: [solid(), tailwindcss(), terminalLogger()],
   server: {
     port: 5173,
     headers: {
