@@ -11,6 +11,11 @@ Three kinds of document, and the difference matters:
   `ADR-4` means the same thing forever.
 - **Intent** — what is planned, what is known-fragile, what is undecided.
   `roadmap`, `risks`.
+- **Onboarding** — how to learn the thing. `reading-order`, `traces/`. Starts
+  where the others assume you already know something.
+
+**Start here if you are new:** [reading-order.md](reading-order.md), then any
+one of the [traces](traces/). The rest of this set assumes you have the map.
 
 The old `PLAN.md` mixed all three in one 754-line file, and drifted: its module
 map described files that were never written, and its type definitions showed
@@ -26,6 +31,8 @@ description honest.
 | [media.md](media.md) | How does a dropped file become decodable frames? |
 | [export.md](export.md) | How does a timeline become a playable file? |
 | [development.md](development.md) | How do I run, test, and add a test? |
+| [reading-order.md](reading-order.md) | I want to understand this codebase. What do I read, in what order, and what can I skip? |
+| [traces/](traces/) | What actually happens when I press a key? |
 | [decisions/](decisions/) | Why is it built this way? |
 | [risks.md](risks.md) | What is known to be weak? |
 | [roadmap.md](roadmap.md) | What comes next? |

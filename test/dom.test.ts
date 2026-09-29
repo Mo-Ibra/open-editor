@@ -501,3 +501,128 @@ console.log('ref-binding assertions passed')
   assert.match(written, /data-clip-index=\{props\.index\}/, 'and its index, which drag reads as a number')
   console.log(`  ${names.size} gesture attributes are both read and rendered`)
 }
+
+/**
+ * `file:line` references in the docs must still point at what they claim.
+ *
+ * The walkthroughs in `docs/traces/` are the study material for the whole
+ * codebase, and every one of them cites specific lines — `splitLinked` at
+ * `project.ts:446`, the "cache first" rule at `Preview.tsx:197`. A line-number
+ * reference is the most rot-prone thing a document can contain: the code moves,
+ * the sentence still reads perfectly, and the reader is now confidently sent to
+ * the wrong line.
+ *
+ * The check is deliberately weak — file exists, line is in range, line is not
+ * blank. It will not catch a citation that is *in range* but has drifted onto a
+ * neighbouring statement. It will catch a rename, a move, and a deleted file,
+ * which is where most of the rot comes from, and it costs one `readFileSync`.
+ *
+ * A blank line is treated as failure on purpose: a doc pointing at an empty line
+ * is a doc pointing at the place a function used to be.
+ */
+{
+  const repoRoot = new URL('..', import.meta.url).pathname
+  const docs: string[] = []
+  const walkDocs = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) walkDocs(full)
+      else if (entry.name.endsWith('.md')) docs.push(full)
+    }
+  }
+  walkDocs(join(repoRoot, 'docs'))
+  docs.push(join(repoRoot, 'README.md'))
+
+  const problems: string[] = []
+  const citedFiles = new Set<string>()
+  let checked = 0
+  const cache = new Map<string, string[]>()
+
+  for (const doc of docs) {
+    const body = readFileSync(doc, 'utf8')
+    // src/model/project.ts:446 — a real path, not a URL or a bare filename.
+    for (const match of body.matchAll(/\b((?:src|test)\/[a-zA-Z0-9._/-]+\.tsx?):(\d+)\b/g)) {
+      checked += 1
+      const [, path, lineText] = match
+      citedFiles.add(path!)
+      const line = Number(lineText)
+      const target = join(repoRoot, path!)
+      if (!existsSync(target)) {
+        problems.push(`${doc.replace(repoRoot, '')}: ${path} does not exist`)
+        continue
+      }
+      let lines = cache.get(path!)
+      if (!lines) {
+        lines = readFileSync(target, 'utf8').split('\n')
+        cache.set(path!, lines)
+      }
+      if (line < 1 || line > lines.length) {
+        problems.push(`${doc.replace(repoRoot, '')}: ${path}:${line} is past the end (${lines.length} lines)`)
+      } else if (!lines[line - 1]!.trim()) {
+        problems.push(`${doc.replace(repoRoot, '')}: ${path}:${line} is blank`)
+      }
+    }
+  }
+
+  assert.deepEqual(problems, [], `stale line references:\n  ${problems.join('\n  ')}`)
+
+  // A guard that matches nothing is a guard that cannot fail, and a count alone
+  // is easy to satisfy from one file. Both a floor and a spread are needed: the
+  // walkthroughs are the study material, and if they quietly lose their anchors
+  // this test should notice rather than pass on a handful of stale ones.
+  assert.ok(checked >= 15, `expected the docs to cite source lines often, found ${checked}`)
+  assert.ok(
+    citedFiles.size >= 8,
+    `expected the citations to span the codebase, found ${citedFiles.size} file(s): ${[...citedFiles].join(', ')}`,
+  )
+  console.log(
+    `  ${checked} file:line references across ${docs.length} docs, ` +
+      `spanning ${citedFiles.size} source files, all resolve`,
+  )
+}
+
+/**
+ * Relative links between documents must resolve.
+ *
+ * Distinct from the `docs/…#anchor` guard above, which only looks at references
+ * written *inside source comments*. Documentation links to documentation, and
+ * those are the links a newcomer actually clicks.
+ *
+ * This was added after two were found broken on the first run: a trace in
+ * `docs/traces/` citing `decisions/0004-…` resolves relative to its own
+ * directory, so it needed `../decisions/`. A link that renders fine and 404s on
+ * click is the worst kind of documentation bug, because the text around it
+ * still reads well.
+ */
+{
+  const repoRoot = new URL('..', import.meta.url).pathname
+  const markdown: string[] = []
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) walk(full)
+      else if (entry.name.endsWith('.md')) markdown.push(full)
+    }
+  }
+  walk(repoRoot)
+
+  const problems: string[] = []
+  let checked = 0
+
+  for (const doc of markdown) {
+    const body = readFileSync(doc, 'utf8')
+    for (const match of body.matchAll(/\[[^\]]*\]\(([^)\s#]+)(#[^)\s]*)?\)/g)) {
+      const target = match[1]!
+      if (/^(https?:|mailto:)/.test(target)) continue
+      checked += 1
+      if (!existsSync(join(doc, '..', target))) {
+        problems.push(`${doc.replace(repoRoot, '')} -> ${target}`)
+      }
+    }
+  }
+
+  assert.deepEqual(problems, [], `broken relative links:\n  ${problems.join('\n  ')}`)
+  assert.ok(checked >= 50, `expected the docs to cross-link heavily, found ${checked}`)
+  console.log(`  ${checked} relative links across ${markdown.length} documents, all resolve`)
+}

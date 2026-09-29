@@ -68,6 +68,8 @@ Start at [docs/README.md](docs/README.md).
 
 | | |
 |---|---|
+| [reading-order.md](docs/reading-order.md) | New here? What to read, in what order, and what to skip |
+| [traces/](docs/traces/) | What actually happens when you press a key, end to end |
 | [architecture.md](docs/architecture.md) | The modules and how they connect |
 | [data-model.md](docs/data-model.md) | Lanes, links, gaps, derived positions |
 | [media.md](docs/media.md) | Probing, VFR, rotation, frame cache, waveforms |
