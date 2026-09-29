@@ -230,3 +230,47 @@ changes the audio mixer's gain for a clip that was never in it.
 
 A snapshot of the two lane arrays. Structured clone, a few KB, push on every
 edit, capped at 100. There is no undo engine to build. Do not build one.
+
+
+---
+
+## Placing a clip: overwrite and insert
+
+A drop lands at a time, and what it does to what is already there is one of two
+things. Both fit the derived-position model without changing it, which is the
+reason they could be added at all.
+
+| Mode | Key | What happens to the material under the drop |
+|---|---|---|
+| `overwrite` | default | Replaced. A clip crossing either edge is **trimmed**, so its head and tail survive; a clip wholly inside is removed. |
+| `insert` | hold Shift | Nothing is lost. The clip goes into the array and everything after it moves right. |
+
+**Insert is almost free.** Because a clip's position is derived from the ones
+before it, inserting into the array *is* the push-along — no arithmetic, and
+nothing to keep in sync.
+
+**Overwrite has to re-encode the lane.** The clips after the drop are meant to
+stay exactly where they were, but their `offset` is relative to whatever ended
+before them, and the overwrite changed that. So `placeClipAt` records each
+survivor's *absolute* start, adds the new clip among them, and derives every
+offset in one pass at the end. Getting that second step wrong — advancing the
+cursor by the offset rather than by `cursor + offset` — drifts every later clip
+right by the total length of everything before it.
+
+### Six cases, and all six are load-bearing
+
+A clip can be entirely outside the span, entirely inside it, straddling the
+start, straddling the end, or straddling both — plus a clip that is exactly
+zero-length to begin with. Treating "entirely inside" as "straddles the end"
+yields a clip with `out < in`, which is a **corrupt clip**: the model calls it
+one, and something divides by zero downstream.
+
+### What a drop will accept
+
+- An **A/V file** becomes a *linked pair* on both lanes. The old behaviour kept
+  only the half you aimed at, which quietly discarded the other.
+- An **audio-only file** goes to the audio lane, wherever you drop it.
+- A **video-only file** goes to the video lane.
+- The lane is chosen by proximity, so the empty track above and below the lanes
+  is a valid target rather than dead space.
+- A file dragged in from the **desktop** is imported *and* placed, in one gesture.

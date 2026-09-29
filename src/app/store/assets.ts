@@ -21,14 +21,29 @@ import { log } from '../../dev/debug.js'
 import {
   appendAsset,
   newId,
-  placeClip,
+  placeClipAt,
+  type Asset,
   type AssetId,
   type Clip,
+  type ClipId,
+  type DropMode,
   type Lane,
   type Project,
 } from '../../model/project.js'
+import { collectTargets, nearestTarget, thresholdInSeconds } from '../../model/snapping.js'
 import type { Selection } from './selection.js'
 import type { History } from './history.js'
+
+/** One line saying what an asset is, for the import notice and the bin. */
+function describe(asset: Asset): string {
+  const kind = asset.hasVideo ? `${asset.width}×${asset.height}` : 'audio only'
+  const sound = asset.hasAudio
+    ? asset.hasVideo
+      ? `, ${asset.audioChannels}ch ${asset.audioCodec ?? 'audio'}`
+      : `${asset.audioChannels}ch ${asset.audioCodec ?? 'audio'}`
+    : ', no sound'
+  return `${kind}${sound} · ${Math.round(asset.duration * 100) / 100}s`
+}
 
 export interface AssetSlice {
   selectedAsset: Accessor<AssetId | null>
@@ -36,11 +51,16 @@ export interface AssetSlice {
   peaksBy: Record<string, Peak[]>
   loading: Accessor<boolean>
 
-  addFiles: (files: File[]) => Promise<void>
+  addFiles: (files: File[]) => Promise<AssetId[]>
+  dropFiles: (files: File[], lane: Lane, time: number, mode?: DropMode) => Promise<void>
   removeAsset: (assetId: AssetId) => void
   addAssetToTimeline: (assetId: AssetId) => void
   /** Add to a lane at a chosen position — used by drag-and-drop. */
-  addAssetAt: (assetId: AssetId, lane: Lane, start: number) => void
+  addAssetAt: (assetId: AssetId, lane: Lane, start: number, mode?: DropMode) => void
+  /** Where a drop would land once snapped, for the indicator. */
+  dropTimeFor: (raw: number) => number
+  /** Whether a file can go on a lane — drives the drop highlight. */
+  laneAccepts: (assetId: AssetId, lane: Lane) => boolean
   addClip: (assetId: AssetId) => void
 
   ids: () => AssetId[]
@@ -58,10 +78,16 @@ export interface AssetDeps {
   /** Write both lanes. The only way the timeline changes. */
   setLanes: (video: Clip[], audio: Clip[]) => void
   setAsset: (assetId: AssetId, asset: Project['assets'][string]) => void
+  /** Read for snapping a drop: the playhead is a snap target like any other. */
+  playhead: () => number
+  snapping: () => boolean
+  /** Timeline pixels per second, so the snap threshold is a fixed *screen* distance. */
+  pixelsPerSecond: () => number
 }
 
 export function createAssets(deps: AssetDeps): AssetSlice {
   const { project, library, audio, history, selection, notify, setLanes, setAsset } = deps
+  const { playhead, snapping, pixelsPerSecond } = deps
 
   /**
    * The bin's selected file. Selecting does NOT add it to the timeline — a
@@ -73,8 +99,16 @@ export function createAssets(deps: AssetDeps): AssetSlice {
    *  playhead move, so recomputing would make scrubbing unusable. */
   const [peaksBy, setPeaksBy] = createStore<Record<string, Peak[]>>({})
 
-  async function addFiles(files: File[]): Promise<void> {
+  /**
+   * Import files, returning the ids that came out usable.
+   *
+   * Returning them is what lets a drop place a file it just imported — without
+   * it, dropping a video from the desktop onto the timeline would import it and
+   * then have nowhere to put it.
+   */
+  async function addFiles(files: File[]): Promise<AssetId[]> {
     setLoading(true)
+    const added: AssetId[] = []
     for (const file of files) {
       try {
         const entry = await library.add(file)
@@ -83,13 +117,30 @@ export function createAssets(deps: AssetDeps): AssetSlice {
           continue
         }
         setAsset(entry.asset.id, entry.asset)
-        notify('info', `Added ${file.name} — ${entry.asset.width}×${entry.asset.height}`)
+        added.push(entry.asset.id)
+        // Describe what the file *is*. "tone.m4a — 0x0" tells the user nothing,
+        // and reads like the import failed.
+        notify('info', `Added ${file.name} — ${describe(entry.asset)}`)
         log.info('asset ready', { id: entry.asset.id, name: entry.asset.name })
       } catch (err) {
         notify('error', err instanceof Error ? err.message : String(err))
       }
     }
     setLoading(false)
+    return added
+  }
+
+  /**
+   * Import a dropped file and put it on the timeline where it was let go.
+   *
+   * Dropping a file from the desktop is the most natural gesture there is, and
+   * it used to import the file and leave it sitting in the bin. Doing both is
+   * the obvious behaviour.
+   */
+  async function dropFiles(files: File[], lane: Lane, time: number, mode: DropMode = 'overwrite'): Promise<void> {
+    const ids = await addFiles(files)
+    if (ids.length === 0) return
+    for (const id of ids) addAssetAt(id, lane, time, mode)
   }
 
   /** Drop a file and every clip that used it. */
@@ -129,49 +180,90 @@ export function createAssets(deps: AssetDeps): AssetSlice {
   }
 
   /**
-   * Add a file to one lane at a chosen timeline position.
+   * Drop a file onto the timeline at a position.
    *
-   * Used by drag-and-drop from the bin. The clip lands at `start`, so a drop
-   * into empty timeline leaves a gap exactly where the user let go.
+   * This is the whole of "drag a file onto the timeline", and it is one
+   * function because the interesting decisions are all about *where*, not about
+   * what:
+   *
+   * - **Which lane?** Whatever the drop landed on, if the file can go there.
+   *   Dropping an audio-only file on the video lane puts it on the audio lane
+   *   rather than refusing, because the user's aim was clear and only the lane
+   *   was wrong. A file with neither track is refused with a reason.
+   * - **One clip or a pair?** A file with picture *and* sound becomes a linked
+   *   pair, because that is what every editor does and what the user means by
+   *   "add this clip". The old behaviour — keeping only the half you aimed at —
+   *   quietly threw the other half away.
+   * - **Overwrite or insert?** Overwrite by default, and `insert` on Shift.
+   *   See `DropMode`.
    */
-  function addAssetAt(assetId: AssetId, lane: Lane, start: number): void {
+  function addAssetAt(assetId: AssetId, lane: Lane, start: number, mode: DropMode = 'overwrite'): void {
     const asset = project.assets[assetId]
     if (!asset) return
     if (!library.get(assetId)) return
 
+    const canVideo = asset.hasVideo && asset.duration > 0
+    const canAudio = asset.hasAudio
+    if (!canVideo && !canAudio) {
+      notify('warn', `${asset.name} has neither picture nor sound — there is nothing to put on the timeline.`)
+      return
+    }
+
+    // Aim for the lane that was dropped on; fall back to the other if the file
+    // cannot go where the pointer is.
+    let target: Lane
+    if (lane === 'video' && canVideo) target = 'video'
+    else if (lane === 'audio' && canAudio) target = 'audio'
+    else target = canVideo ? 'video' : 'audio'
+
+    const lanes: Lane[] = canVideo && canAudio ? ['video', 'audio'] : [target]
+    const time = Math.max(0, start)
+
     history.commit()
-    const wantVideo = lane === 'video' && asset.hasVideo
+    const linkId = lanes.length === 2 ? newId('lnk') : undefined
+    const added: ClipId[] = []
+    let next = unwrap(project)
 
-    if (wantVideo && !asset.hasAudio) {
-      // No audio half to link, so the clip stands alone.
-      const clip: Clip = { id: newId('clp'), lane: 'video', assetId, in: 0, out: asset.duration }
-      setLanes([...unwrap(project).video, clip], unwrap(project).audio)
-      selection.replaceAll([clip.id])
-      return
-    }
-    if (!wantVideo && !asset.hasAudio) {
-      notify('warn', `${asset.name} has no audio to add.`)
-      return
-    }
-
-    let next = appendAsset(unwrap(project), assetId, asset)
-    // Place each half of the pair where it was dropped, keeping only the half
-    // the user aimed at when the file has both.
-    for (const l of ['video', 'audio'] as const) {
-      if (!next[l].length) continue
-      if ((l === 'video') !== wantVideo && asset.hasVideo && asset.hasAudio) {
-        next = { ...next, [l]: next[l].slice(0, -1) }
-        continue
+    for (const l of lanes) {
+      const clip: Clip = {
+        id: newId('clp'),
+        lane: l,
+        assetId,
+        in: 0,
+        out: asset.duration,
+        ...(linkId ? { linkId } : {}),
       }
-      next = placeClip(next, l, next[l].length - 1, start)
+      next = placeClipAt(next, l, time, clip, mode)
+      added.push(clip.id)
     }
+
     setLanes(next.video, next.audio)
-    selection.replaceAll(
-      wantVideo
-        ? next.video.length ? [next.video.at(-1)!.id] : []
-        : next.audio.length ? [next.audio.at(-1)!.id] : [],
+    selection.replaceAll(added)
+    notify(
+      'info',
+      `Added ${asset.name} at ${formatTime(time)}` +
+        (lanes.length === 2 ? ' (linked picture and sound)' : '') +
+        (mode === 'insert' ? ' — pushed the rest along' : ''),
     )
-    notify('info', `Added ${asset.name} at ${formatTime(start)}`)
+  }
+
+  /** Where a drop of `assetId` on `lane` would land, snapped. */
+  function dropTimeFor(raw: number): number {
+    if (!snapping()) return Math.max(0, raw)
+    const targets = collectTargets(unwrap(project), {
+      playhead: playhead(),
+      includePlayhead: true,
+    })
+    const threshold = thresholdInSeconds(14, pixelsPerSecond())
+    const hit = nearestTarget(raw, targets, threshold)
+    return hit ? hit.time : Math.max(0, raw)
+  }
+
+  /** Whether `assetId` can go on `lane` at all — drives the drop highlight. */
+  function laneAccepts(assetId: AssetId, lane: Lane): boolean {
+    const asset = project.assets[assetId]
+    if (!asset) return false
+    return lane === 'video' ? asset.hasVideo && asset.duration > 0 : asset.hasAudio
   }
 
   const addClip = (assetId: AssetId): void => addAssetToTimeline(assetId)
@@ -208,9 +300,12 @@ export function createAssets(deps: AssetDeps): AssetSlice {
     peaksBy,
     loading,
     addFiles,
+    dropFiles,
     removeAsset,
     addAssetToTimeline,
     addAssetAt,
+    dropTimeFor,
+    laneAccepts,
     addClip,
     ids,
     get,

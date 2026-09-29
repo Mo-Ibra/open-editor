@@ -115,6 +115,7 @@ SolidJS components, no VDOM.
 | `app/view/LogPanel.tsx` | The log panel. Reads `logRevision()`, so a closed panel costs nothing. |
 | `app/view/ShortcutsPanel.tsx` | The keymap, as a panel rather than furniture. |
 | `app/view/format.ts` | `formatTime`, shared by the transport and the status bar. |
+| `app/view/timeline/DropCue.tsx` | The drop indicator: a caret, the clip's real extent, and whether it overwrites or inserts. |
 | `app/view/ExportDialog.tsx` | The export modal. Plays its own output before offering the download. |
 | `app/view/AssetBin.tsx` | Imported files. Select, double-click to append, drag onto a lane. |
 | `app/view/ContextMenu.tsx` | The application context menu. |

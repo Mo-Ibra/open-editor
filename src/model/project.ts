@@ -372,6 +372,188 @@ export function placeClip(project: Project, lane: Lane, index: number, start: nu
 }
 
 /**
+ * How a drop behaves against whatever is already there.
+ *
+ * Both modes exist in every professional editor, and they answer different
+ * questions: *insert* is "put this here and push the rest along", *overwrite* is
+ * "put this here and lose what was here".
+ *
+ * `overwrite` is the default, because a drop onto occupied space that silently
+ * shuffles everything along is the more surprising of the two — the user aimed
+ * at a spot, not at a re-layout of their whole edit.
+ */
+export type DropMode = 'overwrite' | 'insert'
+
+/** Index of the first clip starting at or after `time`, or the end of the lane. */
+function firstIndexAtOrAfter(clips: Clip[], time: number): number {
+  for (let i = 0; i < clips.length; i++) {
+    if (clipStart(clips, i) >= time - 1e-9) return i
+  }
+  return clips.length
+}
+
+/** Index of the clip covering `time`, or -1. */
+function indexCovering(clips: Clip[], time: number): number {
+  for (let i = 0; i < clips.length; i++) {
+    if (time >= clipStart(clips, i) - 1e-9 && time < clipEnd(clips, i) - 1e-9) return i
+  }
+  return -1
+}
+
+/**
+ * Split one clip at `time`, returning a new array.
+ *
+ * Null when the cut is too close to either end to produce two real clips — a
+ * zero-length clip is a corrupt clip, not an edit.
+ */
+function splitOne(clips: Clip[], index: number, time: number): Clip[] | null {
+  const clip = clips[index]!
+  const local = time - clipStart(clips, index)
+  if (local < MIN_CLIP || local > clipDuration(clip) - MIN_CLIP) return null
+
+  const left: Clip = { ...clip, out: clip.in + local }
+  const right: Clip = { ...clip, id: newId('clp'), in: clip.in + local, offset: 0 }
+  return [...clips.slice(0, index), left, right, ...clips.slice(index + 1)]
+}
+
+/**
+ * Put `clip` on `lane` starting at `time`, pushing later clips along.
+ *
+ * Works whether `time` is in a gap, inside a clip, or past the end — which is
+ * the whole point. Dropping inside a clip splits it, so the material after the
+ * drop point survives and simply moves down. That is what makes a drop
+ * "land where you let go" instead of being quietly appended to the end.
+ *
+ * The inserted clip's position comes entirely from being *in the array* at the
+ * right index, plus an `offset` for any gap the user aimed at. Nothing else is
+ * stored, so nothing else can drift.
+ */
+export function insertClipAt(project: Project, lane: Lane, time: number, clip: Clip): Project {
+  let clips = laneOf(project, lane)
+  const covering = indexCovering(clips, time)
+
+  if (covering >= 0) {
+    const split = splitOne(clips, covering, time)
+    // A null split means the cut is unusable, so the clip is inserted after the
+    // one it landed on rather than destroying it.
+    if (split) clips = split
+  }
+
+  const at = covering >= 0 ? covering + 1 : firstIndexAtOrAfter(clips, time)
+  const floor = at === 0 ? 0 : clipEnd(clips, at - 1)
+  const placed: Clip = { ...clip, offset: Math.max(0, time - floor) }
+
+  const next = [...clips.slice(0, at), placed, ...clips.slice(at)]
+  return { ...project, [lane]: next } as Project
+}
+
+/**
+ * What survives a cleared span, and the absolute time each should start at.
+ *
+ * Recorded as absolute times rather than offsets, because offsets are relative
+ * to whatever ended before them — and an overwrite *changes* what ended before
+ * them. Keeping the intent ("this clip starts at 6s") and re-deriving the
+ * encoding afterwards is what makes the tail of a straddling clip stay put
+ * instead of drifting.
+ */
+function survivorsInRange(clips: Clip[], start: number, end: number): { clip: Clip; from: number }[] {
+  const EPS = 1e-6
+  const survivors: { clip: Clip; from: number }[] = []
+  for (let i = 0; i < clips.length; i++) {
+    const clip = clips[i]!
+    const s = clipStart(clips, i)
+    const e = s + clipDuration(clip)
+
+    // Six cases, and all six are needed. Treating "fully inside" as "straddles
+    // the end" produced a clip with out < in — a zero-length clip, which the
+    // model calls a corrupt clip, and which divides by zero somewhere later.
+    if (e <= start + EPS || s >= end - EPS) {
+      survivors.push({ clip, from: s }) // entirely outside
+    } else if (s >= start - EPS && e <= end + EPS) {
+      continue // entirely inside: gone, and that is the point of overwriting
+    } else if (s < start && e > end) {
+      // Straddles both edges: a head and a tail. The tail resumes at source
+      // time `end - s`, so no footage is lost or repeated.
+      survivors.push({ clip: { ...clip, out: clip.in + (start - s) }, from: s })
+      survivors.push({ clip: { ...clip, id: newId('clp'), in: clip.in + (end - s) }, from: end })
+    } else if (s < start) {
+      survivors.push({ clip: { ...clip, out: clip.in + (start - s) }, from: s }) // head only
+    } else {
+      survivors.push({ clip: { ...clip, id: newId('clp'), in: clip.in + (end - s) }, from: end }) // tail only
+    }
+  }
+  return survivors
+}
+
+/**
+ * Turn desired absolute starts back into the model's derived encoding.
+ *
+ * `cursor` is the ABSOLUTE end of the previous survivor, so `from - cursor` is
+ * this one's gap, and the cursor advances by `cursor + offset` — not by
+ * `offset` alone, which would drift every later clip right by the total length
+ * of everything before it.
+ */
+function rederiveOffsets(items: { clip: Clip; from: number }[]): Clip[] {
+  const next: Clip[] = []
+  let cursor = 0
+  for (const { clip, from } of items) {
+    const offset = Math.max(0, from - cursor)
+    next.push({ ...clip, offset })
+    cursor = cursor + offset + clipDuration(clip)
+  }
+  return next
+}
+
+/**
+ * Remove everything between `start` and `end` from a lane.
+ *
+ * A clip crossing either edge is *trimmed*, not deleted: clearing the middle of
+ * a long clip leaves its head and its tail, which is not what "overwrite" means
+ * if you read it as "delete". Gaps outside the span are kept, so the tail does
+ * not slide left to fill the hole.
+ */
+export function clearLaneRange(project: Project, lane: Lane, start: number, end: number): Project {
+  if (end <= start) return project
+  const next = rederiveOffsets(survivorsInRange(laneOf(project, lane), start, end))
+  return { ...project, [lane]: next } as Project
+}
+
+/**
+ * Place a clip at `time` on `lane`: overwrite what is there, or push it along.
+ *
+ * The single entry point a drop should use, so "where does this go" has exactly
+ * one answer in the codebase.
+ *
+ * The two modes are genuinely different operations, not one with a flag:
+ *
+ * - `insert` splices the clip into the array and leaves every later `offset`
+ *   alone. Because position is derived, that *is* the push-along — everything
+ *   after moves right by the inserted length, with no arithmetic at all.
+ * - `overwrite` has to re-encode the lane, because the clips after the drop are
+ *   supposed to stay exactly where they were. It records the survivors' absolute
+ *   starts, adds the new clip among them, and derives every offset in one pass
+ *   at the end.
+ */
+export function placeClipAt(
+  project: Project,
+  lane: Lane,
+  time: number,
+  clip: Clip,
+  mode: DropMode,
+): Project {
+  if (mode === 'insert') return insertClipAt(project, lane, time, clip)
+
+  const end = time + clipDuration(clip)
+  const items = survivorsInRange(laneOf(project, lane), time, end)
+  // Put the new clip where it belongs among the survivors, keeping the list in
+  // the order the timeline should read in.
+  const at = items.findIndex((it) => it.from >= time - 1e-9)
+  const withNew = [...items.slice(0, at < 0 ? items.length : at), { clip, from: time }, ...items.slice(at < 0 ? items.length : at)]
+
+  return { ...project, [lane]: rederiveOffsets(withNew) } as Project
+}
+
+/**
  * Copy clips, placing each copy immediately after its original.
  *
  * A linked pair is copied *as a pair*: both halves get one fresh `linkId`, so

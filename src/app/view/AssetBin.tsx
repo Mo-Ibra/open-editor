@@ -90,7 +90,7 @@ export function AssetBin(props: { state: AppState; menu: ContextMenuState; layou
                             'border-accent/50 bg-accent/10': state.selectedAsset() === id,
                             'border-transparent': state.selectedAsset() !== id,
                           }}
-                          title={`${e().asset.name} — drag onto a lane, or double-click to append`}
+                          title={`${e().asset.name} — drag anywhere onto the timeline, or double-click to append`}
                           draggable={true}
                           onDragStart={(ev) => {
                             // HTML5 drag rather than pointer events: it gives a
@@ -98,7 +98,10 @@ export function AssetBin(props: { state: AppState; menu: ContextMenuState; layou
                             // timeline's pointer-capture drags.
                             ev.dataTransfer?.setData(DND_ASSET, id)
                             ev.dataTransfer?.setData('text/plain', e().asset.name)
-                            if (ev.dataTransfer) ev.dataTransfer.effectAllowed = 'copy'
+                            // `copyMove`, not `copy`: the timeline offers 'move' for an overwrite
+                            // drop, and an effect it did not allow is a drop the
+                            // browser silently refuses.
+                            if (ev.dataTransfer) ev.dataTransfer.effectAllowed = 'copyMove'
                           }}
                           onClick={(ev) => {
                             // A click only SELECTS. Adding to the timeline is a

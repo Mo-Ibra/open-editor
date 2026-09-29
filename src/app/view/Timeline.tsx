@@ -14,11 +14,18 @@ import { createEffect, createSignal, Show } from 'solid-js'
 import type { Lane } from '../../model/project.js'
 import type { AppState } from '../store/state.js'
 import type { ContextMenuState } from './ContextMenu.js'
-import { Lane as LaneView } from './timeline/Lane.js'
+import { DND_ASSET } from './AssetBin.js'
+import { Lane as LaneView, type DropPreview } from './timeline/Lane.js'
 import { Ruler } from './timeline/Ruler.js'
 import { Toolbar } from './timeline/Toolbar.js'
 import type { LayoutState } from '../store/layout.js'
 import { useTimelineDrag } from './timeline/use-timeline-drag.js'
+
+/** Lane row heights, in pixels. The drop target has to agree with what is drawn. */
+const LANE_HEIGHTS = [
+  ['video', 56],
+  ['audio', 62],
+] as const satisfies readonly (readonly [Lane, number])[]
 
 export function Timeline(props: { state: AppState; menu: ContextMenuState; layout: LayoutState }) {
   const state = props.state
@@ -26,7 +33,7 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
   let scrollerEl: HTMLDivElement | undefined
 
   /** Where a dragged file would land, while a drag is over the timeline. */
-  const [dropAt, setDropAt] = createSignal<{ lane: Lane; time: number } | null>(null)
+  const [dropAt, setDropAt] = createSignal<DropPreview | null>(null)
 
   const drag = useTimelineDrag(state, props.menu, {
     track: () => trackEl,
@@ -49,6 +56,102 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
 
   const trackLeft = (): number => trackEl?.getBoundingClientRect().left ?? 0
 
+  /**
+   * Which lane is a drop at `clientY` aimed at?
+   *
+   * The lanes do not fill the timeline — there is ruler above and a strip below,
+   * and dropping on either used to do nothing at all. So the whole track is a
+   * target, and the lane is chosen by proximity: nearest above, otherwise
+   * nearest below. "Whatever is closest" is how every editor resolves a drop
+   * that lands between tracks, and it removes the need to aim at a 56px strip.
+   */
+  function laneAtClientY(clientY: number): Lane {
+    const lanes: { lane: Lane; mid: number }[] = LANE_HEIGHTS.map(([lane]) => {
+      const el = trackEl?.querySelector(`[data-lane="${lane}"]`)
+      const r = el?.getBoundingClientRect()
+      return { lane, mid: r ? r.top + r.height / 2 : 0 }
+    })
+    return lanes.reduce((best, cur) =>
+      Math.abs(cur.mid - clientY) < Math.abs(best.mid - clientY) ? cur : best,
+    ).lane
+  }
+
+  const timeAtClientX = (clientX: number): number => state.xToTime(clientX - trackLeft())
+
+  /** Which lane would take this file? The one it can go on, nearest the pointer. */
+  function targetLane(assetId: string, clientY: number): Lane {
+    const nearest = laneAtClientY(clientY)
+    if (state.laneAccepts(assetId, nearest)) return nearest
+    return nearest === 'video' ? 'audio' : 'video'
+  }
+
+  const modeFor = (event: DragEvent): 'overwrite' | 'insert' => (event.shiftKey ? 'insert' : 'overwrite')
+
+  /** Does this drag carry a file we could import, rather than a known asset? */
+  const carriesFiles = (event: DragEvent): boolean =>
+    Array.from(event.dataTransfer?.types ?? []).includes('Files')
+
+  function onDragOverTrack(event: DragEvent): void {
+    const dt = event.dataTransfer
+    if (!dt) return
+    const internal = dt.types.includes(DND_ASSET)
+
+    // A file dragged in from the desktop is a legitimate drop, and the common
+    // one. It cannot be previewed before it is decoded, so the cue falls back to
+    // a fixed width and the real extent appears on landing.
+    if (!internal && !carriesFiles(event)) return
+    event.preventDefault()
+
+    const mode = modeFor(event)
+    dt.dropEffect = mode === 'insert' ? 'copy' : 'move'
+    const time = state.dropTimeFor(timeAtClientX(event.clientX))
+
+    if (internal) {
+      const assetId = dt.getData(DND_ASSET)
+      if (!assetId) return
+      setDropAt({
+        lane: targetLane(assetId, event.clientY),
+        time,
+        duration: state.getAsset(assetId)?.duration ?? 0,
+        assetId,
+        mode,
+      })
+    } else {
+      setDropAt({
+        lane: laneAtClientY(event.clientY),
+        time,
+        duration: 0,
+        assetId: '',
+        mode,
+        incoming: true,
+      })
+    }
+  }
+
+  function onDropTrack(event: DragEvent): void {
+    const dt = event.dataTransfer
+    if (!dt) return
+    const mode = modeFor(event)
+    const time = state.dropTimeFor(timeAtClientX(event.clientX))
+    setDropAt(null)
+
+    const assetId = dt.getData(DND_ASSET)
+    if (assetId) {
+      event.preventDefault()
+      state.addAssetAt(assetId, targetLane(assetId, event.clientY), time, mode)
+      return
+    }
+
+    const files = [...(dt.files ?? [])]
+    if (files.length > 0) {
+      event.preventDefault()
+      // Import *and* place, in one gesture. Importing alone left the file
+      // sitting in the bin, which is not what dropping a file on a timeline
+      // means anywhere else.
+      void state.dropFiles(files, laneAtClientY(event.clientY), time, mode)
+    }
+  }
+
   return (
     <section class="flex h-[236px] shrink-0 flex-col border-t border-line bg-panel">
       <Toolbar state={state} anyClips={anyClips} layout={props.layout} />
@@ -66,11 +169,13 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
           data-zoom={state.zoom()}
           onPointerDown={drag.onPointerDown}
           onContextMenu={drag.onContextMenu}
+          onDragOver={onDragOverTrack}
+          onDrop={onDropTrack}
           onPointerMove={drag.onPointerMove}
           onPointerUp={drag.onPointerUp}
           onPointerCancel={drag.onPointerUp}
         >
-          <Ruler state={state} />
+          <Ruler state={state} onDrop={onDropTrack} onDragOver={onDragOverTrack} />
 
           <LaneView
             lane="video"
@@ -95,20 +200,6 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
             <p class="pointer-events-none absolute inset-x-0 top-16 text-center text-[11.5px] text-muted">
               Double-click a file in Media, or drag one onto a lane.
             </p>
-          </Show>
-
-          {/* Where a dragged file would land. */}
-          <Show when={dropAt()}>
-            {(at) => (
-              <div
-                class="pointer-events-none absolute bottom-0 top-0 z-30 w-0.5 bg-accent"
-                style={{ left: `${state.timeToX(at().time)}px` }}
-              >
-                <span class="absolute -top-px left-1 rounded bg-accent px-1 text-[9px] font-semibold text-black">
-                  drop into {at().lane}
-                </span>
-              </div>
-            )}
           </Show>
 
           {/* The guide makes the magnet legible. A snap you cannot see is a

@@ -30,6 +30,9 @@ import {
   toSampleIndex,
   toggleMute,
   toggleHidden,
+  insertClipAt,
+  clearLaneRange,
+  placeClipAt,
   trimClip,
   type Asset,
   type Clip,
@@ -526,4 +529,124 @@ check('a video clip cannot be muted, and an audio clip cannot be hidden', () => 
   const q = toggleHidden(p, 'v1')
   assert.equal(q.video[0]!.hidden, true)
   assert.equal(toggleHidden(q, 'a1').audio[0]!.hidden, undefined, 'hiding audio is a no-op')
+})
+
+
+// ---------------------------------------------------------------------------
+// Dropping anywhere
+//
+// A drop used to append to the end of a lane and clamp, so letting go in the
+// middle of the edit did nothing recognisable. These pin the three cases a user
+// can actually aim at: a gap, the middle of a clip, and past the end.
+// ---------------------------------------------------------------------------
+
+const vid = (id: string, i: number, o: number, over: Partial<Clip> = {}): Clip => ({
+  id, lane: 'video', assetId: 'a', in: i, out: o, ...over,
+})
+
+const startsOf = (p: Project): number[] => p.video.map((_, i) => Math.round(clipStart(p.video, i) * 1000) / 1000)
+
+check('a drop into a gap leaves the gap and lands where it was aimed', () => {
+  // a: 0–5, then a 2s gap, then b: 7–9
+  const p: Project = { ...withAsset(), video: [vid('a', 0, 5), vid('b', 5, 7, { offset: 2 })] }
+  assert.deepEqual(startsOf(p), [0, 7], 'the gap is there before the drop')
+
+  const out = insertClipAt(p, 'video', 5, vid('n', 0, 2))
+  assert.deepEqual(startsOf(out), [0, 5, 9], 'inserted at 5, and b pushed from 7 to 9')
+  assert.equal(out.video.length, 3)
+  assert.equal(out.video[2]!.id, 'b', 'b is still b — it moved, it was not rebuilt')
+})
+
+check('a drop inside a clip splits it and keeps the tail', () => {
+  const p: Project = { ...withAsset(), video: [vid('a', 0, 10), vid('b', 0, 2)] }
+  const out = insertClipAt(p, 'video', 4, vid('n', 0, 1))
+
+  // a becomes two halves, so 2 clips in and 4 out: head, new, tail, then b.
+  assert.equal(out.video.length, 4)
+  assert.deepEqual(startsOf(out), [0, 4, 5, 11], 'head 0–4, new 4–5, tail 5–11 (6s of source), b at 11')
+  assert.equal(out.video[0]!.id, 'a', 'the head is still a')
+  assert.equal(out.video[3]!.id, 'b', 'and b was pushed along, not eaten')
+  assert.notEqual(out.video[2]!.id, 'a', 'the tail is a new clip with its own id')
+  assert.equal(out.video[2]!.in, 4, 'the tail starts at source time 4, so no footage is lost or repeated')
+  assert.equal(out.video[1]!.id, 'n', 'the new clip sits between the two halves')
+})
+
+check('a drop past the end appends with a gap', () => {
+  const p: Project = { ...withAsset(), video: [vid('a', 0, 5)] }
+  const out = insertClipAt(p, 'video', 12, vid('n', 0, 2))
+  assert.deepEqual(startsOf(out), [0, 12])
+  assert.equal(Math.round(clipEnd(out.video, 1) * 1000) / 1000, 14, 'and it is 2s long')
+})
+
+check('a drop at exactly a clip edge does not make a zero-length fragment', () => {
+  const p: Project = { ...withAsset(), video: [vid('a', 0, 5), vid('b', 0, 2)] }
+  const out = insertClipAt(p, 'video', 5, vid('n', 0, 1))
+  assert.equal(out.video.length, 3, 'inserted between them, not splitting either')
+  assert.equal(out.video.every((c) => clipDuration(c) > 0), true, 'no zero-length clip')
+})
+
+// --- overwrite --------------------------------------------------------------
+
+check('overwriting the middle of a clip keeps its head and tail', () => {
+  const p: Project = { ...withAsset(), video: [vid('a', 0, 10), vid('b', 0, 2)] }
+  const out = placeClipAt(p, 'video', 4, vid('n', 0, 2), 'overwrite')
+
+  // The drop straddles nothing, but `a` spans both edges of the 4–6 window, so
+  // it becomes a head and a tail. Four clips out, not three.
+  // The tail is a *new* clip, so it gets a fresh id — a new identity is what
+  // lets it be selected and trimmed without dragging the head along.
+  assert.equal(out.video.length, 4)
+  assert.deepEqual([out.video[0]!.id, out.video[1]!.id, out.video[3]!.id], ['a', 'n', 'b'])
+  assert.equal(out.video[2]!.id.startsWith('clp'), true, 'the tail has a generated id')
+  assert.equal(out.video[2]!.id === 'a', false, 'and is not the head')
+  assert.deepEqual(startsOf(out), [0, 4, 6, 10], 'head 0–4, new 4–6, tail 6–10, b still at 10')
+  assert.equal(out.video[0]!.out, 4, "a's head is trimmed to the drop point")
+  assert.equal(out.video[2]!.in, 6, "and its tail resumes at source 6, so no footage is lost")
+  assert.equal(out.video[3]!.id, 'b', 'b kept its identity, and its start time, exactly')
+})
+
+check('a clip wholly under a drop is removed, and one only partly is trimmed', () => {
+  // a: 0–2, b: 2–4, c: 4–6. Dropping 4s at t=1 covers 1–5.
+  const p: Project = { ...withAsset(), video: [vid('a', 0, 2), vid('b', 0, 2), vid('c', 0, 2)] }
+  const out = placeClipAt(p, 'video', 1, vid('n', 0, 4), 'overwrite')
+
+  // a loses its second half, b is entirely covered, c loses its first second.
+  assert.deepEqual(startsOf(out), [0, 1, 5], "a trimmed to 0–1, n at 1–5, c's tail at 5")
+  assert.equal(out.video.some((c) => c.id === 'b'), false, 'b was wholly under the drop, so it is gone')
+  assert.equal(out.video.at(-1)!.in, 1, "c's surviving second is at source 1, not re-read from 0")
+  assert.equal(
+    out.video.every((c) => clipDuration(c) > 0),
+    true,
+    'and no zero-length clip was left behind — out < in is a corrupt clip',
+  )
+})
+
+check('clearing a span on its own keeps the gaps outside it', () => {
+  const p: Project = { ...withAsset(), video: [vid('a', 0, 2), vid('b', 0, 2, { offset: 3 })] }
+  // a 0–2, gap, b 5–7. Clear 1–2 (the end of a).
+  const out = clearLaneRange(p, 'video', 1, 2)
+  assert.deepEqual(startsOf(out), [0, 5], "a's head keeps its place and b does not slide left")
+  assert.equal(out.video[0]!.out, 1, 'a was trimmed to the clear point')
+})
+
+check('insert mode never destroys anything', () => {
+  const p: Project = { ...withAsset(), video: [vid('a', 0, 10), vid('b', 0, 2)] }
+  const out = placeClipAt(p, 'video', 4, vid('n', 0, 1), 'insert')
+
+  // The invariant worth pinning is the *footage*, not the clip count: a split
+  // legitimately turns one clip into two, so counting clips proves nothing.
+  // Every second of source that was there before is still there after, plus the
+  // new clip's second.
+  const footage = (v: Clip[]): number => Math.round(v.reduce((n, c) => n + clipDuration(c), 0) * 1000) / 1000
+  assert.equal(footage(out.video), footage(p.video) + 1, 'no source footage lost, none gained')
+  assert.equal(out.video.some((c) => c.id === 'n'), true, 'and the new clip is there')
+  // Everything after the drop moved right, which is the whole of insert mode.
+  assert.equal(clipStart(out.video, out.video.length - 1) > clipStart(p.video, 1), true, 'b was pushed along')
+})
+
+check('a drop at zero is not negative', () => {
+  const p: Project = { ...withAsset(), video: [vid('a', 0, 5, { offset: 3 })] }
+  const out = insertClipAt(p, 'video', -5, vid('n', 0, 1))
+  assert.equal(startsOf(out)[0], 0, 'a clip can never start before the timeline')
+  assert.equal(out.video[0]!.offset, 0)
 })

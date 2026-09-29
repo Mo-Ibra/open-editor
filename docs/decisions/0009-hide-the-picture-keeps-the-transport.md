@@ -135,6 +135,14 @@ only reason it surfaced at all was that the probe ran repeatedly. Fixed by
 asking the question again where the answer matters: the decode re-resolves its
 clip and paints black if it is now hidden.
 
+## Not in this ADR: dropping anywhere
+
+A separate change with its own semantics, recorded in
+[docs/data-model.md](../data-model.md) and guarded in `test/dom.test.ts`. The
+short version: overwrite is the default and Shift means insert, because a drop
+onto occupied space that silently shuffles the whole edit is the more surprising
+of the two.
+
 ## What this cost in verification
 
 The probe that shipped the first version of this feature asserted

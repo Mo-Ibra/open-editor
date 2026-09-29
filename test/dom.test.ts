@@ -857,3 +857,66 @@ function repoRootFor(): string {
   assert.match(shortcuts, /keys: \['\?'\]/, 'the keymap needs a key of its own')
   console.log('  hide/mute, logs and keymap invariants hold')
 }
+
+/**
+ * Dropping must work *anywhere*, and say what it is about to do.
+ *
+ * The old behaviour was to append to the end of a lane and clamp, so letting go
+ * in the middle of the edit did nothing recognisable — the complaint that
+ * prompted all of this. The rules that fix it are invariants, and each of them
+ * was a bug at least once:
+ *
+ * - A drop onto a lane, the ruler, or the empty track below the lanes all work.
+ *   The lanes do not fill the timeline, and the gaps were dead space.
+ * - Overwrite is the default; Shift means insert. Red for one, amber for the
+ *   other, because the difference is the whole decision.
+ * - A clip fully inside an overwritten span is *removed*. Classifying it as
+ *   "straddles the end" produced a clip with out < in — a corrupt clip.
+ * - Overwrite re-derives offsets from absolute starts, so a clip after the drop
+ *   stays exactly where it was instead of drifting right.
+ * - An audio-only file is importable and goes to the audio lane. `loadAsset`
+ *   used to throw "has no video track", so the app could not import a voice memo
+ *   at all, despite the model having `hasVideo: false` for exactly that case.
+ */
+{
+  const read = (f: string): string => readFileSync(join(repoRootFor(), f), 'utf8')
+  const probe = read('src/media/probe.ts')
+  const model = read('src/model/project.ts')
+  const timeline = read('src/app/view/Timeline.tsx')
+  const lane = read('src/app/view/timeline/Lane.tsx')
+  const cue = read('src/app/view/timeline/DropCue.tsx')
+  const assets = read('src/app/store/assets.ts')
+
+  // --- audio-only files are first-class ---------------------------------
+  assert.doesNotMatch(
+    probe,
+    /throw new Error\(`\$\{file\.name\} has no video track`\)/,
+    'an audio-only file must not be rejected — the model has hasVideo:false for it',
+  )
+  assert.match(
+    probe,
+    /if \(!video\) \{[\s\S]*?if \(!audio\)[\s\S]*?hasVideo: false[\s\S]*?hasAudio: true/,
+    'and it must produce an asset with hasVideo:false rather than throwing',
+  )
+
+  // --- the six cases of an overwrite ------------------------------------
+  assert.match(model, /s >= start - EPS && e <= end \+ EPS\) \{\s*continue/, 'a clip wholly inside the span is removed')
+  assert.match(model, /cursor = cursor \+ offset \+ clipDuration\(clip\)/, 'the cursor is an absolute end, so offsets cannot drift')
+  assert.match(model, /export function placeClipAt\(/, 'overwrite and insert share one entry point')
+
+  // --- the whole track is a target -------------------------------------
+  assert.match(timeline, /onDragOver=\{onDragOverTrack\}/, 'the track itself accepts a drop')
+  assert.match(timeline, /onDrop=\{onDropTrack\}/, '')
+  assert.match(timeline, /function laneAtClientY/, 'and a drop between lanes picks the nearest one')
+  assert.match(timeline, /state\.dropFiles\(files/, 'a file from the desktop is imported *and* placed')
+  const ruler = read('src/app/view/timeline/Ruler.tsx')
+  assert.match(ruler, /onDragOver=\{props\.onDragOver\}/, 'the ruler accepts a drop too')
+  assert.match(ruler, /onDrop=\{props\.onDrop\}/, '')
+  assert.match(lane, /event\.shiftKey \? 'insert' : 'overwrite'/, 'shift is insert, otherwise overwrite')
+
+  // --- the cue shows the real extent, and says which mode ---------------
+  assert.match(cue, /data-drop-caret=\{at\(\)\.mode\}/, 'the caret records the mode, for the tests and for the eye')
+  assert.match(cue, /at\(\)\.incoming === true/, 'and hides an extent it does not know')
+  assert.match(assets, /const lanes: Lane\[\] = canVideo && canAudio \? \['video', 'audio'\]/, 'a file with both tracks makes a linked pair')
+  console.log('  dropping works anywhere, in both modes, for both kinds of file')
+}

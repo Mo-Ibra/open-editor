@@ -43,9 +43,44 @@ export async function loadAsset(file: File, id: AssetId = newId('ast')): Promise
   const video = await input.getPrimaryVideoTrack()
   const audio = await input.getPrimaryAudioTrack()
 
+  /**
+   * An audio-only file is a first-class source, not a broken one.
+   *
+   * This used to throw "has no video track", which meant the app could not
+   * import a voice memo or a music bed at all — despite the media bin accepting
+   * `audio/*`, the model carrying `hasVideo: false` specifically for this case,
+   * and half the timeline being an audio lane. The type had been designed for
+   * it; only the loader had not.
+   *
+   * Nothing here is a guess: the duration comes from the container, the audio
+   * figures from the track. `width`/`height` stay 0 because there is no picture
+   * to measure, and a zero-sized *asset* is honest in a way that inventing a
+   * frame size would not be.
+   */
   if (!video) {
-    input.dispose()
-    throw new Error(`${file.name} has no video track`)
+    if (!audio) {
+      input.dispose()
+      throw new Error(`${file.name} has neither picture nor sound — nothing to import`)
+    }
+    const audioOnly: Asset = {
+      id,
+      name: file.name,
+      duration: await input.computeDuration(),
+      width: 0,
+      height: 0,
+      rotation: 0,
+      frameRate: 0,
+      variableFrameRate: false,
+      hasVideo: false,
+      hasAudio: true,
+      audioSampleRate: await audio.getSampleRate(),
+      audioChannels: await audio.getNumberOfChannels(),
+      videoCodec: null,
+      audioCodec: await audio.getCodec(),
+      size: file.size,
+    }
+    log.info('probed: audio only', { name: file.name, codec: audioOnly.audioCodec, duration: audioOnly.duration })
+    return { asset: audioOnly, file, input, decodable: true, reason: null }
   }
 
   const duration = await input.computeDuration()

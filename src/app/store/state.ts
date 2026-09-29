@@ -129,6 +129,12 @@ export function createAppState() {
     notify,
     setLanes,
     setAsset: (assetId, asset) => setProject('assets', assetId, asset),
+    // Deferred, because `transport` is built after this: it needs `edits`, which
+    // needs the assets. Reading it lazily keeps the two slices from needing each
+    // other at construction time — the same trick the transport slice uses.
+    playhead: () => transport.playhead(),
+    snapping,
+    pixelsPerSecond: zoom,
   })
 
   // Declared before `edits` reads it, and only ever called once playback is
@@ -215,9 +221,12 @@ export function createAppState() {
     setSelectedAsset: assets.setSelectedAsset,
     peaksBy: assets.peaksBy,
     addFiles: assets.addFiles,
+    dropFiles: assets.dropFiles,
     removeAsset: assets.removeAsset,
     addAssetToTimeline: assets.addAssetToTimeline,
     addAssetAt: assets.addAssetAt,
+    dropTimeFor: assets.dropTimeFor,
+    laneAccepts: assets.laneAccepts,
     addClip: assets.addClip,
     assetIds: assets.ids,
     entryFor: (assetId: AssetId) => library.get(assetId),
