@@ -29,6 +29,7 @@ import {
   toFrameIndex,
   toSampleIndex,
   toggleMute,
+  toggleHidden,
   trimClip,
   type Asset,
   type Clip,
@@ -480,4 +481,49 @@ check('muting an audio clip leaves the video lane alone', () => {
 check('muting a clip that does not exist changes nothing', () => {
   const p: Project = { ...withAsset(), audio: [clip('a', 0, 5, { lane: 'audio' })] }
   assert.equal(toggleMute(p, 'nope'), p)
+})
+
+
+// ---------------------------------------------------------------------------
+// `toggleHidden` — the video counterpart of `toggleMute`
+//
+// Same reasoning as mute, but the stakes are higher: a `hidden` flag that
+// reached the exporter would write a black run into somebody's file. The two
+// flags are kept separate so neither lane can hold the other's state.
+// ---------------------------------------------------------------------------
+
+check('a video clip can be hidden and shown again', () => {
+  const p = { ...withAsset(), video: [clip('v1', 0, 5)] }
+  const hidden = toggleHidden(p, 'v1')
+  assert.equal(hidden.video[0]!.hidden, true)
+  assert.equal(toggleHidden(hidden, 'v1').video[0]!.hidden, false, 'and it toggles back')
+})
+
+check('hiding is not removing: the clip keeps its place and its link', () => {
+  const p = { ...withAsset(), video: [clip('v1', 0, 5, { linkId: 'L1' }), clip('v2', 5, 10)] }
+  const hidden = toggleHidden(p, 'v1')
+  assert.equal(hidden.video.length, 2, 'the clip is still on the timeline')
+  assert.equal(hidden.video[0]!.id, 'v1', 'and in the same lane position')
+  assert.equal(hidden.video[0]!.linkId, 'L1', 'and still linked, so edits stay together')
+})
+
+check('an audio clip cannot be hidden', () => {
+  // The mirror of the mute rule. A `hidden` flag on a clip with no picture
+  // would be a second way to say "muted", and two ways to say one thing is how
+  // they drift apart.
+  const p = { ...withAsset(), audio: [clip('a1', 0, 5, { lane: 'audio' })] }
+  const out = toggleHidden(p, 'a1')
+  assert.equal(out.audio[0]!.hidden, undefined, 'no hide flag on a clip with no picture')
+  assert.equal(out, p, 'and the project is returned untouched')
+})
+
+check('a video clip cannot be muted, and an audio clip cannot be hidden', () => {
+  // The two flags must never be interchangeable, or a caller could silence a
+  // video clip's audio by "hiding" it.
+  const p = { ...withAsset(), video: [clip('v1', 0, 5)], audio: [clip('a1', 0, 5, { lane: 'audio' })] }
+  assert.equal(toggleMute(p, 'v1').video[0]!.muted, undefined)
+  assert.equal(toggleMute(p, 'a1').audio[0]!.muted, true)
+  const q = toggleHidden(p, 'v1')
+  assert.equal(q.video[0]!.hidden, true)
+  assert.equal(toggleHidden(q, 'a1').audio[0]!.hidden, undefined, 'hiding audio is a no-op')
 })

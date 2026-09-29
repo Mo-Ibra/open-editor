@@ -626,3 +626,234 @@ console.log('ref-binding assertions passed')
   assert.ok(checked >= 50, `expected the docs to cross-link heavily, found ${checked}`)
   console.log(`  ${checked} relative links across ${markdown.length} documents, all resolve`)
 }
+
+/**
+ * The panel and picture controls must stay wired.
+ *
+ * Every one of these is a feature that "works" while being unreachable: a
+ * button nobody renders, a shortcut whose action is `undefined`, a picture that
+ * can be hidden with no way back. The layout store has supported collapsing the
+ * sidebar and the timeline since before the buttons existed — via a
+ * double-click on a 1px hairline — which is precisely how a feature can be
+ * complete and invisible at the same time.
+ *
+ * The transport height is checked here too, because `PREVIEW_TRANSPORT_ONLY`
+ * duplicates it. A constant that has to match a class in another file is a
+ * constant that will eventually not.
+ */
+{
+  const read = (file: string): string => readFileSync(join(repoRootFor(), file), 'utf8')
+  const app = read('src/app/view/App.tsx')
+  const transport = read('src/app/view/preview/Transport.tsx')
+  const layout = read('src/app/store/layout.ts')
+
+  // The two collapse buttons exist and call the real actions.
+  for (const [file, panel, action] of [
+    ['src/app/view/AssetBin.tsx', 'media', 'toggleSidebar'],
+    ['src/app/view/timeline/Toolbar.tsx', 'timeline', 'toggleTimeline'],
+  ] as const) {
+    const source = read(file)
+    assert.match(source, new RegExp(`PanelToggle\\b`), `${file} must render a PanelToggle`)
+    assert.match(source, new RegExp(`panel="${panel}"`), `${file} must name its panel`)
+    assert.match(source, new RegExp(`layout\\.${action}\\(\\)`), `${file} must call ${action}`)
+  }
+
+  // The picture controls, in the transport.
+  assert.match(transport, /onTogglePicture/, 'the transport must offer a picture toggle')
+  assert.match(transport, /onToggleFullscreen/, 'and a full screen toggle')
+  assert.match(transport, /data-preview-action="picture"/, 'both need a hook for the tests to find')
+  assert.match(transport, /data-preview-action="fullscreen"/, '')
+
+  // The store actually implements the three actions the UI calls.
+  for (const action of ['toggleSidebar', 'toggleTimeline', 'togglePicture']) {
+    assert.match(layout, new RegExp(`function ${action}\\(`), `layout must define ${action}`)
+  }
+
+  // The duplicated constant must still match the class it stands in for.
+  const { PREVIEW_TRANSPORT_ONLY } = (await import('../src/app/store/layout.ts')) as {
+    PREVIEW_TRANSPORT_ONLY: number
+  }
+  assert.match(
+    transport,
+    new RegExp(`h-\\[${PREVIEW_TRANSPORT_ONLY}px\\]`),
+    `PREVIEW_TRANSPORT_ONLY is ${PREVIEW_TRANSPORT_ONLY}px, so the transport must be ` +
+      `h-[${PREVIEW_TRANSPORT_ONLY}px] — not a rem-based Tailwind step, which would ` +
+      'change under a root font size',
+  )
+
+  // And the full-screen seam is the only place a request is made, so the menu
+  // and the shortcut cannot drift from the button.
+  const fullscreen = read('src/app/view/fullscreen.ts')
+  assert.match(fullscreen, /requestFullscreen/, 'the seam must own the request')
+  assert.equal(
+    app.includes('requestFullscreen'),
+    false,
+    'App must not call requestFullscreen directly; it would bypass the active-state tracking',
+  )
+  console.log('  panel and picture controls are all wired')
+}
+
+// Small helper so the block above reads as one thing.
+function repoRootFor(): string {
+  return new URL('..', import.meta.url).pathname
+}
+
+/**
+ * The preview's 2D context cache must stay keyed on its element.
+ *
+ * This is a regression guard for a bug that only showed up in a terminal: after
+ * hiding the picture and showing it again, `<Show>` unmounted the canvas and the
+ * `ref` rebound to a new element, but the cached context still pointed at the
+ * destroyed one. Every render then drew into a canvas that was no longer in the
+ * document, and the health check printed
+ *
+ *     layout: canvas on-screen 0x0 at 0,0  display= visibility= opacity=
+ *
+ * every five seconds for the rest of the session. The empty `display=` is the
+ * tell: `getComputedStyle` on a *detached* element returns empty strings.
+ *
+ * Source-level, because the failure needs a real canvas lifecycle and a real
+ * unmount to reproduce, and no unit test here has a DOM.
+ */
+{
+  const preview = readFileSync(join(repoRootFor(), 'src/app/view/Preview.tsx'), 'utf8')
+
+  assert.match(
+    preview,
+    /if \(cachedContext && contextFor === canvas\)/,
+    'the context cache must be keyed on the element it came from',
+  )
+  assert.match(preview, /contextFor = canvas/, 'and must record which element it belongs to')
+  assert.doesNotMatch(
+    preview,
+    /if \(cachedContext\) return cachedContext/,
+    'a bare context cache outlives the canvas when the picture is hidden and shown again',
+  )
+
+  // And drawing must stop when there is nothing on screen to draw onto.
+  assert.match(
+    preview,
+    /if \(props\.layout\.pictureHidden\(\)\) \{[\s\S]{0,120}return/,
+    'draw() must bail out while the picture is hidden, not render into a dead canvas',
+  )
+
+  // The diagnostics must know the difference between "broken" and "requested".
+  const diag = readFileSync(join(repoRootFor(), 'src/dev/preview-diagnostics.ts'), 'utf8')
+  assert.match(diag, /if \(f\.layout\.hidden\) return null/, 'a hidden picture must not raise a fault')
+  console.log('  the preview context cache is keyed on its element, and hidden is not a fault')
+}
+
+/**
+ * A collapsed panel's own control must be reachable.
+ *
+ * Three separate bugs hid behind "the collapse button is there":
+ *
+ * 1. The button lived *inside* the panel header, and a collapsed panel is 0px
+ *    with `overflow-hidden` — so it was clipped out of existence. `elementFromPoint`
+ *    returned the panel next door. The user could collapse a panel and not bring
+ *    it back, except by double-clicking a 1px hairline.
+ * 2. The tab that replaced it was `pointerdown` *and* `click`, and the two fought:
+ *    pointerdown expanded the panel, then the click collapsed it again.
+ * 3. The tab was a child of the 0-height timeline, so the same `overflow-hidden`
+ *    clipped it — in the DOM, with a real box, responding to `.click()`, and
+ *    unclickable by a human.
+ *
+ * And a fourth, found while fixing these: `onClick={collapsed() ? onToggle : undefined}`
+ * did not fire at all. A raw click reached the element and the handler never ran.
+ * A conditional *handler* is a value the delegated dispatcher must read at
+ * dispatch time; a branch *inside* the handler has no such dependency. Always
+ * attach, and decide inside.
+ *
+ * These need a real layout to reproduce, so they are source-level guards plus the
+ * browser probe described in each comment above.
+ */
+{
+  const resizer = readFileSync(join(repoRootFor(), 'src/app/view/Resizer.tsx'), 'utf8')
+  const app = readFileSync(join(repoRootFor(), 'src/app/view/App.tsx'), 'utf8')
+
+  // A visible tab whenever a panel is collapsed.
+  assert.match(resizer, /data-panel-tab=/, 'a collapsed panel must expose a hit-testable tab')
+  assert.match(resizer, /<Show when=\{collapsed\(\)\}>\s*<ExpandTab/, 'and render a real tab for it')
+
+  // The handler must be attached unconditionally, or the click silently vanishes.
+  assert.doesNotMatch(
+    resizer,
+    /onClick=\{collapsed\(\)\?/,
+    'a conditional onClick does not fire under Solid event delegation — branch inside the handler instead',
+  )
+  assert.match(resizer, /onClick=\{\(\) => \{[\s\S]{0,200}if \(collapsed\(\)\) props\.onToggle\(\)/, 'always attach, and decide inside')
+
+  // The handle must not live inside the clipped panel.
+  const main = app.slice(app.indexOf('<main'), app.indexOf('</main>'))
+  // The clipping div must close immediately after the Timeline. If a Resizer
+  // appeared between them, the handle would be a child of a 0-height,
+  // overflow-hidden box and therefore unclickable.
+  assert.match(
+    main,
+    /overflow-hidden"\s*>\s*<Timeline[\s\S]{0,120}?\/>\s*<\/div>/,
+    'the timeline handle must be a sibling of the panel, not a child of a box that clips its overflow',
+  )
+  // And it is positioned from the bottom, which is the boundary only while the
+  // timeline is the last row — the case where it is not rendered at all.
+  assert.match(main, /at=\{\{ bottom: layout\.timelineTrack\(\) \}\}/, 'the handle sits on the bottom row boundary')
+  console.log('  collapsed panels expose a reachable tab, outside the clipped panel')
+}
+
+/**
+ * Invariants for the hide/mute, logs and keymap work.
+ *
+ * Each of these was a bug at least once, and every one of them is invisible to
+ * the type checker — a stale element, a racing decode, a timer that removes the
+ * wrong row. The browser probes that found them are described at each guard.
+ */
+{
+  const read = (f: string): string => readFileSync(join(repoRootFor(), f), 'utf8')
+  const preview = read('src/app/view/Preview.tsx')
+  const app = read('src/app/view/App.tsx')
+  const state = read('src/app/store/state.ts')
+  const shortcuts = read('src/app/commands/shortcuts.ts')
+  const exporter = read('src/output/exporter.ts')
+
+  // --- hiding a clip must beat a frame that is already decoding -----------
+  // Intermittent by nature: it depended on whether the decode outlasted the
+  // keystroke, so it passed one run and failed the next. Hiding does not move
+  // the playhead, so the existing staleness check could not see it.
+  assert.match(
+    preview,
+    /const current = clipAtLane\(state\.project\.video, forTime\)[\s\S]{0,200}current\?\.clip\.hidden/,
+    'a decoded frame must re-check whether its clip was hidden while it was in flight',
+  )
+
+  // --- fullscreen must be registered from a ref, not onMount --------------
+  // `onMount` runs once per component; the stage lives in a `<Show>` that
+  // unmounts it. After hide-then-show the seam held the destroyed element and
+  // every browser refused the request.
+  assert.match(
+    preview,
+    /ref=\{\(el\) => props\.fullscreen\.register\(el\)\}/,
+    'the fullscreen target must be registered by a ref callback, so a new stage replaces the old',
+  )
+  assert.doesNotMatch(preview, /onMount\(\(\) => props\.fullscreen\.register/, 'onMount never re-runs for a recreated element')
+
+  // --- a notice must expire itself, not the newest one -------------------
+  // `slice(0, -1)` removed whichever notice was last, so a burst of them had
+  // its earliest timer delete the newest message.
+  assert.match(state, /prev\.filter\(\(n\) => n\.id !== notice\.id\)/, 'a notice must be withdrawn by its own id')
+  assert.doesNotMatch(state, /setNotices\(\(prev\) => prev\.slice\(0, -1\)\)/, 'expiry must not remove by position')
+
+  // --- the export must agree with the preview about hidden ---------------
+  assert.match(exporter, /clipRendersBlack\(clip, Boolean\(entry\?\.videoSink\)\)/, 'the export decides black by the same rule the preview does')
+
+  // --- the keymap must not be furniture ----------------------------------
+  assert.doesNotMatch(
+    app.slice(app.indexOf('function StatusFooter')),
+    /shortcutLegend|props\.rows/,
+    'the status footer shows state, not a permanent keymap',
+  )
+  assert.match(app, /<ShortcutsPanel shortcuts=\{shortcuts\}/, 'the keymap lives in a panel')
+  assert.match(app, /<LogPanel onClose=/, 'and the logs are shown, not only copied')
+  // `?` must still find it, or moving it made it harder to reach than the thing
+  // it replaced.
+  assert.match(shortcuts, /keys: \['\?'\]/, 'the keymap needs a key of its own')
+  console.log('  hide/mute, logs and keymap invariants hold')
+}

@@ -27,7 +27,7 @@ const store = new Map<string, string>()
   innerHeight: 900,
 }
 
-const { createLayout, LIMITS } = await import('../src/app/store/layout.ts')
+const { createLayout, LIMITS, STORAGE_KEY, mainRows, PREVIEW_TRANSPORT_ONLY } = await import('../src/app/store/layout.ts')
 
 // The layout module persists to a shared localStorage, so every test needs a
 // clean one — otherwise a collapsed panel leaks into the next test and the
@@ -107,7 +107,7 @@ test('the restore size survives a reload even while collapsed', () => {
 })
 
 test('a corrupt preference file falls back to defaults instead of throwing', () => {
-  store.set('open-editor:layout:v2', '{not json')
+  store.set(STORAGE_KEY, '{not json')
   const layout = createLayout()
   assert.equal(layout.sidebarWidth(), 236)
   assert.equal(layout.timelineHeight(), 236)
@@ -115,7 +115,7 @@ test('a corrupt preference file falls back to defaults instead of throwing', () 
 
 test('an out-of-range persisted size is repaired on load, not applied', () => {
   store.set(
-    'open-editor:layout:v2',
+    STORAGE_KEY,
     JSON.stringify({ sidebarWidth: 99_999, timelineHeight: -40 }),
   )
   const layout = createLayout()
@@ -182,4 +182,93 @@ test('the sidebar handle does not invert: right means wider', () => {
   layout.beginSidebarDrag(pointer(0, 0))
   for (const m of moves) m(pointer(40, 0))
   assert.equal(layout.sidebarWidth(), before + 40)
+})
+
+/**
+ * Hiding the picture.
+ *
+ * The whole feature is one boolean and one grid string, so the tests are the
+ * feature's real documentation — there is not much else to assert.
+ */
+test('hiding the picture leaves the transport bar, and the timeline takes the slack', () => {
+  const layout = createLayout()
+  assert.equal(layout.pictureHidden(), false)
+
+  layout.togglePicture()
+  assert.equal(layout.pictureHidden(), true)
+  assert.equal(
+    mainRows(layout.pictureHidden(), layout.timelineTrack()),
+    `${PREVIEW_TRANSPORT_ONLY}px minmax(0, 1fr)`,
+    'a hidden picture should leave the transport bar and give the timeline everything else',
+  )
+
+  layout.togglePicture()
+  assert.equal(layout.pictureHidden(), false)
+  assert.equal(
+    mainRows(layout.pictureHidden(), layout.timelineTrack()),
+    `minmax(0, 1fr) ${layout.timelineTrack()}`,
+    'showing it again must restore the previous arrangement exactly',
+  )
+})
+
+test('the picture is not restored from a size, because it never had one', () => {
+  // The collapse-twice trap: a panel that remembers "0px" as its size and
+  // restores *to* 0. The picture is a mode, not a size, so there is nothing to
+  // get wrong — and the grid string is the only thing that changes.
+  const layout = createLayout()
+  layout.setTimelineHeight(300)
+  const before = mainRows(layout.pictureHidden(), layout.timelineTrack())
+  layout.togglePicture()
+  layout.togglePicture()
+  assert.equal(mainRows(layout.pictureHidden(), layout.timelineTrack()), before)
+  assert.equal(layout.timelineHeight(), 300, 'hiding the picture must not disturb the timeline size')
+})
+
+test('hiding the picture with the timeline collapsed would leave nothing to edit', () => {
+  const layout = createLayout()
+  layout.toggleTimeline()
+  assert.equal(layout.timelineCollapsed(), true)
+
+  layout.togglePicture()
+  assert.equal(
+    layout.timelineCollapsed(),
+    false,
+    'a 48px strip with no timeline is not a view anyone asked for',
+  )
+})
+
+test('the hidden picture survives a reload', () => {
+  const first = createLayout()
+  first.togglePicture()
+  first.save()
+  assert.equal(createLayout().pictureHidden(), true)
+})
+
+test('reset brings the picture back', () => {
+  const layout = createLayout()
+  layout.togglePicture()
+  layout.reset()
+  assert.equal(layout.pictureHidden(), false)
+})
+
+test('the timeline cannot be collapsed while the picture is hidden', () => {
+  // They are alternatives, not a stack: hiding the picture hands the whole
+  // column to the timeline, and `mainRows` ignores the timeline's own height in
+  // that mode. Letting it collapse would leave a 48px strip and a button that
+  // silently refuses — indistinguishable, to the user, from a click that missed.
+  const layout = createLayout()
+  assert.equal(layout.canCollapseTimeline(), true)
+
+  layout.togglePicture()
+  assert.equal(layout.canCollapseTimeline(), false)
+
+  const before = mainRows(layout.pictureHidden(), layout.timelineTrack())
+  layout.toggleTimeline()
+  assert.equal(layout.timelineCollapsed(), false, 'it must refuse rather than half-collapse')
+  assert.equal(mainRows(layout.pictureHidden(), layout.timelineTrack()), before)
+
+  // And the media panel is still free to collapse — it has its own track.
+  assert.equal(layout.canCollapseTimeline(), false)
+  layout.toggleSidebar()
+  assert.equal(layout.sidebarCollapsed(), true, 'hiding the picture must not freeze the other panel')
 })

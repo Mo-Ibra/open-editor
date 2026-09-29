@@ -25,8 +25,14 @@ export interface Shortcut {
   shift?: boolean
   /** How the legend renders the key. */
   hint: string
-  /** What the legend calls it. */
-  label: string
+  /**
+   * What the legend calls it.
+   *
+   * A function where the meaning depends on the selection — `M` is "mute" over
+   * audio clips and "hide picture" over video ones, and a legend that said
+   * "mute" in both cases was quietly lying. Resolved when the legend renders.
+   */
+  label: string | (() => string)
   /** False to leave the key alone (e.g. nothing selected). */
   enabled?: () => boolean
   run: () => void
@@ -91,5 +97,5 @@ export function createKeyHandler(shortcuts: readonly Shortcut[]): (event: Keyboa
 
 /** The status-bar rows, in the order the shortcuts were declared. */
 export function shortcutLegend(shortcuts: readonly Shortcut[]): { hint: string; label: string }[] {
-  return shortcuts.map((s) => ({ hint: s.hint, label: s.label }))
+  return shortcuts.map((s) => ({ hint: s.hint, label: typeof s.label === 'function' ? s.label() : s.label }))
 }

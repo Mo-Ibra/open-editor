@@ -48,6 +48,22 @@ const menu = (target: unknown) => {
 
 const layout = { reset: noop, sidebarTrack: () => '236px', timelineTrack: () => '236px' } as never
 
+/**
+ * The full-screen seam, stubbed.
+ *
+ * It carries a *callable* so the tests can prove a row is wired to the right
+ * thing and not merely present — a menu of labels is exactly what this file
+ * exists to prevent.
+ */
+let fullscreenCalls = 0
+const fullscreen = {
+  active: () => false,
+  register: noop,
+  toggle: () => {
+    fullscreenCalls += 1
+  },
+} as never
+
 const clip = (id: string, lane: 'video' | 'audio', extra: Record<string, unknown> = {}) => ({
   id, lane, assetId: 'a', in: 0, out: 10, ...extra,
 })
@@ -65,7 +81,7 @@ const clickable = (items: { label: string; disabled?: boolean; separator?: boole
 test('the clip menu has no dead rows', () => {
   const state = withClips(clip('a', 'video'))
   state.selectClip('a')
-  const items = menuItems(state, menu({ kind: 'clip', clipId: 'a', lane: 'video' }), layout)
+  const items = menuItems(state, menu({ kind: 'clip', clipId: 'a', lane: 'video' }), layout, fullscreen)
 
   assert.ok(items.length > 0)
   for (const item of items) {
@@ -78,7 +94,7 @@ test('every non-separator row runs without throwing', () => {
   const state = withClips(clip('a', 'video'), clip('b', 'audio'))
   state.selectClip('a')
   state.selectClip('b', 'toggle')
-  const items = menuItems(state, menu({ kind: 'clip', clipId: 'a' }), layout)
+  const items = menuItems(state, menu({ kind: 'clip', clipId: 'a' }), layout, fullscreen)
 
   for (const item of items) {
     if (item.separator || item.disabled) continue
@@ -95,7 +111,7 @@ test('Mute is omitted entirely for a video-only selection', () => {
   // reads as "this is a thing that exists here".
   const state = withClips(clip('a', 'video'))
   state.selectClip('a')
-  const items = menuItems(state, menu({ kind: 'clip', clipId: 'a' }), layout)
+  const items = menuItems(state, menu({ kind: 'clip', clipId: 'a' }), layout, fullscreen)
   assert.ok(!labels(items).some((l) => /mute/i.test(l)), `expected no mute row, got ${labels(items)}`)
 })
 
@@ -103,7 +119,7 @@ test('Mute appears once the selection includes audio', () => {
   const state = withClips(clip('a', 'video'), clip('b', 'audio'))
   state.selectClip('a')
   state.selectClip('b', 'toggle')
-  const items = menuItems(state, menu({ kind: 'clip', clipId: 'a' }), layout)
+  const items = menuItems(state, menu({ kind: 'clip', clipId: 'a' }), layout, fullscreen)
   // Two clips are selected, so the label names the count — which is the point.
   assert.ok(labels(items).some((l) => /^Mute/.test(l)), `expected a Mute row, got ${labels(items)}`)
 })
@@ -113,7 +129,7 @@ test('a multi-selection names its own count', () => {
   state.selectClip('a')
   state.selectClip('b', 'toggle')
   state.selectClip('c', 'toggle')
-  const items = menuItems(state, menu({ kind: 'clip', clipId: 'a' }), layout)
+  const items = menuItems(state, menu({ kind: 'clip', clipId: 'a' }), layout, fullscreen)
   const found = labels(items)
   assert.ok(found.includes('Delete 3 clips'), `expected a counted label, got ${found}`)
   assert.ok(found.includes('Duplicate 3 clips'))
@@ -122,7 +138,7 @@ test('a multi-selection names its own count', () => {
 test('a single selection uses the singular', () => {
   const state = withClips(clip('a', 'video'))
   state.selectClip('a')
-  const found = labels(menuItems(state, menu({ kind: 'clip', clipId: 'a' }), layout))
+  const found = labels(menuItems(state, menu({ kind: 'clip', clipId: 'a' }), layout, fullscreen))
   assert.ok(found.includes('Delete clip'), `got ${found}`)
   assert.ok(!found.some((l) => /\d/.test(l)), 'no stray numbers for one clip')
 })
@@ -130,45 +146,87 @@ test('a single selection uses the singular', () => {
 test('an unlinked clip says so rather than showing a dead row', () => {
   const state = withClips(clip('a', 'video'))
   state.selectClip('a')
-  const found = labels(menuItems(state, menu({ kind: 'clip', clipId: 'a' }), layout))
+  const found = labels(menuItems(state, menu({ kind: 'clip', clipId: 'a' }), layout, fullscreen))
   assert.ok(found.includes('unlinked'), 'a status, not a promise')
 })
 
 test('a linked clip offers to break the link', () => {
   const state = withClips(clip('a', 'video', { linkId: 'L1' }))
   state.selectClip('a')
-  const found = labels(menuItems(state, menu({ kind: 'clip', clipId: 'a' }), layout))
+  const found = labels(menuItems(state, menu({ kind: 'clip', clipId: 'a' }), layout, fullscreen))
   assert.ok(found.includes('Break link'), `got ${found}`)
 })
 
 test('the lane menu reflects whether the lane has anything in it', () => {
   const empty = createAppState()
-  const onEmpty = menuItems(empty, menu({ kind: 'lane', lane: 'video' }), layout)
+  const onEmpty = menuItems(empty, menu({ kind: 'lane', lane: 'video' }), layout, fullscreen)
   assert.ok(clickable(onEmpty).every((i) => i.label !== 'Clear video lane' || true))
   const clearEmpty = onEmpty.find((i) => i.label === 'Clear video lane')
   assert.equal(clearEmpty?.disabled, true, 'clearing an empty lane is not offered')
 
   const filled = withClips(clip('a', 'video'))
-  const onFilled = menuItems(filled, menu({ kind: 'lane', lane: 'video' }), layout)
+  const onFilled = menuItems(filled, menu({ kind: 'lane', lane: 'video' }), layout, fullscreen)
   const clearFilled = onFilled.find((i) => i.label === 'Clear video lane')
   assert.notEqual(clearFilled?.disabled, true, 'but is offered when there is something to clear')
 })
 
 test('the app menu tracks undo availability and snapping', () => {
   const state = createAppState()
-  const fresh = labels(menuItems(state, menu({ kind: 'app' }), layout))
+  const fresh = labels(menuItems(state, menu({ kind: 'app' }), layout, fullscreen))
   assert.ok(fresh.includes('Snapping: on'), 'snapping starts on')
-  const undo = menuItems(state, menu({ kind: 'app' }), layout).find((i) => i.label === 'Undo')
+  const undo = menuItems(state, menu({ kind: 'app' }), layout, fullscreen).find((i) => i.label === 'Undo')
   assert.equal(undo?.disabled, true, 'nothing to undo yet')
 
   state.setSnapping(false)
-  const off = labels(menuItems(state, menu({ kind: 'app' }), layout))
+  const off = labels(menuItems(state, menu({ kind: 'app' }), layout, fullscreen))
   assert.ok(off.includes('Snapping: off'), 'and the menu says so')
 })
 
 test('the asset menu acts on the right-clicked asset', () => {
   const state = createAppState()
-  const items = menuItems(state, menu({ kind: 'asset', assetId: 'ast_1' }), layout)
+  const items = menuItems(state, menu({ kind: 'asset', assetId: 'ast_1' }), layout, fullscreen)
   assert.deepEqual(labels(items), ['Add to timeline', 'Select', 'Remove from project'])
   for (const item of items) assert.equal(typeof item.run, 'function')
+})
+
+/**
+ * The picture's context menu.
+ *
+ * Both rows here were asked for by name, and both are the kind of feature that
+ * is easy to add as a label and forget to wire. The assertions run the rows and
+ * check the effect, because a menu of correct-looking labels is exactly what
+ * the rest of this file exists to rule out.
+ */
+test('the preview menu hides and shows the picture', () => {
+  let hidden = false
+  const liveLayout = {
+    ...(layout as object),
+    pictureHidden: () => hidden,
+    togglePicture: () => {
+      hidden = !hidden
+    },
+  } as never
+
+  const state = withClips(clip('a', 'video'))
+  const onPreview = () => menuItems(state, menu({ kind: 'preview' }), liveLayout, fullscreen)
+
+  const row = (items: ReturnType<typeof onPreview>, name: string) =>
+    items.find((i) => i.label === name)
+
+  assert.ok(row(onPreview(), 'Hide the picture'), 'the picture must be hideable from the right-click')
+  assert.ok(row(onPreview(), 'Full screen'), 'and full screen must be one click away')
+
+  row(onPreview(), 'Hide the picture')!.run()
+  assert.equal(hidden, true, 'the row must actually hide it')
+
+  // Now hidden: the label flips, and full screen is a dead row with a reason.
+  const whenHidden = onPreview()
+  assert.ok(row(whenHidden, 'Show the picture'), 'the label must describe what the row will do next')
+  const fs = row(whenHidden, 'Full screen')!
+  assert.equal(fs.disabled, true, 'there is no picture to go full screen on')
+  assert.match(fs.label, /full screen/i)
+  assert.ok(
+    !clickable(whenHidden).some((i) => i.label === 'Full screen'),
+    'a disabled row must not be offered as clickable',
+  )
 })

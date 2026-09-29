@@ -30,6 +30,7 @@ import {
   sourceTimeAt,
   splitLinked,
   toggleMute as applyMute,
+  toggleHidden as applyHidden,
   trimClip as applyTrim,
   type Clip,
   type ClipId,
@@ -74,6 +75,9 @@ export interface EditSlice {
   setClipGain: (clipId: ClipId, gain: number) => void
   toggleMuteSelected: () => void
   toggleMute: (clipId: ClipId) => void
+  /** Mute audio clips, hide video clips. */
+  toggleHideSelected: () => void
+  toggleHidden: (clipId: ClipId) => void
   breakSelectedLinks: () => void
   selectionHasLinks: () => boolean
   /** Derive the lanes from a whole Project, for the terser call sites. */
@@ -311,6 +315,66 @@ function setClipGain(clipId: ClipId, gain: number): void {
   if (found) audio.setClipGain(found.clip)
 }
 
+/**
+ * Mute or hide every selected clip, by lane.
+ *
+ * One action, two meanings, because that is how it reads: a selected video clip
+ * has nothing to mute, and a selected audio clip has nothing to hide. Routing by
+ * lane means the user does not have to know which flag a given lane uses — they
+ * press the key and the clip goes quiet or black.
+ *
+ * A mixed selection gets both, which is the honest answer to "I selected a
+ * linked pair and want the picture hidden but the sound kept".
+ */
+function toggleHideSelected(): void {
+  const clips = sel.clips()
+  if (clips.length === 0) return
+  const audible = clips.filter((c) => c.lane === 'audio')
+  const video = clips.filter((c) => c.lane === 'video')
+  if (audible.length === 0 && video.length === 0) return
+
+  // One keypress should *mute* (or hide) the selection, not flip each clip
+  // independently — otherwise a half-muted selection stays half-muted forever.
+  const shouldHide = [...audible, ...video].some((c) => !(c.lane === 'audio' ? c.muted : c.hidden))
+  let changed = 0
+
+  for (const clip of audible) {
+    if (Boolean(clip.muted) === shouldHide) continue
+    setProject(replace(applyMute(unwrap(project), clip.id)))
+    const found = findClip(project, clip.id)
+    if (found) audio.setClipGain(found.clip)
+    changed++
+  }
+  for (const clip of video) {
+    if (Boolean(clip.hidden) === shouldHide) continue
+    setProject(replace(applyHidden(unwrap(project), clip.id)))
+    changed++
+  }
+
+  if (changed === 0) return
+  // Name the action in the words the user used. An audio clip announces
+  // "Muted", a video clip "Hidden" — announcing "Hidden 1 clip (sound)" reads
+  // like the app is hiding an audio track, which is not a thing it does.
+  const parts: string[] = []
+  if (audible.length > 0) parts.push(shouldHide ? 'muted' : 'unmuted')
+  if (video.length > 0) parts.push(shouldHide ? 'hidden' : 'shown')
+  const noun = audible.length > 0 && video.length > 0 ? 'clips' : 'clip'
+  notify('info', `${parts.join(' and ')} ${changed} ${noun}${changed === 1 ? '' : 's'}.`)
+}
+
+/** Hide or show one clip, by lane. */
+function toggleHidden(clipId: ClipId): void {
+  const before = findClip(project, clipId)
+  if (!before) return
+  setProject(replace(
+    before.lane === 'audio' ? applyMute(unwrap(project), clipId) : applyHidden(unwrap(project), clipId),
+  ))
+  if (before.lane === 'audio') {
+    const found = findClip(project, clipId)
+    if (found) audio.setClipGain(found.clip)
+  }
+}
+
 /** Mute or unmute every selected audio clip, leaving video clips alone. */
 function toggleMuteSelected(): void {
   const clips = sel.clips().filter((c) => c.lane === 'audio')
@@ -363,6 +427,8 @@ const selectionHasLinks = (): boolean => sel.clips().some((c) => Boolean(c.linkI
     setClipGain,
     toggleMuteSelected,
     toggleMute,
+    toggleHideSelected,
+    toggleHidden,
     breakSelectedLinks,
     selectionHasLinks,
     replace,

@@ -17,9 +17,10 @@ import type { ContextMenuState } from './ContextMenu.js'
 import { Lane as LaneView } from './timeline/Lane.js'
 import { Ruler } from './timeline/Ruler.js'
 import { Toolbar } from './timeline/Toolbar.js'
+import type { LayoutState } from '../store/layout.js'
 import { useTimelineDrag } from './timeline/use-timeline-drag.js'
 
-export function Timeline(props: { state: AppState; menu: ContextMenuState }) {
+export function Timeline(props: { state: AppState; menu: ContextMenuState; layout: LayoutState }) {
   const state = props.state
   let trackEl: HTMLDivElement | undefined
   let scrollerEl: HTMLDivElement | undefined
@@ -50,7 +51,7 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState }) {
 
   return (
     <section class="flex h-[236px] shrink-0 flex-col border-t border-line bg-panel">
-      <Toolbar state={state} anyClips={anyClips} />
+      <Toolbar state={state} anyClips={anyClips} layout={props.layout} />
 
       {/* ruler + lanes */}
       <div ref={scrollerEl} class="min-h-0 flex-1 overflow-auto">

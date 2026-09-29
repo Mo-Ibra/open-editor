@@ -13,17 +13,34 @@
 
 import type { AppState } from '../store/state.js'
 import type { Shortcut } from './keyboard.js'
+import type { LayoutState } from '../store/layout.js'
+import type { Fullscreen } from '../view/fullscreen.js'
 import { shouldSuppressNativeMenu } from '../view/ContextMenu.js'
 
 export interface ShortcutContext {
   state: AppState
   /** Anything that owns a menu — Escape closes it as well as deselecting. */
   closeMenu: () => void
+  layout: LayoutState
+  fullscreen: Fullscreen
+  /** Opens the keyboard reference. `?` is where everyone looks for it. */
+  openKeys: () => void
 }
 
-export function createShortcuts({ state, closeMenu }: ShortcutContext): Shortcut[] {
+export function createShortcuts({ state, closeMenu, layout, fullscreen, openKeys }: ShortcutContext): Shortcut[] {
   const hasClips = (): boolean => state.project.video.length > 0 || state.project.audio.length > 0
   const hasSelection = (): boolean => state.selectionCount() > 0
+
+  /** What `M` will do to the current selection, in the legend's own words. */
+  const muteLabel = (): string => {
+    const clips = state.selectedClips()
+    if (clips.length === 0) return 'mute all'
+    const audio = clips.filter((c) => c.lane === 'audio')
+    const video = clips.filter((c) => c.lane === 'video')
+    if (video.length === 0) return audio.every((c) => c.muted) ? 'unmute selection' : 'mute selection'
+    if (audio.length === 0) return video.every((c) => c.hidden) ? 'show picture' : 'hide picture'
+    return 'mute and hide selection'
+  }
 
   return [
     { keys: [' '], hint: 'space', label: 'play', run: () => void state.togglePlay() },
@@ -71,12 +88,15 @@ export function createShortcuts({ state, closeMenu }: ShortcutContext): Shortcut
     {
       keys: ['m'],
       hint: 'M',
-      label: 'mute selection',
+      // The label follows the selection, because the key does: audio clips are
+      // muted, video clips are hidden, and a mixed selection does both. A legend
+      // that said "mute" over a video selection was a small lie.
+      label: muteLabel,
       // Mutes the selection when there is one and the master otherwise —
       // otherwise there would be no way to mute the whole project mid-edit.
       run: () =>
-        state.selectedLanes().includes('audio')
-          ? state.toggleMuteSelected()
+        state.selectionCount() > 0
+          ? state.toggleHideSelected()
           : state.audio.setMuted(!state.audio.isMuted),
     },
 
@@ -95,6 +115,43 @@ export function createShortcuts({ state, closeMenu }: ShortcutContext): Shortcut
     { keys: ['z'], accel: true, shift: true, hint: '⇧⌘Z', label: 'redo', enabled: () => state.canRedo(), run: () => state.redo() },
 
     { keys: ['Escape'], hint: 'esc', label: 'deselect', run: () => { state.clearSelection(); closeMenu() } },
+    // The keymap left the footer, so it needs a key of its own — or moving it
+    // would have made it harder to find than the thing it replaced.
+    { keys: ['?'], hint: '?', label: 'keyboard', run: openKeys },
+
+    // --- panels ------------------------------------------------------------
+    // The panels were collapsible only by double-clicking a 1px hairline, so
+    // these give the same three actions names and keys. `\` is the convention
+    // editors already use for the bottom panel.
+    {
+      keys: ['h'],
+      hint: 'H',
+      label: 'hide picture',
+      run: () => layout.togglePicture(),
+    },
+    {
+      keys: ['f'],
+      hint: 'F',
+      label: 'full screen',
+      // Disabled rather than hidden when there is no picture to enlarge, and the
+      // legend then reads "full screen" with the key inert — which is the same
+      // honesty the context menu keeps.
+      enabled: () => !layout.pictureHidden(),
+      run: fullscreen.toggle,
+    },
+    {
+      keys: ['\\'],
+      hint: '\\',
+      label: 'toggle timeline',
+      run: () => layout.toggleTimeline(),
+    },
+    {
+      keys: ['\\'],
+      accel: true,
+      hint: '⌘\\',
+      label: 'toggle media',
+      run: () => layout.toggleSidebar(),
+    },
 
     // --- not keyboard input; legend only. Matched against the timeline's own
     // select modes by test/keyboard.test.ts so the two cannot disagree.

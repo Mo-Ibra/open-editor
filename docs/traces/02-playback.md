@@ -142,7 +142,7 @@ smooth. It is not a precision requirement — the audio clock is.
 
 ## 5. A signal, and Solid does the rest
 
-`src/app/view/Preview.tsx:310`:
+`src/app/view/Preview.tsx:362`:
 
 ```ts
 createEffect(() => {
@@ -166,7 +166,7 @@ canvas instead of leaving a black rectangle.
 
 ## 6. From a timeline time to a source time
 
-`draw()` at `src/app/view/Preview.tsx:119` starts by converting a *timeline*
+`draw()` at `src/app/view/Preview.tsx:148` starts by converting a *timeline*
 position into a *source* position, which is the conversion the whole app turns
 on:
 
@@ -185,7 +185,7 @@ overlay — because "black rectangle" is not a bug report.
 
 ## 7. Cache first, always
 
-`src/app/view/Preview.tsx:158`:
+`src/app/view/Preview.tsx:209`:
 
 ```ts
 const cached = state.frameCache.find(sourceTime)
@@ -198,7 +198,7 @@ if (inFlight) return   // a decode is running; it will catch up
 requests while you scrub slowly. That is the difference between a drag that
 stutters and one that glides.
 
-Then the rule that took a rewrite to get right, at `src/app/view/Preview.tsx:197`:
+Then the rule that took a rewrite to get right, at `src/app/view/Preview.tsx:248`:
 
 ```ts
 // Cache the frame FIRST, unconditionally.

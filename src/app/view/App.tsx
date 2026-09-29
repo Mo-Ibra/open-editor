@@ -13,18 +13,22 @@
  * at.
  */
 
-import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
+import { createEffect, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
 
 import { AssetBin } from './AssetBin.js'
 import { ContextMenu, createContextMenu } from './ContextMenu.js'
+import { createFullscreen } from './fullscreen.js'
 import { ExportDialog } from './ExportDialog.js'
+import { LogPanel } from './LogPanel.js'
 import { Preview } from './Preview.js'
+import { ShortcutsPanel } from './ShortcutsPanel.js'
+import { formatTime } from './format.js'
+import type { AppState } from '../store/state.js'
 import { Resizer } from './Resizer.js'
 import { Timeline } from './Timeline.js'
 
-import { dump, log } from '../../dev/debug.js'
-import { createKeyHandler, shortcutLegend } from '../commands/keyboard.js'
-import { createLayout } from '../store/layout.js'
+import { createKeyHandler } from '../commands/keyboard.js'
+import { createLayout, mainRows } from '../store/layout.js'
 import { menuItems } from '../commands/menu-items.js'
 import { createShortcuts, suppressNativeMenu } from '../commands/shortcuts.js'
 import { createAppState } from '../store/state.js'
@@ -33,23 +37,46 @@ export function App() {
   const state = createAppState()
   const layout = createLayout()
   const menu = createContextMenu()
+  // Built after `state`, because a refused request needs somewhere to report.
+  const fullscreen = createFullscreen((message) => state.notify('warn', message))
   const [exportOpen, setExportOpen] = createSignal(false)
+  const [logOpen, setLogOpen] = createSignal(false)
+  const [keysOpen, setKeysOpen] = createSignal(false)
 
-  const copyLogs = (): void => {
-    const text = dump()
-    void navigator.clipboard?.writeText(text)
-    log.info('log dump copied', { lines: text.split('\n').length })
-  }
-
-  // One list, two consumers: the key handler and the footer legend. Deriving
-  // both from it is what stops the legend advertising keys that do nothing.
-  const shortcuts = createShortcuts({ state, closeMenu: menu.hide })
-  const legend = createMemo(() => shortcutLegend(shortcuts))
+  // One list, three consumers: the key handler, the keyboard panel, and the
+  // topbar's own tooltips. Deriving all of them from it is what stops the app
+  // advertising a key that does nothing.
+  const shortcuts = createShortcuts({
+    state,
+    closeMenu: menu.hide,
+    layout,
+    fullscreen,
+    openKeys: () => setKeysOpen(true),
+  })
 
   // Built ONCE. Calling createKeyHandler again for the removal would hand
   // removeEventListener a different function object, silently fail to unregister
   // the first, and leave a second live copy of the handler on the window.
   const onKeyDown = createKeyHandler(shortcuts)
+
+  // Escape closes the panels.
+  //
+  // On a `window` listener in the capture phase, rather than `onKeyDown` on the
+  // panels themselves: opening a panel does not move focus, so a handler on the
+  // panel would only fire for the user who happened to tab into it first. The
+  // keyboard panel had no Escape at all for exactly that reason.
+  onMount(() => {
+    const onEscape = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      if (keysOpen()) {
+        setKeysOpen(false)
+        return
+      }
+      if (logOpen()) setLogOpen(false)
+    }
+    window.addEventListener('keydown', onEscape, { capture: true })
+    onCleanup(() => window.removeEventListener('keydown', onEscape, { capture: true }))
+  })
 
   onMount(() => {
     window.addEventListener('keydown', onKeyDown)
@@ -80,14 +107,19 @@ export function App() {
       onDragOver={(e) => e.preventDefault()}
       onDrop={onDrop}
     >
-      <TopBar state={state} onExport={() => setExportOpen(true)} onCopyLogs={copyLogs} />
+      <TopBar
+        state={state}
+        onExport={() => setExportOpen(true)}
+        onOpenLogs={() => setLogOpen(true)}
+        onOpenKeys={() => setKeysOpen(true)}
+      />
 
       <div
         class="relative grid min-h-0 flex-1"
         style={{ 'grid-template-columns': `${layout.sidebarTrack()} minmax(0, 1fr)` }}
       >
         <div class="relative min-h-0 min-w-0 overflow-hidden">
-          <AssetBin state={state} menu={menu} />
+          <AssetBin state={state} menu={menu} layout={layout} />
         </div>
 
         {/* Drag to resize, double-click to collapse. `at` is the boundary. */}
@@ -101,31 +133,50 @@ export function App() {
         />
 
         <main
-          class="grid min-h-0 min-w-0"
-          style={{ 'grid-template-rows': `minmax(0, 1fr) ${layout.timelineTrack()}` }}
+          class="relative grid min-h-0 min-w-0"
+          style={{ 'grid-template-rows': mainRows(layout.pictureHidden(), layout.timelineTrack()) }}
         >
-          <Preview state={state} menu={menu} />
+          <Preview state={state} menu={menu} layout={layout} fullscreen={fullscreen} />
 
           <div class="relative min-h-0 min-w-0 overflow-hidden">
-            <Timeline state={state} menu={menu} />
+            <Timeline state={state} menu={menu} layout={layout} />
+          </div>
+
+          {/* A sibling of the timeline, not a child of it.
+              A collapsed timeline is 0px tall and clips its overflow, so a
+              handle inside it gets clipped away — the tab was in the DOM, had a
+              real box, responded to .click(), and was unclickable by a human,
+              because the transport bar was what a pointer actually hit. The
+              sidebar handle has always been a sibling for the same reason.
+              Positioned from the bottom, which is the boundary only while the
+              timeline is the bottom row — and the one case where it is not (the
+              picture hidden) is exactly when this is not rendered. */}
+          <Show when={!layout.pictureHidden()}>
             <Resizer
               axis="y"
-              at={{ top: '0px' }}
+              at={{ bottom: layout.timelineTrack() }}
               onDrag={(e) => layout.beginTimelineDrag(e)}
               onToggle={() => layout.toggleTimeline()}
               collapsed={layout.timelineCollapsed()}
               title="Drag to resize · double-click to collapse"
             />
-          </div>
+          </Show>
         </main>
       </div>
 
-      <StatusFooter rows={legend()} />
+      <StatusFooter state={state} pictureHidden={layout.pictureHidden} />
 
-      <ContextMenu state={menu} items={() => menuItems(state, menu, layout)} />
+      <ContextMenu state={menu} items={() => menuItems(state, menu, layout, fullscreen)} />
 
       <Show when={exportOpen()}>
         <ExportDialog state={state} onClose={() => setExportOpen(false)} />
+      </Show>
+
+      <Show when={logOpen()}>
+        <LogPanel onClose={() => setLogOpen(false)} />
+      </Show>
+      <Show when={keysOpen()}>
+        <ShortcutsPanel shortcuts={shortcuts} onClose={() => setKeysOpen(false)} />
       </Show>
 
       <Notices notices={state.notices()} />
@@ -143,7 +194,8 @@ export function App() {
 function TopBar(props: {
   state: ReturnType<typeof createAppState>
   onExport: () => void
-  onCopyLogs: () => void
+  onOpenLogs: () => void
+  onOpenKeys: () => void
 }) {
   const state = props.state
   return (
@@ -170,8 +222,15 @@ function TopBar(props: {
         <Show when={state.notices().length > 0}>
           <span class="size-1.5 rounded-full bg-warn" title={state.notices().at(-1)?.text} />
         </Show>
-        <button class="btn" onClick={props.onCopyLogs} title="Copy the last 400 log lines to the clipboard">
+        <button
+          class="btn"
+          onClick={props.onOpenLogs}
+          title="Show what the app has been logging — errors, decoder complaints, export steps"
+        >
           logs
+        </button>
+        <button class="btn" onClick={props.onOpenKeys} title="Keyboard shortcuts (?)">
+          keys
         </button>
         <button
           class="btn btn-primary"
@@ -186,17 +245,42 @@ function TopBar(props: {
   )
 }
 
-function StatusFooter(props: { rows: { hint: string; label: string }[] }) {
+/**
+ * The status bar.
+ *
+ * It used to be the permanent keymap, which had grown to twenty-four entries and
+ * two rows of the editor's most valuable space — a table of contents nobody
+ * reads. A status bar's job is *now*: where the playhead is, what is selected,
+ * which modes are on. The keymap is one click away in the topbar instead, where
+ * it is reference rather than furniture.
+ */
+function StatusFooter(props: { state: AppState; pictureHidden: () => boolean }) {
+  const state = props.state
   return (
     <footer class="flex h-7 shrink-0 items-center gap-3 border-t border-line bg-panel px-3 text-[10.5px] text-muted">
-      <For each={props.rows}>
-        {(row) => (
-          <span class="flex items-center gap-1">
-            <kbd class="rounded border border-line bg-raised px-1 font-mono text-[9.5px] leading-[14px]">{row.hint}</kbd>
-            {row.label}
-          </span>
-        )}
-      </For>
+      <span class="timecode text-fg">{formatTime(state.playhead())}</span>
+      <span class="timecode">/ {formatTime(state.duration())}</span>
+
+      <span class="text-line">|</span>
+      <span>
+        {state.project.video.length} video · {state.project.audio.length} audio
+      </span>
+
+      <Show when={state.selectionCount() > 0}>
+        <span class="text-accent">{state.selectionCount()} selected</span>
+      </Show>
+
+      <span class="flex-1" />
+
+      <Show when={state.snapping()}>
+        <span title="Clip edges and the playhead snap (G)">snap on</span>
+      </Show>
+      <Show when={state.audio.isMuted}>
+        <span class="text-warn" title="Everything is muted (M)">muted</span>
+      </Show>
+      <Show when={props.pictureHidden()}>
+        <span class="text-muted">picture hidden (H)</span>
+      </Show>
     </footer>
   )
 }

@@ -16,11 +16,13 @@ import { dump } from '../../dev/debug.js'
 import type { AppState } from '../store/state.js'
 import type { LayoutState } from '../store/layout.js'
 import type { ContextMenuState, MenuItem } from '../view/ContextMenu.js'
+import type { Fullscreen } from '../view/fullscreen.js'
 
 export function menuItems(
   state: AppState,
   menu: ContextMenuState,
   layout: LayoutState,
+  fullscreen: Fullscreen,
 ): MenuItem[] {
   const target = menu.open()
 
@@ -34,7 +36,9 @@ export function menuItems(
     const clips = state.selectedClips()
     const linked = state.selectionHasLinks()
     const audio = clips.filter((c) => c.lane === 'audio')
+    const video = clips.filter((c) => c.lane === 'video')
     const allMuted = audio.length > 0 && audio.every((c) => c.muted)
+    const allHidden = video.length > 0 && video.every((c) => c.hidden)
     const count = (one: string, plural: string): string => (many ? plural.replace('%d', String(n)) : one)
 
     return [
@@ -68,17 +72,31 @@ export function menuItems(
             },
           ]
         : [{ label: 'unlinked', status: true, run: noop }]),
-      // Omitted entirely when nothing audio-ish is selected. A "Mute" row on a
-      // video clip is a promise the app cannot keep, and a greyed-out row
-      // still reads as "this is a thing that exists here".
-      ...(audio.length > 0
+      // One row, and it says the right word for the lane. Mute for audio, hide
+      // for video, both for a mixed selection — because that is how the user
+      // thinks about it, and two near-identical rows would make them read both
+      // to work out which applies.
+      //
+      // Omitted entirely when nothing is selected: "Mute" on a video-only
+      // selection is a promise the app cannot keep, and a greyed-out row still
+      // reads as "this is a thing that exists here".
+      ...(audio.length > 0 || video.length > 0
         ? [
-            {
-              label: allMuted ? count('Unmute', 'Unmute %d clips') : count('Mute', 'Mute %d clips'),
-              shortcut: 'M',
-              disabled: false,
-              run: () => state.toggleMuteSelected(),
-            },
+            (() => {
+              const only = audio.length === 0 ? 'video' : video.length === 0 ? 'audio' : null
+              const isOff = only === 'video' ? allHidden : only === 'audio' ? allMuted : false
+              const verb = only === 'video' ? (isOff ? 'Show' : 'Hide') : isOff ? 'Unmute' : 'Mute'
+              const noun = only === 'audio' ? '' : only === 'video' ? ' picture' : ' sound and picture'
+              return {
+                label: count(
+                  `${verb}${noun}`,
+                  `${verb} %d clips${noun}`,
+                ),
+                shortcut: 'M',
+                disabled: false,
+                run: () => state.toggleHideSelected(),
+              }
+            })(),
           ]
         : []),
       { separator: true, label: '', run: noop },
@@ -129,7 +147,27 @@ export function menuItems(
   }
 
   if (target?.kind === 'preview') {
+    const hidden = layout.pictureHidden()
     return [
+      // The picture is the point of the app, so it gets the first two rows: the
+      // only two actions that change what you are looking at rather than what
+      // you are editing.
+      {
+        label: hidden ? 'Show the picture' : 'Hide the picture',
+        shortcut: 'H',
+        run: () => layout.togglePicture(),
+      },
+      {
+        label: 'Full screen',
+        shortcut: 'F',
+        // With the picture hidden there is nothing to go full screen *on*, so the
+        // row is disabled and the label says why. Hidden instead would read as
+        // "this does not exist", which is the wrong answer — the user just asked
+        // for it.
+        disabled: hidden,
+        run: fullscreen.toggle,
+      },
+      { separator: true, label: '', run: noop },
       { label: 'Fit to window', run: () => state.resetView() },
       { label: 'Reset zoom', run: () => state.setTransformActive({ scale: 1, x: 0, y: 0 }) },
       { separator: true, label: '', run: noop },

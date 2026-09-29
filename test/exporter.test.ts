@@ -7,7 +7,7 @@
  * encoder, or a media file.
  */
 import assert from 'node:assert/strict'
-import { frameTimesForClip, totalFramesFor } from '../src/output/exporter.ts'
+import { clipRendersBlack, frameTimesForClip, totalFramesFor } from '../src/output/exporter.ts'
 import { projectDuration, type Clip, type Project } from '../src/model/project.ts'
 
 const c = (id: string, i: number, o: number): Clip => ({ id, lane: 'video', assetId: 'a', in: i, out: o })
@@ -147,3 +147,36 @@ function outTimesAreContiguous(a: number[], b: number[]): boolean {
   // The last source time must be inside its own source range, never past it.
   assert.ok(src.at(-1)! <= 4, `last source time ${src.at(-1)} must be within clip c (0–4s)`)
 }
+
+/**
+ * Which clips come out black.
+ *
+ * The rule decides whether the exported file matches what the preview showed, so
+ * it is pinned here rather than left inline in a 450-line loop. Two inputs: does
+ * the asset have video at all, and did the user hide the clip.
+ */
+const blackFor = (clip: object, hasVideoSink: boolean): boolean => clipRendersBlack(clip as never, hasVideoSink)
+
+const vid = (over: object = {}): object => ({ lane: 'video', in: 0, out: 2, ...over })
+
+assert.equal(blackFor(vid(), true), false, 'a normal video clip renders its frames')
+assert.equal(
+  blackFor(vid(), false),
+  true,
+  'an asset with no video track renders black — an audio file on the video lane, which still occupies its span',
+)
+assert.equal(
+  blackFor(vid({ hidden: true }), true),
+  true,
+  'a hidden clip is black even when the asset decodes fine',
+)
+assert.equal(
+  blackFor(vid({ hidden: false }), true),
+  false,
+  'an explicit hidden:false is not hidden — hence the `=== true` in the rule',
+)
+assert.equal(
+  blackFor({ lane: 'audio', in: 0, out: 2, muted: true }, true),
+  false,
+  'muting is a gain, not a picture decision; the video rule must not care',
+)

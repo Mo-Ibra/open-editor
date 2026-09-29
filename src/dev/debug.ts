@@ -10,8 +10,20 @@
  * when the bug only reproduces on the fifth playhead move.
  */
 
+import { createSignal } from 'solid-js'
+
 const ENDPOINT = '/__debug'
 const BUFFER_LIMIT = 400
+
+/**
+ * A counter bumped on every log, so a view can render the history reactively.
+ *
+ * The buffer itself is a plain array, which is right for a hot path — logging
+ * must never make the app re-render on its own. Exposing a revision counter
+ * instead of a signal of entries means a component opts in to the cost, and a
+ * closed log panel costs nothing.
+ */
+const [revision, setRevision] = createSignal(0)
 
 export type Level = 'debug' | 'info' | 'warn' | 'error'
 
@@ -69,6 +81,7 @@ function emit(level: Level, message: string, data?: unknown): void {
   const entry: DebugLog = { level, message, data, time: Date.now(), tag: currentTag }
   buffer.push(entry)
   if (buffer.length > BUFFER_LIMIT) buffer.shift()
+  setRevision((n) => n + 1)
 
   const line = `[${entry.tag}] ${message}`
 
@@ -129,12 +142,21 @@ export function history(): DebugLog[] {
   return buffer.slice()
 }
 
+/**
+ * Read this to re-render when the history changes. Not the array — the array is
+ * a fresh slice on every call, so depending on it would re-render forever.
+ */
+export function logRevision(): number {
+  return revision()
+}
+
 export function dump(): string {
   return buffer.map((e) => `[${new Date(e.time).toISOString().slice(11, 23)}] [${e.tag}/${e.level}] ${e.message}${e.data === undefined ? '' : ` ${serialize(e.data)}`}`).join('\n')
 }
 
 export function clear(): void {
   buffer.length = 0
+  setRevision((n) => n + 1)
 }
 
 /**

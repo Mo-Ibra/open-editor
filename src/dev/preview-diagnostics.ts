@@ -39,6 +39,15 @@ export interface PreviewRuntime {
   lastError: () => string | null
   inFlight: () => boolean
   overlayOn: () => boolean
+  /**
+   * The user asked for no picture.
+   *
+   * Without this the health check cannot tell "the canvas is broken" from "the
+   * canvas is deliberately not there", and it reports the second as a LAYOUT
+   * fault every five seconds — which is worse than no check at all, because a
+   * check that is always red stops being read.
+   */
+  pictureHidden: () => boolean
 }
 
 export interface PreviewFacts {
@@ -64,6 +73,8 @@ export interface PreviewFacts {
     display: string
     visibility: string
     opacity: string
+    /** The user asked for no picture, so zero size is the requested state. */
+    hidden: boolean
   }
   /** What is under the playhead, or null in a gap / on an empty timeline. */
   clip: null | {
@@ -134,7 +145,10 @@ export function audioLine(f: PreviewFacts): string {
 }
 
 export function layoutLine(f: PreviewFacts): string {
-  const { width, height, left, top, display, visibility, opacity } = f.layout
+  const { width, height, left, top, display, visibility, opacity, hidden } = f.layout
+  // While the picture is hidden there is no canvas on screen, and printing
+  // `0x0 display=` reads like a fault. It is the requested state.
+  if (hidden) return 'layout: picture hidden — no canvas on screen, as requested'
   return (
     `layout: canvas on-screen ${Math.round(width)}x${Math.round(height)} at ` +
     `${Math.round(left)},${Math.round(top)}  display=${display} ` +
@@ -142,8 +156,15 @@ export function layoutLine(f: PreviewFacts): string {
   )
 }
 
-/** Non-null when the canvas has no size on screen and nothing can be visible. */
+/**
+ * Non-null when the canvas has no size on screen and nothing can be visible.
+ *
+ * A hidden picture is not a fault, so it is excluded: this used to fire every
+ * five seconds for as long as the user kept the picture hidden, which is a
+ * monitor that cries wolf and teaches people to ignore it.
+ */
 export function layoutFault(f: PreviewFacts): string | null {
+  if (f.layout.hidden) return null
   if (f.layout.width < 2 || f.layout.height < 2) {
     return 'LAYOUT: the canvas has no size on screen — nothing can be visible, however correct the pixels are'
   }
@@ -184,6 +205,9 @@ export const HEALTH_INTERVAL_MS = 5000
  * never copies the store field by field.
  */
 export function createDiagnostics(state: AppState, rt: PreviewRuntime) {
+  /** The element to measure. Only the preview knows which one is live. */
+  const canvasOf = (): HTMLCanvasElement => rt.ctx().canvas
+
   function facts(): PreviewFacts {
     const t = state.playhead()
     const loc = clipAtLane(state.project.video, t)
@@ -191,8 +215,11 @@ export function createDiagnostics(state: AppState, rt: PreviewRuntime) {
     const asset = clip ? state.getAsset(clip.assetId) : undefined
     const entry = clip ? state.library.get(clip.assetId) : undefined
     const cached = loc && entry?.videoSink ? state.frameCache.find(sourceTimeAt(loc, t)) : undefined
-    const rect = rt.ctx().canvas.getBoundingClientRect()
-    const style = getComputedStyle(rt.ctx().canvas)
+    // Read the element directly rather than via `ctx().canvas`: the context
+    // cache is keyed on the element, and asking the context which canvas it
+    // belongs to is a roundabout way of asking "which canvas is it".
+    const rect = canvasOf().getBoundingClientRect()
+    const style = getComputedStyle(canvasOf())
     const view = rt.size()
 
     return {
@@ -212,6 +239,8 @@ export function createDiagnostics(state: AppState, rt: PreviewRuntime) {
         display: style.display,
         visibility: style.visibility,
         opacity: style.opacity,
+        // Present and expected to be zero when the picture is hidden.
+        hidden: rt.pictureHidden(),
       },
       clip: clip && asset
         ? {

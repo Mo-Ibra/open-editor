@@ -94,7 +94,7 @@ const facts = (over: Partial<PreviewFacts> = {}): PreviewFacts => ({
   counters: { paints: 282, blackFrames: 0, luma: { max: 199, mean: 27 } },
   layout: {
     width: 1540, height: 866, left: 289, top: 60,
-    display: 'block', visibility: 'visible', opacity: '1',
+    display: 'block', visibility: 'visible', opacity: '1', hidden: false,
   },
   clip: {
     index: 0, in: 0, out: 445.717, sourceTime: 1.548,
@@ -131,7 +131,7 @@ test('the layout line includes geometry, not just a size', () => {
 test('a collapsed canvas is a fault, not a health line', () => {
   // Correct frames on a 0x0 canvas look exactly like a black video.
   const collapsed = facts({
-    layout: { width: 0, height: 0, left: 0, top: 0, display: 'block', visibility: 'visible', opacity: '1' },
+    layout: { width: 0, height: 0, left: 0, top: 0, display: 'block', visibility: 'visible', opacity: '1', hidden: false },
   })
   const fault = layoutFault(collapsed)
   assert.ok(fault, 'a zero-size canvas must be reported')
@@ -141,8 +141,20 @@ test('a collapsed canvas is a fault, not a health line', () => {
 
 test('a tiny-but-nonzero canvas is still a fault', () => {
   assert.ok(layoutFault(facts({
-    layout: { width: 1, height: 400, left: 0, top: 0, display: 'block', visibility: 'visible', opacity: '1' },
+    layout: { width: 1, height: 400, left: 0, top: 0, display: 'block', visibility: 'visible', opacity: '1', hidden: false },
   })))
+})
+
+test('a hidden picture is the requested state, not a fault', () => {
+  // A zero-size canvas with `hidden` set is the user asking for more timeline.
+  // Reporting it as a LAYOUT fault every five seconds is a monitor that cries
+  // wolf, and a monitor that cries wolf stops being read.
+  const hidden = facts({
+    layout: { width: 0, height: 0, left: 0, top: 0, display: '', visibility: '', opacity: '', hidden: true },
+  })
+  assert.equal(layoutFault(hidden), null, 'a deliberately hidden picture is not a fault')
+  assert.match(layoutLine(hidden), /picture hidden/)
+  assert.doesNotMatch(layoutLine(hidden), /0x0/, 'and must not print a scary 0x0')
 })
 
 test('the audio line is the engine describing itself', () => {

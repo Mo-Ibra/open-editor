@@ -9,8 +9,10 @@
 import { For, Show } from 'solid-js'
 import type { AppState } from '../store/state.js'
 import type { ContextMenuState } from './ContextMenu.js'
+import type { LayoutState } from '../store/layout.js'
+import { PanelToggle } from './PanelToggle.js'
 
-export function AssetBin(props: { state: AppState; menu: ContextMenuState }) {
+export function AssetBin(props: { state: AppState; menu: ContextMenuState; layout: LayoutState }) {
   const state = props.state
   let input!: HTMLInputElement
 
@@ -40,6 +42,12 @@ export function AssetBin(props: { state: AppState; menu: ContextMenuState }) {
         <button class="btn btn-ghost !px-1.5 !py-0.5 text-[11px]" onClick={choose} disabled={state.loading()}>
           {state.loading() ? 'reading…' : 'add'}
         </button>
+        <PanelToggle
+          panel="media"
+          collapsed={props.layout.sidebarCollapsed()}
+          onToggle={() => props.layout.toggleSidebar()}
+          dir="left"
+        />
         <input
           ref={input}
           type="file"

@@ -12,12 +12,21 @@
  */
 
 import { Show } from 'solid-js'
+import type { Accessor } from 'solid-js'
 import type { AppState } from '../../store/state.js'
+import { formatTime } from '../format.js'
 
-export function Transport(props: { state: AppState; ticks: () => number }) {
+export function Transport(props: {
+  state: AppState
+  ticks: () => number
+  pictureHidden: Accessor<boolean>
+  fullscreen: Accessor<boolean>
+  onToggleFullscreen: () => void
+  onTogglePicture: () => void
+}) {
   const state = props.state
   return (
-    <div class="flex h-12 shrink-0 items-center gap-3 border-t border-line bg-panel px-3">
+    <div class="flex h-[48px] shrink-0 items-center gap-3 border-t border-line bg-panel px-3">
       <div class="flex items-center gap-1">
         <button class="btn !px-2" onClick={() => state.step(-1)} title="Previous frame (←)">
           <SkipIcon dir="left" />
@@ -49,6 +58,29 @@ export function Transport(props: { state: AppState; ticks: () => number }) {
 
       <span class="flex-1" />
 
+      <button
+        class="btn !px-2"
+        onClick={props.onTogglePicture}
+        title={
+          props.pictureHidden()
+            ? 'Show the picture (H)'
+            : 'Hide the picture for more timeline (H)'
+        }
+        aria-pressed={props.pictureHidden()}
+        data-preview-action="picture"
+      >
+        <EyeIcon hidden={props.pictureHidden()} />
+      </button>
+      <button
+        class="btn !px-2"
+        onClick={props.onToggleFullscreen}
+        title={props.fullscreen() ? 'Leave full screen (F)' : 'Full screen (F)'}
+        aria-pressed={props.fullscreen()}
+        data-preview-action="fullscreen"
+      >
+        <ExpandIcon active={props.fullscreen()} />
+      </button>
+
       <label class="flex items-center gap-2 text-[10.5px] text-muted">
         <span>zoom</span>
         {/* The picture's zoom, not the timeline's. The exact timeline zoom is
@@ -78,12 +110,41 @@ export function Transport(props: { state: AppState; ticks: () => number }) {
   )
 }
 
-function formatTime(seconds: number): string {
-  const s = Math.max(0, seconds)
-  const m = Math.floor(s / 60)
-  const rest = s - m * 60
-  return `${m}:${rest.toFixed(2).padStart(5, '0')}`
+/** An eye with a slash, or without. One icon, two states. */
+function EyeIcon(props: { hidden: boolean }) {
+  return (
+    <svg viewBox="0 0 16 16" class="size-3.5" fill="none" stroke="currentColor" stroke-width="1.3">
+      <path d="M1.5 8S3.8 3.8 8 3.8 14.5 8 14.5 8 12.2 12.2 8 12.2 1.5 8 1.5 8Z" />
+      <circle cx="8" cy="8" r="1.9" />
+      {props.hidden && <path d="M2.5 13.5 13.5 2.5" stroke-linecap="round" />}
+    </svg>
+  )
 }
+
+/** Four corners inward when full screen, outward when not. */
+function ExpandIcon(props: { active: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      class="size-3.5"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.5"
+      stroke-linecap="round"
+    >
+      {props.active ? (
+        <>
+          <path d="M6 2.5H2.5V6M10 2.5h3.5V6M6 13.5H2.5V10M10 13.5h3.5V10" />
+        </>
+      ) : (
+        <>
+          <path d="M2.5 6V2.5H6M13.5 6V2.5H10M2.5 10v3.5H6M13.5 10v3.5H10" />
+        </>
+      )}
+    </svg>
+  )
+}
+
 
 function PlayIcon() {
   return (

@@ -11,15 +11,24 @@ import { clipAtLane, sourceTimeAt } from '../../model/project.js'
 import { renderBlank, renderFrame, type SourceImage } from '../../render/render.js'
 import type { AppState } from '../store/state.js'
 import type { ContextMenuState } from './ContextMenu.js'
+import type { LayoutState } from '../store/layout.js'
+import type { Fullscreen } from './fullscreen.js'
 import { log } from '../../dev/debug.js'
 import { createDiagnostics, HEALTH_INTERVAL_MS } from '../../dev/preview-diagnostics.js'
 import { Transport } from './preview/Transport.js'
 import { usePlaybackClock } from './preview/use-playback-clock.js'
 
-export function Preview(props: { state: AppState; menu: ContextMenuState }) {
+export function Preview(props: {
+  state: AppState
+  menu: ContextMenuState
+  layout: LayoutState
+  fullscreen: Fullscreen
+}) {
   const state = props.state
   let canvas!: HTMLCanvasElement
+
   let cachedContext: CanvasRenderingContext2D | null = null
+  let contextFor: HTMLCanvasElement | null = null
 
   /**
    * The 2D context, acquired on first use.
@@ -32,12 +41,32 @@ export function Preview(props: { state: AppState; menu: ContextMenuState }) {
    *
    * A missing ref or a refused context is now a message that names itself.
    */
+  /**
+   * The 2D context, acquired on first use.
+   *
+   * Not `let ctx!: CanvasRenderingContext2D`. The definite-assignment
+   * assertion tells TypeScript to stop checking, so an unassigned context
+   * compiles cleanly and then fails at runtime on the first `context().save()` —
+   * which is exactly what happened, and it cost four rounds of debugging a
+   * rendering bug that was a mistyped variable name.
+   *
+   * The cache is keyed on the element it came from, and that is not
+   * fussiness. It used to be a bare `cachedContext`, which outlived the canvas:
+   * hiding the picture unmounts the stage, `ref` rebinds `canvas` to a brand
+   * new element, and the cached context still pointed at the *destroyed* one.
+   * Every render after that drew into a canvas that was no longer in the
+   * document — a black picture — while the health check dutifully reported
+   * `canvas on-screen 0x0 display=` (empty, because getComputedStyle on a
+   * detached element returns empty strings) and raised a LAYOUT fault every
+   * five seconds for the rest of the session.
+   */
   function context(): CanvasRenderingContext2D {
-    if (cachedContext) return cachedContext
     if (!canvas) throw new Error('Preview: canvas ref was never set')
+    if (cachedContext && contextFor === canvas) return cachedContext
     const acquired = canvas.getContext('2d', { alpha: false })
     if (!acquired) throw new Error('Preview: could not acquire a 2d context')
     cachedContext = acquired
+    contextFor = canvas
     return acquired
   }
 
@@ -120,6 +149,16 @@ export function Preview(props: { state: AppState; menu: ContextMenuState }) {
     const t = state.playhead()
     requestedAt = t
 
+    // Nothing to draw onto. Hiding the picture unmounts the canvas, and
+    // `canvas` still points at the detached one — so without this the app
+    // would keep decoding frames and "painting" them into a dead element,
+    // inflating the paint counter with work nobody can see. The health check
+    // calls this state out rather than treating it as a fault.
+    if (props.layout.pictureHidden()) {
+      paintedAt = t
+      return
+    }
+
     if (state.project.video.length === 0) {
       explain('timeline is empty — add a clip first')
       return
@@ -128,6 +167,18 @@ export function Preview(props: { state: AppState; menu: ContextMenuState }) {
     const loc = clipAtLane(state.project.video, t)
     if (!loc) {
       explain(`playhead ${t.toFixed(2)}s is past the end of the timeline (${state.duration().toFixed(2)}s)`)
+      return
+    }
+
+    // A hidden clip is black, and *cheaply* black: no decode, no cache entry,
+    // nothing drawn but a fill. The preview and the exporter must agree, or the
+    // file would not match what the user approved while looking at it
+    // (docs/decisions/0001-one-render-function.md).
+    if (loc.clip.hidden) {
+      renderBlank(context(), options())
+      paintedAt = t
+      lastError = null
+      if (showDiag()) drawDiagnostic()
       return
     }
 
@@ -210,6 +261,22 @@ export function Preview(props: { state: AppState; menu: ContextMenuState }) {
           canvas: wrapped.canvas,
         })
 
+        // A clip can be hidden *while its frame is decoding*, and the staleness
+        // check below cannot see it: hiding does not move the playhead, so
+        // `requestedAt` is unchanged and the frame sails through and paints
+        // straight over the black. Intermittent by nature — it depends on
+        // whether the decode outlasts the keystroke.
+        //
+        // So the clip is asked again, here, where the answer is about to matter.
+        const current = clipAtLane(state.project.video, forTime)
+        if (current?.clip.hidden) {
+          renderBlank(context(), options())
+          lastError = null
+          paintedAt = forTime
+          if (showDiag()) drawDiagnostic()
+          return
+        }
+
         // A frame from the past is still right for that moment; it is just no
         // longer what the playhead is pointing at. The finally block re-draws.
         if (requestedAt !== forTime) {
@@ -286,6 +353,7 @@ export function Preview(props: { state: AppState; menu: ContextMenuState }) {
     lastError: () => lastError,
     inFlight: () => inFlight,
     overlayOn: showDiag,
+    pictureHidden: () => props.layout.pictureHidden(),
   })
 
   function reportHealth(): void {
@@ -370,9 +438,12 @@ export function Preview(props: { state: AppState; menu: ContextMenuState }) {
   }
 
   return (
-    <div class="flex min-h-0 flex-col bg-black">
-      {/* stage */}
-      <div class="relative grid min-h-0 flex-1 place-items-center overflow-hidden p-4">
+    <div class="flex min-h-0 flex-col bg-black" data-preview>
+      {/* stage — removed entirely when the picture is hidden, so the canvas is
+          not merely clipped: a 0-height canvas still costs a paint, and the
+          scrub handler would still be bound to it. */}
+      <Show when={!props.layout.pictureHidden()}>
+        <div ref={(el) => props.fullscreen.register(el)} class="relative grid min-h-0 flex-1 place-items-center overflow-hidden bg-black p-4">
         <div
           class="relative max-h-full max-w-full"
           style={{ 'aspect-ratio': String(aspect()), width: 'min(100%, calc((100cqh) * ' + aspect() + '))' }}
@@ -414,8 +485,16 @@ export function Preview(props: { state: AppState; menu: ContextMenuState }) {
           </Show>
         </div>
       </div>
+      </Show>
 
-      <Transport state={state} ticks={clock.ticks} />
+      <Transport
+        state={state}
+        ticks={clock.ticks}
+        pictureHidden={props.layout.pictureHidden}
+        fullscreen={props.fullscreen.active}
+        onToggleFullscreen={props.fullscreen.toggle}
+        onTogglePicture={() => props.layout.togglePicture()}
+      />
     </div>
   )
 }

@@ -10,8 +10,10 @@
 
 import { Show } from 'solid-js'
 import type { AppState } from '../../store/state.js'
+import type { LayoutState } from '../../store/layout.js'
+import { PanelToggle } from '../PanelToggle.js'
 
-export function Toolbar(props: { state: AppState; anyClips: () => boolean }) {
+export function Toolbar(props: { state: AppState; anyClips: () => boolean; layout: LayoutState }) {
   const state = props.state
   const count = (): number => state.selectionCount()
 
@@ -64,10 +66,14 @@ export function Toolbar(props: { state: AppState; anyClips: () => boolean }) {
         snap
       </button>
 
-      {/* Level and mute are audio-lane only. Shown for a video clip they would
-          be controls that cannot do anything. */}
+      {/* Level is audio-only and hide is video-only. A level slider on a video
+          clip is a control that cannot do anything, and a "mute" button on a
+          video clip is a promise the model refuses to keep. So each lane gets
+          the one control that means something for it — and the same M key
+          reaches both. */}
       <Show when={state.selectedClip()}>
         {(clip) => (
+          <>
           <Show when={clip().lane === 'audio'}>
             <label class="flex items-center gap-2 text-[10.5px] text-muted">
               level
@@ -81,11 +87,33 @@ export function Toolbar(props: { state: AppState; anyClips: () => boolean }) {
                 onInput={(e) => state.setClipGain(clip().id, Number(e.currentTarget.value))}
               />
               <span class="timecode w-8">{Math.round((clip().gain ?? 1) * 100)}%</span>
-              <button class="btn !py-0.5" onClick={() => state.toggleMute(clip().id)}>
+              <button
+                class="btn !py-0.5"
+                classList={{ '!border-accent/50 !text-accent': clip().muted }}
+                onClick={() => state.toggleHidden(clip().id)}
+                aria-pressed={Boolean(clip().muted)}
+                title={clip().muted ? 'Unmute this clip (M)' : 'Mute this clip (M)'}
+              >
                 {clip().muted ? 'muted' : 'live'}
               </button>
             </label>
           </Show>
+          <Show when={clip().lane === 'video'}>
+            <button
+              class="btn !py-0.5"
+              classList={{ '!border-accent/50 !text-accent': clip().hidden }}
+              onClick={() => state.toggleHidden(clip().id)}
+              aria-pressed={Boolean(clip().hidden)}
+              title={
+                clip().hidden
+                  ? 'Show this clip again — the picture is black while it is hidden (M)'
+                  : 'Hide this clip — black in the preview and in the export, audio untouched (M)'
+              }
+            >
+              {clip().hidden ? 'hidden' : 'visible'}
+            </button>
+          </Show>
+          </>
         )}
       </Show>
 
@@ -94,6 +122,17 @@ export function Toolbar(props: { state: AppState; anyClips: () => boolean }) {
       <span class="timecode pr-1 text-[10.5px] text-muted">
         {state.project.video.length} video · {state.project.audio.length} audio
       </span>
+      <PanelToggle
+        panel="timeline"
+        collapsed={props.layout.timelineCollapsed()}
+        onToggle={() => props.layout.toggleTimeline()}
+        disabledReason={
+          props.layout.canCollapseTimeline()
+            ? undefined
+            : 'The picture is hidden, so the timeline has the whole column'
+        }
+        dir="down"
+      />
     </div>
   )
 }

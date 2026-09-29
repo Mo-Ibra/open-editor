@@ -110,6 +110,11 @@ SolidJS components, no VDOM.
 | `app/view/Preview.tsx` | The canvas and the render loop. Cohesive on purpose. |
 | `app/view/preview/Transport.tsx` | The transport bar: play, stepping, mute, time, zoom. |
 | `app/view/preview/use-playback-clock.ts` | The playback clock. Polls the audio clock; never owns it. |
+| `app/view/PanelToggle.tsx` | The button that collapses a panel. The drag handle resizes; this says so. |
+| `app/view/fullscreen.ts` | The full-screen seam. One `toggle()` for the button, the menu, and `F`. |
+| `app/view/LogPanel.tsx` | The log panel. Reads `logRevision()`, so a closed panel costs nothing. |
+| `app/view/ShortcutsPanel.tsx` | The keymap, as a panel rather than furniture. |
+| `app/view/format.ts` | `formatTime`, shared by the transport and the status bar. |
 | `app/view/ExportDialog.tsx` | The export modal. Plays its own output before offering the download. |
 | `app/view/AssetBin.tsx` | Imported files. Select, double-click to append, drag onto a lane. |
 | `app/view/ContextMenu.tsx` | The application context menu. |

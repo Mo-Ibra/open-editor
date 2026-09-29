@@ -59,7 +59,13 @@ export function Clip(props: {
         width: `${Math.max(2, rect().width)}px`,
         height: `${props.height}px`,
         // Tint is a low-chroma wash; the waveform and the picture carry the colour.
-        'background-color': props.lane === 'video' ? '#1b2c47' : '#16342a',
+        // A switched-off clip is desaturated as well as badged. The badge is the
+        // precise statement; this is the at-a-glance one, and it has to survive
+        // being glanced at rather than read.
+        'background-color':
+          props.clip.hidden || props.clip.muted
+            ? props.lane === 'video' ? '#22222c' : '#1c2420'
+            : props.lane === 'video' ? '#1b2c47' : '#16342a',
         'border-color': isSelected()
           ? 'transparent'
           : props.lane === 'video'
@@ -80,13 +86,31 @@ export function Clip(props: {
       </Show>
 
       {/* Muting is invisible on a waveform otherwise: the peaks just get
-          dimmer, which reads as "quieter", not "muted". */}
+          dimmer, which reads as "quieter", not "muted". The same is true of
+          hiding, and worse: a hidden video clip is a black rectangle with nothing
+          in it to hint that it was ever anything else.
+
+          So both flags get a badge that is visible *without* selecting the clip.
+          Pressing M and then hunting for evidence is how a user concludes the
+          key did nothing. The word is spelled out — "mute" and "hide" — because
+          an icon alone is a thing to be learned, and these are the two states a
+          user is most likely to forget they set. */}
       <Show when={props.clip.muted && props.lane === 'audio'}>
         <span
           class="pointer-events-none absolute right-1 top-1 z-30 rounded bg-[#d29922] px-1 text-[9px] font-bold uppercase text-black"
           aria-label="muted"
+          title="Muted — the audio is still here, it is just silent. Press M to unmute."
         >
           mute
+        </span>
+      </Show>
+      <Show when={props.clip.hidden && props.lane === 'video'}>
+        <span
+          class="pointer-events-none absolute right-1 top-1 z-30 rounded bg-[#6c6f8a] px-1 text-[9px] font-bold uppercase text-black"
+          aria-label="hidden"
+          title="Hidden — this clip is black in the preview and in the export. Press M to show it."
+        >
+          hide
         </span>
       </Show>
 

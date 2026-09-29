@@ -153,3 +153,48 @@ test('ordinary elements are not spared', () => {
   assert.equal(shouldIgnore(el('DIV'), 'g'), false)
   assert.equal(shouldIgnore(el('CANVAS'), ' '), false)
 })
+
+/**
+ * The panel shortcuts, matched in isolation.
+ *
+ * `\` is the key editors already use for the bottom panel, and it is the only
+ * free key in the set that no text field wants. The pair `\` and `⌘\` is the
+ * part worth pinning: they share a key and are told apart *only* by the accel
+ * check, so a matcher that lost its modifier comparison would make one of them
+ * unreachable rather than merely wrong.
+ */
+test('the panel keys are distinguishable from each other', () => {
+  const toggled: string[] = []
+  const layout = {
+    toggleTimeline: () => toggled.push('timeline'),
+    toggleSidebar: () => toggled.push('sidebar'),
+  } as never
+  const list: Shortcut[] = [
+    S(['\\'], '\\', { run: () => (layout as { toggleTimeline: () => void }).toggleTimeline() }),
+    S(['\\'], '⌘\\', {
+      accel: true,
+      run: () => (layout as { toggleSidebar: () => void }).toggleSidebar(),
+    }),
+  ]
+
+  assert.equal(matchShortcut(list, pressed('\\'))?.hint, '\\', 'plain backslash is the timeline')
+  assert.equal(
+    matchShortcut(list, pressed('\\', { metaKey: true }))?.hint,
+    '⌘\\',
+    'the accel variant must not be shadowed by the plain one',
+  )
+  assert.equal(matchShortcut(list, pressed('\\', { ctrlKey: true }))?.hint, '⌘\\', 'ctrl counts too')
+  assert.equal(matchShortcut(list, pressed('\\', { shiftKey: true })), null, 'shift is neither')
+
+  // And prove both actually reach their action.
+  matchShortcut(list, pressed('\\'))!.run()
+  matchShortcut(list, pressed('\\', { metaKey: true }))!.run()
+  assert.deepEqual(toggled, ['timeline', 'sidebar'])
+})
+
+test('a shortcut disabled by state does not match, and does not run', () => {
+  let ran = false
+  const list = [S(['f'], 'F', { enabled: () => false, run: () => (ran = true) })]
+  assert.equal(matchShortcut(list, pressed('f')), null)
+  assert.equal(ran, false)
+})

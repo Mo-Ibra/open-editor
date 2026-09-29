@@ -50,6 +50,17 @@ import { clampZoom, ZOOM_DEFAULT } from './zoom.js'
 export interface Notice {
   kind: 'info' | 'warn' | 'error'
   text: string
+  /**
+   * Identity, so a notice can be withdrawn by the timer that scheduled it.
+   *
+   * The expiry used to be `slice(0, -1)` — "drop the last one" — which is only
+   * correct if notices expire in the order they arrived. They do not: every
+   * notice sets its own 6s timer, so a burst of them expires out of order, and
+   * an old notice's timer deleted whichever notice was *newest*. The visible
+   * symptom was a fresh message vanishing a moment after it appeared, and an
+   * older one sitting on screen far longer than six seconds.
+   */
+  id: number
 }
 
 export function createAppState() {
@@ -60,10 +71,16 @@ export function createAppState() {
   /** Magnetic snapping. Off means every position is exactly where you put it. */
   const [snapping, setSnapping] = createSignal(true)
 
+  let noticeId = 0
   function notify(kind: Notice['kind'], text: string): void {
-    setNotices((prev) => [...prev.slice(-4), { kind, text }])
+    const notice: Notice = { kind, text, id: ++noticeId }
+    setNotices((prev) => [...prev.slice(-4), notice])
     // Errors stay. A transient one is the common case and 6s is enough to read.
-    if (kind !== 'error') setTimeout(() => setNotices((prev) => prev.slice(0, -1)), 6000)
+    if (kind !== 'error') {
+      setTimeout(() => {
+        setNotices((prev) => prev.filter((n) => n.id !== notice.id))
+      }, 6000)
+    }
   }
 
   /** Selection owns its own signal; nothing below may write to it directly. */
@@ -222,6 +239,8 @@ export function createAppState() {
     setClipGain: edits.setClipGain,
     toggleMuteSelected: edits.toggleMuteSelected,
     toggleMute: edits.toggleMute,
+    toggleHideSelected: edits.toggleHideSelected,
+    toggleHidden: edits.toggleHidden,
     breakSelectedLinks: edits.breakSelectedLinks,
     selectionHasLinks: edits.selectionHasLinks,
 

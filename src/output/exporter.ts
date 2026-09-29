@@ -57,6 +57,22 @@ export interface ExportResult {
   size: number
 }
 
+/**
+ * Does this clip contribute decoded frames, or black?
+ *
+ * Two cases, and only two: the asset has no video track at all (an audio file
+ * dropped on the video lane), or the user has hidden the clip. Both write black
+ * for the clip's whole span, and neither skips it — a clip still occupies its
+ * time and shifts nothing after it.
+ *
+ * Its own function because it is the *rule*, and a rule that lives inline in a
+ * 450-line export loop is a rule nothing can test. Exporting to prove a hidden
+ * clip comes out black needs a whole media pipeline; this needs a `Clip`.
+ */
+export function clipRendersBlack(clip: Clip, hasVideoSink: boolean): boolean {
+  return !hasVideoSink || clip.hidden === true
+}
+
 export class ExportCancelled extends Error {
   constructor() {
     super('Export cancelled')
@@ -326,9 +342,16 @@ export class Exporter {
         const entry = this.#library.get(clip.assetId)
         void emittedUpTo
 
-        if (!entry?.videoSink) {
+        if (clipRendersBlack(clip, Boolean(entry?.videoSink))) {
           // An audio-only clip still occupies its span, so the output needs
-          // that many black frames.
+          // that many black frames — and so does a clip the user has hidden.
+          //
+          // Not decoding is the point: a hidden clip is a gap with an asset
+          // behind it, and decoding frames only to paint them black would make
+          // hiding a long clip slower than deleting it. The frames are counted
+          // and timed exactly as a real clip's would be, so hiding does not
+          // shift anything after it.
+          log.info(`export: clip ${clip.id} is hidden — writing black`)
           for (const t of outTimes) {
             this.#checkCancelled()
             renderBlank(ctx, renderOptions)
@@ -337,8 +360,11 @@ export class Exporter {
             done++
           }
         } else {
+          // Narrowed by the `clipRendersBlack` test above, which is the only
+          // thing that could have sent us down this path.
+          const sink = entry!.videoSink!
           let at = 0
-          for await (const wrapped of entry.videoSink.canvasesAtTimestamps(sourceTimes)) {
+          for await (const wrapped of sink.canvasesAtTimestamps(sourceTimes)) {
             this.#checkCancelled()
             // The frame's place on the OUTPUT timeline, not in the source.
             const t = outTimes[at++] ?? cursor * frameDuration

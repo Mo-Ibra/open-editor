@@ -69,7 +69,22 @@ export interface Clip {
   transform?: ClipTransform
   /** Linear gain, 0–2. Absent means unity. */
   gain?: number
+  /**
+   * Audio lane only. See `toggleMute` — a video clip is refused rather than
+   * carrying a meaningless flag.
+   */
   muted?: boolean
+  /**
+   * Video lane only: draw black for this clip, in the preview and in the
+   * export, until it is shown again.
+   *
+   * The video counterpart of `muted`, and deliberately not the same field. A
+   * single "hidden" flag on both lanes would allow a state where a clip is
+   * neither audible nor visible, which is not a thing anyone can want and is
+   * two flags to keep straight. Refusing the wrong lane means no caller can
+   * produce that state.
+   */
+  hidden?: boolean
   /**
    * Clips sharing a linkId are edited together. Absent means unlinked, which
    * is a first-class state, not an oversight: cutting the picture while
@@ -510,6 +525,26 @@ export function toggleMute(project: Project, clipId: ClipId): Project {
   if (!found || found.lane !== 'audio') return project
   const next = laneOf(project, found.lane).slice()
   next[found.index] = { ...next[found.index]!, muted: !next[found.index]!.muted }
+  return { ...project, [found.lane]: next } as Project
+}
+
+/**
+ * Hide or show a clip: black picture, sound untouched.
+ *
+ * **Video lane only**, for the same reason `toggleMute` is audio-only. What it
+ * costs to be lax here is higher, though: a `hidden` flag that reached the
+ * exporter would write a black run into somebody's file.
+ *
+ * Hiding is *not* removing. The clip keeps its place in the timeline, its link,
+ * and its audio, and showing it again brings the picture straight back — which
+ * is why this is not `delete`, and why the flag lives on the clip rather than
+ * being remembered as a separate list.
+ */
+export function toggleHidden(project: Project, clipId: ClipId): Project {
+  const found = findClip(project, clipId)
+  if (!found || found.lane !== 'video') return project
+  const next = laneOf(project, found.lane).slice()
+  next[found.index] = { ...next[found.index]!, hidden: !next[found.index]!.hidden }
   return { ...project, [found.lane]: next } as Project
 }
 
