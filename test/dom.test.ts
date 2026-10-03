@@ -439,13 +439,15 @@ console.log('ref-binding assertions passed')
     /state\.seek\(/,
     'a trim must move the playhead, or the preview shows a frame that is no longer being cut',
   )
-  // One frame inside for a trim-out, because the handle sits *at* the clip's end
-  // and `clipAtLane` is half-open: seeking there lands outside the clip.
+  // The seek must be in TIMELINE space. `sourceT` is a source time, and feeding
+  // it to `seek` — which walks the timeline — showed the wrong frame (or a gap)
+  // for every clip whose source in-point did not equal its timeline start.
   assert.match(
     trim,
-    /drag\.kind === 'trim-out' \? Math\.max\(laneStartTime, sourceT - frame\)/,
-    'a trim-out must hold the playhead inside the clip, or it lands on the next one',
+    /state\.seek\(drag\.kind === 'trim-out' \? Math\.max\(laneStartTime, edge - frame\) : laneStartTime\)/,
+    'the trim preview must seek timeline space, not the source time',
   )
+  assert.doesNotMatch(trim, /state\.seek\([^)]*sourceT/, 'a source time must never be seeked as a timeline position')
   assert.match(trim, /const frame = 1 \/ state\.outputFps\(\)/, 'and one output frame is the right distance')
 
   // The move branch deliberately does NOT seek: dragging a clip must not move the

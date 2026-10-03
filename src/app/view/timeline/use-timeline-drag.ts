@@ -46,6 +46,16 @@ export const HANDLE = 8
  */
 const SNAP_PIXELS = 10
 
+/**
+ * How far the pointer must travel before a press becomes a drag.
+ *
+ * A click with a pixel of hand tremor used to run the whole move/trim path on
+ * its first `pointermove`: the undo entry was committed and a sub-pixel (or,
+ * when snapping held the clip, nil) edit was written. Three pixels is above
+ * tremor and below anything the user means as a drag.
+ */
+const DRAG_THRESHOLD = 3
+
 type Drag =
   | { kind: 'playhead'; locked: SnapTarget | null }
   | {
@@ -106,6 +116,8 @@ export function useTimelineDrag(
    * once — and the per-move writes land inside that single entry.
    */
   let dragCommitted = false
+  /** Client X at pointerdown, so a drag can require real movement first. */
+  let pressX = 0
   /** Wheel bursts are summed and applied once per frame. */
   let pendingNotches = 0
   let rafId = 0
@@ -164,7 +176,13 @@ export function useTimelineDrag(
     clipStart(laneOf(state.project, lane), index)
 
   function onPointerDown(event: PointerEvent): void {
+    // **Only the primary button drags.** Pointer events fire for every button,
+    // so without this a right-press — or a right-click with a pixel of jitter —
+    // ran the whole move/trim path, edited a clip and wrote an undo entry.
+    // The context menu is unaffected: `onContextMenu` owns right-click.
+    if (event.button !== 0) return
     dragCommitted = false
+    pressX = event.clientX
     const target = event.target as HTMLElement
     const lane = target.closest('[data-lane]')?.getAttribute('data-lane') as Lane | undefined
     elements.track()?.setPointerCapture(event.pointerId)
@@ -188,15 +206,19 @@ export function useTimelineDrag(
       const clip = laneOf(state.project, lane)[index]
       if (!clip) return
       state.selectClip(clip.id, selectModeOf(event))
-      const laneClips = laneOf(state.project, lane)
       const selected = new Set(state.selection())
-      // Only *fixed* edges are targets, captured once. The dragged clips move,
-      // and so does every clip after the first selected one (positions are
-      // derived, so a rightward drag pushes its successors). Their edges travel
-      // with the drag, and a target that moves with the clip is a target it
-      // chases — the vibration. Selected clips in the other lane move too, so
-      // they are excluded as well.
-      const moving = movingInLane(laneClips, selected)
+      // Only *fixed* edges are targets, captured once. A dragged clip moves, and
+      // in a group drag so does every clip after the first selected one in
+      // **each** lane — positions are derived, so a rightward shift pushes its
+      // successors. An edge that travels with the drag is an edge the drag
+      // chases; that is the vibration. So both lanes' moving clips are excluded,
+      // not just the anchor lane's: a linked pair dragged as a block pushes its
+      // successors in the audio lane too, and those were left in the list as
+      // frozen targets pointing at where they used to be.
+      const movingByLane = {
+        video: movingInLane(state.project.video, selected),
+        audio: movingInLane(state.project.audio, selected),
+      }
       drag = {
         kind: 'move',
         lane,
@@ -204,7 +226,9 @@ export function useTimelineDrag(
         grabOffset: state.xToTime(x) - laneStart(lane, index),
         locked: null,
         snapTargets: targets(lane).filter(
-          (t) => !t.clipId || !(selected.has(t.clipId) || (t.lane === lane && moving.has(t.clipId))),
+          (t) =>
+            !t.clipId ||
+            !(selected.has(t.clipId) || (t.lane !== null && movingByLane[t.lane].has(t.clipId))),
         ),
       }
       return
@@ -253,6 +277,7 @@ export function useTimelineDrag(
         const clip = clips[drag.index]
         if (!clip) return
         if (!dragCommitted) {
+          if (Math.abs(event.clientX - pressX) < DRAG_THRESHOLD) return
           state.commit()
           dragCommitted = true
         }
@@ -309,6 +334,7 @@ export function useTimelineDrag(
         const clip = clips[drag.index]
         if (!clip) return
         if (!dragCommitted) {
+          if (Math.abs(event.clientX - pressX) < DRAG_THRESHOLD) return
           state.commit()
           dragCommitted = true
         }
@@ -329,11 +355,12 @@ export function useTimelineDrag(
           threshold > 0
             ? snapTrimEdge(proposed, targets(drag.lane), threshold, { clipId: clip.id }, drag.locked)
             : null
+        // Timeline space, always. This is the one value `seek` may be given.
+        const edge = snapped ? snapped.time : proposed
 
         const laneStartTime = laneStart(drag.lane, drag.index)
-        // Either the snapped timeline position or the raw pointer position,
-        // expressed as an offset from the clip's own start, then as source time.
-        const sourceT = clip.in + ((snapped ? snapped.time : proposed) - laneStartTime)
+        // The edge as a source time, for the trim itself.
+        const sourceT = clip.in + (edge - laneStartTime)
 
         if (drag.kind === 'trim-in') state.trim(drag.lane, drag.index, sourceT, clip.out)
         else state.trim(drag.lane, drag.index, clip.in, sourceT)
@@ -347,11 +374,16 @@ export function useTimelineDrag(
         // out-point passed the playhead, the clip ended before the playhead did and
         // the preview showed whatever came next.
         //
-        // For a trim-out the handle sits *at* the clip's end, which is not inside
-        // it — `clipAtLane` is half-open — so it is held one frame inside. Dragging
-        // a cut should show the clip being cut, not its consequences.
+        // **Seek in timeline space — never `sourceT`.** `sourceT` is a source
+        // time and `seek` walks the timeline; the two coincide only when the
+        // clip's source in-point equals its timeline start (a clip at zero with
+        // `in` 0). Feeding `sourceT` to `seek` showed the wrong frame, or a gap,
+        // for every other clip. A trim-in is previewed at the clip's start, where
+        // the new in frame now sits (the picture still tracks, because `clip.in`
+        // changed); a trim-out is held one frame before the pointer, which is
+        // inside the half-open clip.
         const frame = 1 / state.outputFps()
-        state.seek(drag.kind === 'trim-out' ? Math.max(laneStartTime, sourceT - frame) : sourceT)
+        state.seek(drag.kind === 'trim-out' ? Math.max(laneStartTime, edge - frame) : laneStartTime)
 
         drag.locked = snapped?.target ?? null
         setGuide(snapped ? { time: snapped.time, label: describeTarget(snapped.target) } : null)
