@@ -10,9 +10,9 @@
  *
  * **A collapsed panel gets a labelled tab**, not a bare arrow. A collapsed
  * panel is 0px with `overflow-hidden`, so a toggle rendered inside its header is
- * clipped out of existence; the only way back was a 1px hairline (or an arrow
- * you had to find by luck). The tab is a sibling of the clipped panel, sits on
- * the boundary, and says which panel it brings back.
+ * clipped out of existence; the only way back was a 1px hairline (or a bare
+ * arrow that had to be discovered by luck). The tab is a sibling of the clipped
+ * panel, sits on the boundary, and says which panel it brings back.
  */
 
 import { Show } from 'solid-js'

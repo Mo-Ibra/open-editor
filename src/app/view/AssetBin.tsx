@@ -7,8 +7,8 @@
  *
  * Three things make it usable once a shoot's worth of files is in it:
  *
- * - **Search and a type filter**, because scrolling is not a way to find a file
- *   you already know the name of.
+ * - **Search and a type filter**, because scrolling is not how a file is found
+ *   when its name is already known.
  * - **Hover actions** (add, remove) on the row itself. The context menu still
  *   has everything, but the two actions people repeat are one click.
  * - **Keyboard reachability.** The row is a real button: Enter adds, Space

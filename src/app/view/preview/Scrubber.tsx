@@ -3,8 +3,8 @@
  *
  * A full-width progress bar that is also the fastest way to move the playhead:
  * click anywhere to jump, drag to scrub. The canvas itself is scrubbable, but a
- * picture with no visible track gives no sense of where you are or how much is
- * left, so this is the affordance people actually reach for.
+ * picture with no visible track gives no sense of the current position or how
+ * much is left, so this is the affordance people actually reach for.
  *
  * Pure presentation over `state.seek`; the transport does not own any position
  * of its own, so the bar and the picture can never disagree.

@@ -151,6 +151,7 @@ export class AudioEngine {
 
     let scheduled = 0
     let skipped = 0
+    const jobs: Promise<void>[] = []
 
     // The audio lane only. The picture is the exporter's business.
     for (let i = 0; i < project.audio.length; i++) {
@@ -173,13 +174,21 @@ export class AudioEngine {
       // clock, so its silence before it is real silence rather than a hole.
       const delay = Math.max(0, startsAt - position)
 
-      void this.#schedule(ctx, project, clip, sourceFrom, remaining, delay).then((ok) => {
-        if (ok) scheduled++
-        else skipped++
-      })
+      jobs.push(
+        this.#schedule(ctx, project, clip, sourceFrom, remaining, delay).then((ok) => {
+          if (ok) scheduled++
+          else skipped++
+        }),
+      )
     }
 
-    log.info(`audio: play from ${position.toFixed(2)}s — ${scheduled} scheduled, ${skipped} skipped`)
+    // Logged once the scheduling has settled. `#schedule` decodes and connects
+    // asynchronously, so reading the counters straight after the loop always
+    // printed "0 scheduled, N skipped" — which made a healthy playback look
+    // like it had scheduled nothing.
+    void Promise.all(jobs).then(() => {
+      log.info(`audio: play from ${position.toFixed(2)}s — ${scheduled} scheduled, ${skipped} skipped`)
+    })
     return this.#runStart
   }
 

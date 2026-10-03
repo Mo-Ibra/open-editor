@@ -147,9 +147,12 @@ const AUDIO_CHUNK_SECONDS = 0.5
  * two to three times larger than it needed to be.
  *
  * Five seconds is the compromise: a player lands within five seconds and
- * decodes forward, which nobody notices for a shared file, while the size drops
- * by more than half. Shorten it only if frame-accurate scrubbing of the output
- * matters more than its size.
+ * decodes forward, which goes unnoticed for a shared file, while the size drops
+ * by more than half. Ten seconds halves it again (~326 kbps), but a seek can
+ * then land up to ten seconds from the requested position — a hesitation that
+ * is felt while scrubbing, so it is not free the way 2 s → 5 s is. Five is
+ * where the trade stops paying off. Shorten it only if frame-accurate
+ * scrubbing of the output matters more than its size.
  */
 const KEYFRAME_SECONDS = 5
 
