@@ -14,6 +14,7 @@ import { Show } from 'solid-js'
 import { Check, Link2 } from 'lucide-solid'
 import type { Clip as ClipModel, Lane } from '../../../model/project.js'
 import type { AppState } from '../../store/state.js'
+import { Filmstrip } from './Filmstrip.js'
 import { HANDLE } from './use-timeline-drag.js'
 import { Waveform } from './Waveform.js'
 
@@ -75,6 +76,16 @@ export function Clip(props: {
       }}
       title={`${asset()?.name ?? 'missing'} — ${props.clip.in.toFixed(2)}s → ${props.clip.out.toFixed(2)}s`}
     >
+      {/* The picture, tiled across the clip. Skipped while hidden, so a hidden
+          clip really does read as black rather than showing the frame anyway. */}
+      <Show when={props.lane === 'video' && asset()?.hasVideo && !props.clip.hidden}>
+        <Filmstrip clip={props.clip} state={state} height={props.height} />
+      </Show>
+
+      {/* A shallow top-light, so a flat tint reads as a surface instead of a
+          rectangle of colour. Purely decorative and behind every control. */}
+      <div class="pointer-events-none absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b from-white/[0.06] to-transparent" />
+
       {/* A tick on every selected clip but the primary, so a group selection
           reads as a group even when the rings are only a couple of pixels. */}
       <Show when={isSelected() && !isPrimary()}>

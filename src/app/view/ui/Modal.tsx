@@ -11,8 +11,12 @@
  * `data-media-panel`, …) on the panel element, which is where a probe looks.
  */
 
-import { Show, type JSX } from 'solid-js'
+import { onCleanup, onMount, Show, type JSX } from 'solid-js'
 import { X } from 'lucide-solid'
+
+/** Everything a Tab can land on inside the panel. */
+const FOCUSABLE =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
 export type ModalPlacement = 'center' | 'top' | 'right'
 
@@ -36,6 +40,47 @@ export function Modal(props: {
 }) {
   const placement = (): ModalPlacement => props.placement ?? 'center'
   const isPanel = (): boolean => (props.variant ?? 'panel') === 'panel'
+  let panelEl: HTMLDivElement | undefined
+
+  /*
+   * Focus moves into the dialog and is trapped there, then handed back.
+   *
+   * Without this, opening a panel left focus on the page behind it, so Tab
+   * walked the editor underneath and a screen reader never announced the panel.
+   * The panel itself takes focus (not its first button) so Enter cannot
+   * accidentally fire an action; Tab from there reaches the controls.
+   */
+  onMount(() => {
+    const previous = document.activeElement as HTMLElement | null
+    panelEl?.focus()
+
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key !== 'Tab' || !panelEl) return
+      const items = [...panelEl.querySelectorAll<HTMLElement>(FOCUSABLE)]
+      if (items.length === 0) {
+        event.preventDefault()
+        return
+      }
+      const first = items[0]!
+      const last = items[items.length - 1]!
+      const active = document.activeElement
+      if (event.shiftKey && (active === first || active === panelEl)) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+
+    document.addEventListener('keydown', onKey)
+    onCleanup(() => {
+      document.removeEventListener('keydown', onKey)
+      // Return focus where it was, so closing a panel does not dump the user at
+      // the top of the document.
+      if (previous && document.contains(previous)) previous.focus()
+    })
+  })
 
   return (
     <div
@@ -56,7 +101,11 @@ export function Modal(props: {
       onDrop={props.onDrop}
     >
       <div
-        class={`flex min-h-0 flex-col overflow-hidden bg-panel shadow-modal ${
+        ref={panelEl}
+        role="dialog"
+        aria-modal="true"
+        tabindex={-1}
+        class={`flex min-h-0 flex-col overflow-hidden bg-panel shadow-modal outline-none ${
           isPanel() ? 'rounded-panel border border-line' : 'border-l border-line'
         } ${props.panelClass ?? ''}`}
         {...(props.panelAttrs as JSX.HTMLAttributes<HTMLDivElement>)}

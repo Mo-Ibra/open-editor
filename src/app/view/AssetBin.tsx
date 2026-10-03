@@ -15,7 +15,7 @@
  *   selects, Delete removes. A drag target is an affordance, not the only one.
  */
 
-import { createMemo, createSignal, For, Show } from 'solid-js'
+import { createMemo, createSignal, For, onMount, Show } from 'solid-js'
 import { Plus, Search, Trash2 } from 'lucide-solid'
 import type { Asset } from '../../model/project.js'
 import type { AppState } from '../store/state.js'
@@ -207,7 +207,7 @@ export function AssetBin(props: { state: AppState; menu: ContextMenuState; layou
                             props.menu.show({ kind: 'asset', assetId: id, x: ev.clientX, y: ev.clientY })
                           }}
                         >
-                          <TypeTile asset={asset()!} />
+                          <Thumbnail state={state} assetId={id} asset={asset()!} />
                           <div class="min-w-0 flex-1">
                             <div class="truncate text-small text-fg">{asset()!.name}</div>
                             <div class="truncate text-tiny text-muted">{describe(asset()!)}</div>
@@ -271,18 +271,67 @@ export function draggedAssetId(): string | null {
   return draggingId
 }
 
-/** A small coloured tile standing in for a thumbnail. */
-function TypeTile(props: { asset: Asset }) {
-  const video = () => props.asset.hasVideo
+/**
+ * A frame from the file, or a coloured type tile while it decodes or if it has
+ * no picture.
+ *
+ * One frame off the front, drawn fit into a 16:9 tile. It is the cheapest way
+ * to tell six clips of the same shoot apart, and the decode is the same one the
+ * preview does — the sink already exists.
+ */
+function Thumbnail(props: { state: AppState; assetId: string; asset: Asset }) {
+  let canvas: HTMLCanvasElement | undefined
+  const [ready, setReady] = createSignal(false)
+  const [failed, setFailed] = createSignal(false)
+  const showFrame = (): boolean => props.asset.hasVideo && !failed()
+
+  onMount(async () => {
+    if (!showFrame()) return
+    const sink = props.state.library.get(props.assetId)?.videoSink
+    if (!sink) return setFailed(true)
+    try {
+      const wrapped = await sink.getCanvas(Math.min(0.1, props.asset.duration / 2))
+      if (!wrapped) return setFailed(true)
+      if (!canvas) return
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return setFailed(true)
+      // Fit, letterboxed, rather than stretched: a distorted thumbnail is worse
+      // than a type tile.
+      const scale = Math.min(canvas.width / wrapped.canvas.width, canvas.height / wrapped.canvas.height)
+      const w = wrapped.canvas.width * scale
+      const h = wrapped.canvas.height * scale
+      ctx.fillStyle = '#0a0a0c'
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      ctx.drawImage(wrapped.canvas, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h)
+      setReady(true)
+    } catch {
+      setFailed(true)
+    }
+  })
+
   return (
     <span
-      class="grid size-7 shrink-0 place-items-center rounded-[5px] text-tiny font-bold"
+      class="relative grid h-7 w-12 shrink-0 place-items-center overflow-hidden rounded-[5px]"
       classList={{
-        'bg-[#1e3a63] text-[#8fb6ff]': video(),
-        'bg-[#14402f] text-[#6fd39a]': !video(),
+        'bg-[#1e3a63] text-[#8fb6ff]': props.asset.hasVideo,
+        'bg-[#14402f] text-[#6fd39a]': !props.asset.hasVideo,
       }}
     >
-      {video() ? 'V' : 'A'}
+      <Show when={showFrame()}>
+        <canvas
+          ref={canvas}
+          width={96}
+          height={54}
+          class="absolute inset-0 size-full"
+          classList={{ 'opacity-0': !ready() }}
+        />
+      </Show>
+      <Show when={!props.asset.hasVideo}>
+        <span class="text-tiny font-bold">A</span>
+      </Show>
+      <Show when={props.asset.hasVideo && !ready()}>
+        <span class="text-tiny font-bold">V</span>
+      </Show>
     </span>
   )
 }

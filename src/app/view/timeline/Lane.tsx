@@ -131,7 +131,13 @@ export function Lane(props: LaneProps) {
       }}
       onDrop={onDrop}
     >
-      <span class="panel-label pointer-events-none absolute right-2 top-1.5 z-10">{props.label}</span>
+      <span class="pointer-events-none absolute right-2 top-1.5 z-10 flex items-center gap-1.5">
+        <span
+          class="size-1.5 rounded-full"
+          classList={{ 'bg-[#4f7dd6]': props.lane === 'video', 'bg-[#3f9e78]': props.lane === 'audio' }}
+        />
+        <span class="panel-label">{props.label}</span>
+      </span>
       <DropCue preview={preview} lane={props.lane} state={state} />
       <For each={clips()}>
         {(clip, index) => (
