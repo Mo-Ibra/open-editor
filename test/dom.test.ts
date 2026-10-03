@@ -442,19 +442,16 @@ console.log('ref-binding assertions passed')
     /requestAnimationFrame\(applyPendingZoom\)/,
     'and applied at most once per animation frame',
   )
-  // The anchor needs the pointer position, which only exists on the event, so it
-  // must be captured there and used in the frame callback.
+  // The anchor needs the pointer position, which only exists on the event, so
+  // it must be captured there and used in the frame callback.
   assert.match(handler, /wheelClientX = event\.clientX/, 'the pointer position must be recorded from the event')
 
   const apply = timeline.match(/function applyPendingZoom[\s\S]*?\n  \}/)?.[0] ?? ''
   assert.ok(apply, 'applyPendingZoom should exist')
-  assert.match(apply, /scrollLeftAfterZoom\(/, 'and it must zoom about the pointer, not the origin')
   assert.match(apply, /pendingNotches = 0/, 'and reset the accumulator, or it grows forever')
-  assert.match(
-    apply,
-    /getBoundingClientRect\(\)/,
-    'the scroll geometry is read once per frame, before any write',
-  )
+  assert.match(apply, /scrollLeftAfterZoom\(/, 'the wheel must zoom about the pointer, not the origin')
+  // The slider has no pointer, so its zoom is placed by the effect instead.
+  assert.match(timeline, /clientWidth \/ 2/, 'non-wheel zoom anchors on the viewport centre')
 
   // The legend advertises it, so the feature is discoverable.
   const shortcuts = readFileSync(new URL('../src/app/commands/shortcuts.ts', import.meta.url), 'utf8')

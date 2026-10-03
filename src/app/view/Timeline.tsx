@@ -18,6 +18,7 @@ import { DND_ASSET, draggedAssetId } from './AssetBin.js'
 import { Lane as LaneView, type DropPreview } from './timeline/Lane.js'
 import { Ruler } from './timeline/Ruler.js'
 import { ticks } from './timeline/ticks.js'
+import { TimelineScrollbar } from './timeline/TimelineScrollbar.js'
 import { Toolbar } from './timeline/Toolbar.js'
 import type { LayoutState } from '../store/layout.js'
 import { useTimelineDrag } from './timeline/use-timeline-drag.js'
@@ -178,19 +179,21 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
   }
 
   return (
-    <section class="flex min-h-0 flex-1 flex-col border-t border-line bg-panel">
+    <section class="flex min-h-0 min-w-0 flex-1 flex-col border-t border-line bg-panel">
       <Toolbar state={state} anyClips={anyClips} layout={props.layout} />
 
-      {/* ruler + lanes */}
-      <div ref={scrollerEl} class="min-h-0 flex-1 overflow-auto">
+      {/* ruler + lanes. Horizontal scrolling is driven by the scrollbar below,
+          so the native one is hidden to avoid two bars stacked together. */}
+      <div ref={scrollerEl} class="min-h-0 w-full min-w-0 flex-1 overflow-y-auto overflow-x-hidden">
         <div
           ref={trackEl}
+          id="timeline-track"
           class="relative min-h-full select-none touch-none"
           style={{ width: `${contentWidth()}px` }}
           // The zoom, exactly. The preview's slider is `step="10"`, so it can
           // only report multiples of ten and cannot be used to read a precise
           // zoom level — which makes this the only exact readout, and the only
-          // way a test can verify the pointer anchor.
+          // way a test can verify the centre anchor.
           data-zoom={state.zoom()}
           onPointerDown={drag.onPointerDown}
           onContextMenu={drag.onContextMenu}
@@ -260,6 +263,8 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
           </div>
         </div>
       </div>
+
+      <TimelineScrollbar scroller={() => scrollerEl} contentWidth={contentWidth} />
     </section>
   )
 }

@@ -13,7 +13,7 @@
  * move that tries. See docs/data-model.md.
  */
 
-import { createSignal, onCleanup, onMount, type Accessor } from 'solid-js'
+import { createEffect, createSignal, onCleanup, onMount, type Accessor } from 'solid-js'
 
 import { clipAtLane, clipDuration, clipEnd, clipStart, laneOf, type Lane } from '../../../model/project.js'
 import {
@@ -92,6 +92,8 @@ export function useTimelineDrag(
   /** Wheel bursts are summed and applied once per frame. */
   let pendingNotches = 0
   let rafId = 0
+  /** True when a ctrl+wheel frame already anchored the scroll on the pointer. */
+  let wheelAnchored = false
   /** Pointer X of the most recent wheel event, in client coordinates. */
   let wheelClientX = 0
 
@@ -315,6 +317,8 @@ export function useTimelineDrag(
       scroller.scrollLeft += step + event.deltaX
       return
     }
+    // Recorded here because it only exists on the event, and the zoom is
+    // applied a frame later.
     wheelClientX = event.clientX
     // Must happen even though the zoom is deferred: this is the browser's own
     // page-zoom gesture, and the event does not wait for an animation frame.
@@ -349,20 +353,48 @@ export function useTimelineDrag(
 
     const scroller = elements.scroller()
     if (!scroller) return
-
-    // Pointer position inside the visible area. Read once per frame, before any
-    // write, so this never forces a layout mid-burst.
+    // Anchor on the pointer: whatever is under the cursor stays under it, so
+    // wheeling over a clip zooms *that* clip rather than a fixed spot.
+    wheelAnchored = true
     const pointerX = wheelClientX - scroller.getBoundingClientRect().left
-    const nextScroll = scrollLeftAfterZoom({
+    const next = scrollLeftAfterZoom({
       scrollLeft: scroller.scrollLeft,
       localX: pointerX,
       zoomBefore: before,
       zoomAfter: after,
     })
-
     state.setZoom(after)
-    scroller.scrollLeft = Math.max(0, nextScroll)
+    scroller.scrollLeft = Math.max(0, next)
   }
+
+  /**
+   * Zoom that did not come from the wheel keeps the viewport centre fixed.
+   *
+   * The wheel anchors on the pointer (see `applyPendingZoom`); the slider has no
+   * pointer position, so the middle of the screen is its natural anchor. Both
+   * move the scroll now that the scroller is properly constrained — before, it
+   * was as wide as the content and `scrollLeft` could never change at all.
+   */
+  let prevZoom = state.zoom()
+  createEffect(() => {
+    const after = state.zoom()
+    const before = prevZoom
+    prevZoom = after
+    if (after === before) return
+    if (wheelAnchored) {
+      wheelAnchored = false
+      return
+    }
+    const scroller = elements.scroller()
+    if (!scroller) return
+    const next = scrollLeftAfterZoom({
+      scrollLeft: scroller.scrollLeft,
+      localX: scroller.clientWidth / 2,
+      zoomBefore: before,
+      zoomAfter: after,
+    })
+    scroller.scrollLeft = Math.max(0, next)
+  })
 
   onMount(() => {
     elements.scroller()?.addEventListener('wheel', onWheel, { passive: false })
