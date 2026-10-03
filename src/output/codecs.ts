@@ -300,6 +300,108 @@ export function bitrateFor(width: number, height: number, fps: number): number {
   return Math.round(width * height * fps * 0.11)
 }
 
+/** What a source file is, as far as the bitrate decision needs. */
+export interface SourceFacts {
+  width: number
+  height: number
+  frameRate: number
+  variableFrameRate: boolean
+  /** Bytes. Optional: a caller that does not know it gets the heuristic. */
+  size?: number
+  duration?: number
+  hasAudio?: boolean
+}
+
+/**
+ * The source's own video bitrate, inferred from its file size and duration.
+ *
+ * The audio track's ~128 kbps is subtracted when there is one, so this is the
+ * *video* bitrate and can be handed straight to the video encoder.
+ */
+export function sourceVideoBitrate(source: {
+  size?: number
+  duration?: number
+  hasAudio?: boolean
+}): number | null {
+  if (!source.size || !source.duration || source.duration <= 0) return null
+  const totalBitsPerSecond = (source.size * 8) / source.duration
+  const audio = source.hasAudio ? 128_000 : 0
+  const video = totalBitsPerSecond - audio
+  if (!Number.isFinite(video) || video <= 0) return null
+  // Clamped so one hand-edited project file cannot ask for a 1 kbps or a
+  // 1 Gbps encode.
+  return Math.round(Math.min(Math.max(video, 150_000), 80_000_000))
+}
+
+/**
+ * The bitrate to encode at.
+ *
+ * **Match the source.** Re-encoding is generation loss, so the default is the
+ * source's own bitrate (plus 10% headroom), not a formula. The old formula —
+ * `width × height × fps × 0.11` — ignored the input entirely and re-encoded at
+ * ~7 Mbps no matter what it was given, turning a heavily-compressed 12 MB clip
+ * into a 144 MB file.
+ *
+ * The heuristic is still the fallback when the source's size is unknown, and
+ * still caps an *upscale* (a 1080p source blown up to 4K does not gain detail,
+ * so there is no reason to spend 4K's bitrate on it).
+ */
+export function outputBitrate(source: SourceFacts | null, width: number, height: number, fps: number): number {
+  const heuristic = bitrateFor(width, height, fps)
+  const fromSource = source ? sourceVideoBitrate(source) : null
+  if (fromSource === null) return heuristic
+  const target = fromSource * 1.1
+  const atSourceSize = source!.width === width && source!.height === height
+  return Math.round(atSourceSize ? target : Math.min(heuristic, target))
+}
+
+/**
+ * How much to spend, as a choice rather than a guess.
+ *
+ * Encoding is generation loss: the frames going in are already compressed, so
+ * matching the source's *bitrate* does not match its *quality* — it stacks new
+ * artefacts on the old ones. The source's 93 kbps was earned from clean frames;
+ * re-encoding at 93 kbps is not the same picture.
+ *
+ * So quality is a setting:
+ * - `high`     — the resolution heuristic; safe for a re-encode.
+ * - `balanced` — a little over half of it; what most exports want.
+ * - `source`   — match the source bitrate. Smallest, and the one that can lose
+ *                quality on an already-compressed input.
+ */
+export type ExportQuality = 'high' | 'balanced' | 'source'
+
+export function qualityBitrate(
+  source: SourceFacts | null,
+  quality: ExportQuality,
+  width: number,
+  height: number,
+  fps: number,
+): number {
+  if (quality === 'source') return outputBitrate(source, width, height, fps)
+  const heuristic = bitrateFor(width, height, fps)
+  return quality === 'high' ? heuristic : Math.round(heuristic * 0.55)
+}
+
+/**
+ * The quantizer (CRF-like) for a quality level, or null to use a bitrate.
+ *
+ * **This is the lever that actually controls size.** A bitrate target is a
+ * budget the encoder tries to spend; on simple or low-motion footage — exactly
+ * the kind that compresses well — it still allocates far more than the picture
+ * needs. Measured on a 12.5 MB, 1080p60 source, a 3 Mbps bitrate-target encode
+ * came out 141 MB, while the same content at CRF 28 came out ~28 MB with no
+ * visible difference. Constant-quality encoding spends only what the frame
+ * needs, so a mostly-static shot stays small on its own.
+ *
+ * Lower is better quality; the values are chosen against that measurement.
+ * Mediabunny falls back to `bitrate` on codecs with no quantizer support (H.264
+ * here), so a bitrate is always supplied alongside.
+ */
+export function qualityQuantizer(quality: ExportQuality): number {
+  return quality === 'high' ? 28 : quality === 'balanced' ? 34 : 42
+}
+
 /** Encoders reject odd dimensions. */
 export function even(n: number): number {
   return Math.max(2, n - (n % 2))

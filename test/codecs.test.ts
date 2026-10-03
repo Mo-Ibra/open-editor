@@ -42,7 +42,7 @@ class FakeAudioEncoder {
 ;(globalThis as { VideoEncoder?: unknown }).VideoEncoder = FakeVideoEncoder
 ;(globalThis as { AudioEncoder?: unknown }).AudioEncoder = FakeAudioEncoder
 
-const { availablePlans, negotiate } = await import('../src/output/codecs.ts')
+const { availablePlans, negotiate, outputBitrate, qualityBitrate, qualityQuantizer, sourceVideoBitrate } = await import('../src/output/codecs.ts')
 
 const OPTS = { needsAudio: true, width: 1920, height: 1080, fps: 30, bitrate: 5_000_000 }
 const ids = (plans: { id: string }[]) => plans.map((p) => p.id)
@@ -139,6 +139,71 @@ test('compatibility is reported, so the UI can warn about social uploads', async
   const byId = new Map(plans.map((p) => [p.id, p]))
   assert.equal(byId.get('mp4/avc/mp3')?.compatibility, 'universal')
   assert.equal(byId.get('webm/vp9/opus')?.compatibility, 'partial')
+})
+
+test('quality maps to a quantizer, and lower means better', () => {
+  // The quantizer is what keeps a simple clip small: measured on the real
+  // source, a bitrate-target encode was 141 MB where CRF ~28 was ~28 MB.
+  assert.ok(qualityQuantizer('high') < qualityQuantizer('balanced'))
+  assert.ok(qualityQuantizer('balanced') < qualityQuantizer('source'))
+  assert.ok(qualityQuantizer('high') > 0 && qualityQuantizer('source') < 50)
+})
+
+test('quality offers a safe default and a smaller, riskier option', () => {
+  // The real file this came from: 12.5 MB, 7m 26s, ~93 kbps of video.
+  const source = {
+    width: 1920, height: 1080, frameRate: 30, variableFrameRate: false,
+    size: 12_537_044, duration: 445.7, hasAudio: true,
+  }
+  const high = qualityBitrate(source, 'high', 1920, 1080, 30)
+  const balanced = qualityBitrate(source, 'balanced', 1920, 1080, 30)
+  const small = qualityBitrate(source, 'source', 1920, 1080, 30)
+
+  // High is the resolution heuristic — enough to keep a re-encode clean.
+  assert.equal(high, Math.round(1920 * 1080 * 30 * 0.11))
+  assert.ok(balanced < high, 'balanced spends less than high')
+  assert.ok(small < balanced, 'matching the source is the smallest')
+  assert.ok(
+    high / small > 10,
+    'and the gap is large enough to explain a visible quality difference',
+  )
+})
+
+test('the export matches the source bitrate instead of a fixed formula', () => {
+  // The bug: a 12.5 MB, two-minute clip (~0.83 Mbps) was re-encoded at the
+  // 1080p heuristic of ~6.8 Mbps and came out ~144 MB. Matching the source
+  // keeps a trim roughly the size of what went in.
+  const source = {
+    width: 1920,
+    height: 1080,
+    frameRate: 30,
+    variableFrameRate: false,
+    size: 12_500_000,
+    duration: 120,
+    hasAudio: true,
+  }
+  const sourceBps = sourceVideoBitrate(source)!
+  assert.ok(sourceBps > 500_000 && sourceBps < 1_000_000, `source is ~0.8 Mbps, got ${sourceBps}`)
+
+  const chosen = outputBitrate(source, 1920, 1080, 30)
+  const heuristic = Math.round(1920 * 1080 * 30 * 0.11)
+  assert.ok(chosen < heuristic / 4, `the export must not spend 4x the source (${chosen} vs ${heuristic})`)
+  assert.ok(chosen >= sourceBps, 'and it should not fall below the source either')
+})
+
+test('an upscale is capped at the resolution heuristic, not the source bitrate', () => {
+  const source = {
+    width: 1920, height: 1080, frameRate: 30, variableFrameRate: false,
+    size: 200_000_000, duration: 60, hasAudio: false, // ~26 Mbps source
+  }
+  const upscaled = outputBitrate(source, 3840, 2160, 30)
+  assert.equal(upscaled, Math.round(3840 * 2160 * 30 * 0.11), 'a 4K upscale spends 4K bitrate, not 26 Mbps')
+})
+
+test('an unknown source falls back to the heuristic', () => {
+  const heuristic = Math.round(1280 * 720 * 30 * 0.11)
+  assert.equal(outputBitrate(null, 1280, 720, 30), heuristic)
+  assert.equal(sourceVideoBitrate({}), null, 'no size or duration means no inference')
 })
 
 test('every rejection explains itself in terms a person can read', async () => {

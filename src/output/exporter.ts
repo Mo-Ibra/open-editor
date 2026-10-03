@@ -18,19 +18,30 @@
  *     edited (docs/data-model.md).
  */
 
-import { AudioBufferSource, BufferTarget, CanvasSource, Output } from 'mediabunny'
+import { AudioBufferSource, BufferTarget, CanvasSource, Output, Quality } from 'mediabunny'
 import type { AudioCodec } from 'mediabunny'
 import { clipDuration, clipStart, projectDuration, type Clip, type Project } from '../model/project.js'
 import { renderBlank, renderFrame } from '../render/render.js'
 import type { MediaLibrary } from '../media/library.js'
-import { bitrateFor, even, negotiate, type ExportPlan } from './codecs.js'
+import {
+  even,
+  negotiate,
+  qualityBitrate,
+  qualityQuantizer,
+  type ExportPlan,
+  type ExportQuality,
+  type SourceFacts,
+} from './codecs.js'
 import { log } from '../dev/debug.js'
 
 export interface ExportSettings {
   width: number
   height: number
   fps: number
+  /** Bitrate fallback / budget. */
   bitrate: number
+  /** Which constant-quality level to target. */
+  quality: ExportQuality
 }
 
 export interface ExportProgress {
@@ -98,20 +109,20 @@ export interface ExporterOptions {
  * output is the same footage trimmed. Anything else is something the user
  * chose, never a default the product made for them.
  */
-export function settingsFor(sourceSize: { width: number; height: number; frameRate: number; variableFrameRate: boolean } | null): ExportSettings {
-  let width = sourceSize?.width ?? 1920
-  let height = sourceSize?.height ?? 1080
+export function settingsFor(source: SourceFacts | null, quality: ExportQuality = 'high'): ExportSettings {
+  let width = source?.width ?? 1920
+  let height = source?.height ?? 1080
 
   // A VFR source has a meaningless average frame rate — 3.75 fps for a screen
   // recording — and emitting at that produces a slideshow. Target 30 and hold
   // frames. CFR sources keep their own rate so nothing is dropped.
-  let fps = sourceSize ? (sourceSize.variableFrameRate ? 30 : Math.round(sourceSize.frameRate) || 30) : 30
+  let fps = source ? (source.variableFrameRate ? 30 : Math.round(source.frameRate) || 30) : 30
 
   width = even(width)
   height = even(height)
   fps = Math.max(1, fps)
 
-  return { width, height, fps, bitrate: bitrateFor(width, height, fps) }
+  return { width, height, fps, bitrate: qualityBitrate(source, quality, width, height, fps), quality }
 }
 
 /**
@@ -263,7 +274,10 @@ export class Exporter {
 
     const canvasSource = new CanvasSource(canvas, {
       codec: plan.video,
-      bitrate: settings.bitrate,
+      // Constant quality, not a bitrate budget. A bitrate target spends far more
+      // than simple footage needs; the quantizer spends only what each frame
+      // requires. `bitrate` is the fallback for codecs with no quantizer support.
+      quality: new Quality({ quantizer: qualityQuantizer(settings.quality), bitrate: settings.bitrate }),
       // A keyframe every 2 seconds. Longer GOPs are smaller but make seeking the
       // result awful, which matters more here than a few percent of size.
       keyFrameInterval: settings.fps * 2,

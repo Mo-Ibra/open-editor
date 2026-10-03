@@ -19,7 +19,7 @@ import { Exporter, ExportCancelled, settingsFor, type ExportResult } from '../..
 import { buildExportAudio, verifyAudioTrack, type ExportAudioTrack } from '../../audio/export-audio.js'
 import { projectDuration } from '../../model/project.js'
 import { readMediaFacts, selfCheck, selfCheckLine } from '../../output/self-check.js'
-import { availablePlans, bitrateFor, even, type PlanCandidate } from '../../output/codecs.js'
+import { availablePlans, even, qualityBitrate, type ExportQuality, type PlanCandidate, type SourceFacts } from '../../output/codecs.js'
 import { log } from '../../dev/debug.js'
 import { X } from 'lucide-solid'
 import type { AppState } from '../store/state.js'
@@ -35,6 +35,10 @@ const PRESETS = [
 export function ExportDialog(props: { state: AppState; onClose: () => void }) {
   const state = props.state
   const [preset, setPreset] = createSignal<number | 'source'>('source')
+  // Quality defaults to `high`: re-encoding is generation loss, so the safe
+  // default is to spend enough to keep the second generation clean. Size is a
+  // deliberate choice, not a default.
+  const [quality, setQuality] = createSignal<ExportQuality>('high')
   const [busy, setBusy] = createSignal(false)
   const [progress, setProgress] = createSignal({ stage: 'preparing', progress: 0, eta: 0, fps: 0, message: '' })
   const [result, setResult] = createSignal<ExportResult | null>(null)
@@ -75,7 +79,7 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
       width,
       height: even(height),
       fps,
-      bitrate: bitrateFor(width, height, fps),
+      bitrate: qualityBitrate(size, quality(), width, even(height), fps),
     }).then(({ plans: found, notes }) => {
       if (cancelled) return
       setPlans(found)
@@ -108,7 +112,7 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
   window.addEventListener('keydown', onKey)
   onCleanup(() => window.removeEventListener('keydown', onKey))
 
-  function sourceSize() {
+  function sourceSize(): SourceFacts | null {
     const first = state.project.video[0]
     if (!first) return null
     const asset = state.getAsset(first.assetId)
@@ -118,6 +122,11 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
       height: asset.height,
       frameRate: asset.frameRate,
       variableFrameRate: asset.variableFrameRate,
+      // Size and duration let the export match the source's bitrate instead of
+      // re-encoding at a fixed formula that can be ten times larger.
+      size: asset.size,
+      duration: asset.duration,
+      hasAudio: asset.hasAudio,
     }
   }
 
@@ -129,12 +138,15 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
     setAudioTrack(null)
     if (lastUrl) URL.revokeObjectURL(lastUrl)
 
-    const base = settingsFor(sourceSize())
+    const base = settingsFor(sourceSize(), quality())
     const width = preset() === 'source' ? base.width : (preset() as number)
+    const height = preset() === 'source' ? base.height : Math.round((width * 9) / 16)
     const settings = {
       ...base,
       width,
-      height: preset() === 'source' ? base.height : Math.round((width * 9) / 16),
+      height,
+      // Recomputed for the chosen resolution and quality.
+      bitrate: qualityBitrate(sourceSize(), quality(), even(width), even(height), base.fps),
     }
 
     exporter = new Exporter({
@@ -222,10 +234,23 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
                 </select>
               </label>
 
+              <label class="flex flex-col gap-1.5">
+                <span class="panel-label">Quality</span>
+                <select
+                  class="rounded-md border border-line bg-raised px-2.5 py-1.5 text-small outline-none focus:border-accent"
+                  value={quality()}
+                  onChange={(e) => setQuality(e.currentTarget.value as ExportQuality)}
+                >
+                  <option value="high">High</option>
+                  <option value="balanced">Balanced</option>
+                  <option value="source">Match source (smallest)</option>
+                </select>
+              </label>
+
               <div class="flex flex-col gap-1.5">
                 <span class="panel-label">Output</span>
                 <span class="timecode text-small text-muted">
-                  {describeSettings(sourceSize(), preset())}
+                  {describeSettings(sourceSize(), preset(), quality())}
                 </span>
               </div>
 
@@ -445,14 +470,12 @@ function Row(props: { label: string; children: import('solid-js').JSX.Element })
   )
 }
 
-function describeSettings(
-  source: { width: number; height: number; frameRate: number; variableFrameRate: boolean } | null,
-  preset: number | 'source',
-): string {
+function describeSettings(source: SourceFacts | null, preset: number | 'source', quality: ExportQuality): string {
   const base = settingsFor(source)
   const width = preset === 'source' ? base.width : preset
   const height = preset === 'source' ? base.height : Math.round((preset * 9) / 16)
-  return `${width}×${height} @ ${base.fps}fps · ${(base.bitrate / 1e6).toFixed(1)} Mbps`
+  const bitrate = qualityBitrate(source, quality, width, height, base.fps)
+  return `${width}×${height} @ ${base.fps}fps · ${(bitrate / 1e6).toFixed(1)} Mbps`
 }
 
 function formatTime(seconds: number): string {
