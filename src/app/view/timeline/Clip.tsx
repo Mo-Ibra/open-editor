@@ -79,7 +79,7 @@ export function Clip(props: {
       {/* The picture, tiled across the clip. Skipped while hidden, so a hidden
           clip really does read as black rather than showing the frame anyway. */}
       <Show when={props.lane === 'video' && asset()?.hasVideo && !props.clip.hidden}>
-        <Filmstrip clip={props.clip} state={state} height={props.height} />
+        <Filmstrip clip={props.clip} state={state} />
       </Show>
 
       {/* A shallow top-light, so a flat tint reads as a surface instead of a

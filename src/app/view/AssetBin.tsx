@@ -15,13 +15,14 @@
  *   selects, Delete removes. A drag target is an affordance, not the only one.
  */
 
-import { createMemo, createSignal, For, onMount, Show } from 'solid-js'
+import { createEffect, createMemo, createSignal, For, Show } from 'solid-js'
 import { Plus, Search, Trash2 } from 'lucide-solid'
 import type { Asset } from '../../model/project.js'
 import type { AppState } from '../store/state.js'
 import type { ContextMenuState } from './ContextMenu.js'
 import type { LayoutState } from '../store/layout.js'
 import { PanelToggle } from './PanelToggle.js'
+import { thumbnailFor } from './thumbnail.js'
 
 export function AssetBin(props: { state: AppState; menu: ContextMenuState; layout: LayoutState }) {
   const state = props.state
@@ -280,33 +281,11 @@ export function draggedAssetId(): string | null {
  * preview does — the sink already exists.
  */
 function Thumbnail(props: { state: AppState; assetId: string; asset: Asset }) {
-  let canvas: HTMLCanvasElement | undefined
-  const [ready, setReady] = createSignal(false)
-  const [failed, setFailed] = createSignal(false)
-  const showFrame = (): boolean => props.asset.hasVideo && !failed()
+  const [thumb, setThumb] = createSignal<string | null>(null)
 
-  onMount(async () => {
-    if (!showFrame()) return
-    const sink = props.state.library.get(props.assetId)?.videoSink
-    if (!sink) return setFailed(true)
-    try {
-      const wrapped = await sink.getCanvas(Math.min(0.1, props.asset.duration / 2))
-      if (!wrapped) return setFailed(true)
-      if (!canvas) return
-      const ctx = canvas.getContext('2d')
-      if (!ctx) return setFailed(true)
-      // Fit, letterboxed, rather than stretched: a distorted thumbnail is worse
-      // than a type tile.
-      const scale = Math.min(canvas.width / wrapped.canvas.width, canvas.height / wrapped.canvas.height)
-      const w = wrapped.canvas.width * scale
-      const h = wrapped.canvas.height * scale
-      ctx.fillStyle = '#0a0a0c'
-      ctx.fillRect(0, 0, canvas.width, canvas.height)
-      ctx.drawImage(wrapped.canvas, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h)
-      setReady(true)
-    } catch {
-      setFailed(true)
-    }
+  createEffect(() => {
+    if (!props.asset.hasVideo) return
+    void thumbnailFor(props.state, props.assetId).then(setThumb)
   })
 
   return (
@@ -317,19 +296,13 @@ function Thumbnail(props: { state: AppState; assetId: string; asset: Asset }) {
         'bg-[#14402f] text-[#6fd39a]': !props.asset.hasVideo,
       }}
     >
-      <Show when={showFrame()}>
-        <canvas
-          ref={canvas}
-          width={96}
-          height={54}
-          class="absolute inset-0 size-full"
-          classList={{ 'opacity-0': !ready() }}
-        />
+      <Show when={thumb()}>
+        {(url) => <img src={url()} alt="" class="absolute inset-0 size-full object-cover" />}
       </Show>
       <Show when={!props.asset.hasVideo}>
         <span class="text-tiny font-bold">A</span>
       </Show>
-      <Show when={props.asset.hasVideo && !ready()}>
+      <Show when={props.asset.hasVideo && !thumb()}>
         <span class="text-tiny font-bold">V</span>
       </Show>
     </span>
