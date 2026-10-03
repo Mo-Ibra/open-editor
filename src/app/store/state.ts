@@ -87,8 +87,23 @@ export function createAppState() {
    * something to depend on. Same idea as `logRevision`.
    */
   const [assetsRevision, setAssetsRevision] = createSignal(0)
-  /** Magnetic snapping. Off means every position is exactly where you put it. */
-  const [snapping, setSnapping] = createSignal(true)
+  /** Snapping to clips in the SAME lane, and the timeline start. */
+  const [clipSnap, setClipSnap] = createSignal(true)
+  /** Snapping to clips in the OTHER lane, so picture aligns to sound. */
+  const [laneSnap, setLaneSnap] = createSignal(true)
+  /**
+   * Snapping the playhead to nearby clip edges while it is dragged.
+   *
+   * A separate mode from the two clip-snapping toggles: it is about scrubbing,
+   * not about placing clips, and neither system consults the other.
+   */
+  const [playheadSnap, setPlayheadSnap] = createSignal(true)
+  /**
+   * True when either *clip* snapping mode is on — the gate for moving and
+   * trimming. The playhead has its own gate (`playheadSnap`), so this must not
+   * include it, or turning playhead snap on would wake clip snapping too.
+   */
+  const snapping = (): boolean => clipSnap() || laneSnap()
 
   let noticeId = 0
   function notify(kind: Notice['kind'], text: string): void {
@@ -338,8 +353,13 @@ export function createAppState() {
     zoom,
     notices,
     snapping,
+    clipSnap,
+    setClipSnap,
+    laneSnap,
+    setLaneSnap,
+    playheadSnap,
+    setPlayheadSnap,
     setZoom: (value: number) => setZoomLevel(clampZoom(value)),
-    setSnapping,
     canUndo: history.canUndo,
     canRedo: history.canRedo,
     undo: history.undo,

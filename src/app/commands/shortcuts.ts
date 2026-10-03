@@ -121,11 +121,32 @@ export function createShortcuts({
     {
       keys: ['g'],
       hint: 'G',
-      label: 'snap',
+      label: 'clip snap',
       run: () => {
-        const next = !state.snapping()
-        state.setSnapping(next)
-        state.notify('info', `Snapping ${next ? 'on' : 'off'}`)
+        const next = !state.clipSnap()
+        state.setClipSnap(next)
+        state.notify('info', `Clip snapping ${next ? 'on' : 'off'}`)
+      },
+    },
+    {
+      keys: ['g'],
+      shift: true,
+      hint: '⇧G',
+      label: 'lane snap',
+      run: () => {
+        const next = !state.laneSnap()
+        state.setLaneSnap(next)
+        state.notify('info', `Lane snapping ${next ? 'on' : 'off'}`)
+      },
+    },
+    {
+      keys: ['p'],
+      hint: 'P',
+      label: 'playhead snap',
+      run: () => {
+        const next = !state.playheadSnap()
+        state.setPlayheadSnap(next)
+        state.notify('info', `Playhead snapping ${next ? 'on' : 'off'}`)
       },
     },
 

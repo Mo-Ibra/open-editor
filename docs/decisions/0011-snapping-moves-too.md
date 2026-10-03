@@ -14,10 +14,18 @@ even advertised that clip edges snapped, which they did not.
 
 ## Decision
 
-**Both gestures snap.** A dragged clip pulls its start or its end to a nearby
-clip edge or the timeline start; a trim handle pulls its edge the same way. The
-playhead stays excluded: snapping *places* clips, the playhead *tells time*, and
-a playhead that jumps to the nearest edge stops being a measurement.
+**Every gesture snaps, each under its own toggle.** A dragged clip pulls its
+start or its end to a nearby clip edge or the timeline start; a trim handle pulls
+its edge the same way; and the playhead, while scrubbed, pulls to the nearest
+edge. They are three independent toggles:
+
+- *clip snap* — clips in the same lane, and the timeline start;
+- *lane snap* — also clips in the other lane, so picture lines up with sound once
+  a pair has been broken apart;
+- *playhead snap* — the scrubber, onto clip edges and the timeline start.
+
+Any combination can be on. The playhead is never a *target*: nothing snaps *to*
+it, only it snaps to edges.
 
 ## Why both edges
 
@@ -36,19 +44,25 @@ target; the clip's own edges are excluded, so it cannot latch onto itself.
   the grabbed clip away from the pointer when an outer clip latched. The group
   snaps on the anchor clip and the rest follow by the same delta, so the grabbed
   clip always lands where the pointer is.
-- **Snap to the playhead too.** Not taken here. The playhead is a measurement,
-  and clicking to grab a handle seeks the playhead to that handle anyway, so it
-  would mostly snap the edge back to where the grab started.
+- **Snap other clips to the playhead.** Not taken. The playhead is a
+  measurement, and clicking to grab a handle seeks the playhead to that handle
+  anyway, so an edge would mostly snap back to where the grab started. The useful
+  direction is the playhead snapping *to* edges, which is its own toggle.
 
 ## Consequences
 
-- `model/snapping.ts` exports two functions: `snapMove` and `snapTrimEdge`.
-- The `Drag` union carries `locked` on the move and trim variants; the playhead
-  drag is the only one that cannot latch.
-- A move snaps against a target list **captured at drag start**, not one rebuilt
-  each frame. Moving pushes the clips after it, so their edges travel with the
-  drag; a live list made the clip chase a target that moved with it, which
-  showed up as a vibration. Trims rebuild theirs, because trimming pushes
-  nothing.
-- `test/snapping.test.ts` pins that the playhead never snaps and that the two
-  exported functions are the whole surface.
+- `model/snapping.ts` exports three functions: `snapMove`, `snapTrimEdge` and
+  `snapPlayhead`.
+- The `Drag` union carries `locked` on all three variants, so each latches. The
+  toggles are read separately — `snapping()` (clip/lane) for moving and trimming,
+  `playheadSnap()` for the scrubber — so one mode cannot switch another on.
+- A move snaps against a target list **captured at drag start and restricted to
+  targets that do not move with the drag** — the clips before the first selected
+  one, the other lane, and the timeline start, plus the next clip's start as an
+  end-only butt target. Moving pushes the clips after it, so their edges travel
+  with the drag; a target that travels with the drag is a target the clip chases,
+  and that is the vibration. Restricting to fixed targets removed it. Trims and
+  the playhead rebuild theirs, because neither pushes anything.
+- `test/snapping.test.ts` pins that the playhead is never a *target*, that the
+  three exported functions are the whole surface, and that neither clip toggle
+  reaches the playhead arm or vice versa.

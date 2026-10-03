@@ -11,11 +11,12 @@ import {
   collectTargets,
   nearestTarget,
   snapMove,
+  snapPlayhead,
   snapTrimEdge,
   thresholdInSeconds,
   type SnapTarget,
 } from '../src/model/snapping.ts'
-import { clipStart, placeClip, emptyProject, type Clip, type Project } from '../src/model/project.ts'
+import { clipStart, movingInLane, placeClip, emptyProject, type Clip, type Project } from '../src/model/project.ts'
 
 const clip = (id: string, inPoint: number, out: number, lane: 'video' | 'audio' = 'video'): Clip => ({
   id,
@@ -63,10 +64,11 @@ check('threshold converts pixels to seconds at the current zoom', () => {
 })
 
 // --- what is worth snapping to -----------------------------------------
-check('the playhead is available as a target, but the editor does not use it', () => {
-  // The module supports it; the timeline deliberately opts out, because a
-  // playhead that snaps stops being a measurement. The test pins both halves:
-  // the capability, and the caller's refusal to use it.
+check('the playhead is not a snap target, though it now snaps itself', () => {
+  // Two directions, deliberately separated. Nothing snaps *to* the playhead —
+  // the timeline opts out of the playhead target, or edges would jump to
+  // wherever it happens to sit. The playhead snapping *to* edges is the useful
+  // direction, and is its own mode (`snapPlayhead`).
   const p = project([clip('v1', 0, 10)])
   assert.ok(collectTargets(p, { playhead: 4.2, includePlayhead: true }).some((t) => t.kind === 'playhead'))
   assert.ok(!collectTargets(p, { playhead: 4.2, includePlayhead: false }).some((t) => t.kind === 'playhead'))
@@ -74,7 +76,7 @@ check('the playhead is available as a target, but the editor does not use it', (
   const timeline = readFileSync(new URL('../src/app/view/timeline/use-timeline-drag.ts', import.meta.url), 'utf8')
   assert.ok(
     /includePlayhead: false/.test(timeline),
-    'the timeline must opt out of playhead snapping',
+    'the timeline must not offer the playhead as a target',
   )
 })
 
@@ -90,6 +92,24 @@ check('targets come from both lanes, plus the playhead and the origin', () => {
 
   const without = collectTargets(p, { playhead: 4.2, includePlayhead: false })
   assert.ok(!without.some((t) => t.kind === 'playhead'), 'the playhead can be excluded')
+})
+
+check('clip and lane snapping are independent target sets', () => {
+  const p = project([clip('v1', 0, 10)], [clip('a1', 0, 10, 'audio')])
+
+  const both = collectTargets(p, { playhead: 0, includePlayhead: false })
+  assert.equal(both.filter((t) => t.lane === 'video').length, 2, 'both lanes by default')
+  assert.equal(both.filter((t) => t.lane === 'audio').length, 2)
+
+  // "Clip snap": the dragged lane only. The timeline start is always there.
+  const videoOnly = collectTargets(p, { playhead: 0, includePlayhead: false, lanes: ['video'] })
+  assert.equal(videoOnly.filter((t) => t.lane === 'audio').length, 0, 'no audio edges')
+  assert.ok(videoOnly.some((t) => t.kind === 'timeline-start'), 'but the origin is still offered')
+
+  // "Lane snap": the other lane only.
+  const audioOnly = collectTargets(p, { playhead: 0, includePlayhead: false, lanes: ['audio'] })
+  assert.equal(audioOnly.filter((t) => t.lane === 'video').length, 0, 'no video edges')
+  assert.equal(audioOnly.filter((t) => t.lane === 'audio').length, 2)
 })
 
 check('both edges of a silence region are targets', () => {
@@ -180,6 +200,43 @@ check('a moving clip cannot snap to its own edges', () => {
   const p = project([clip('v1', 0, 10)])
   const targets = collectTargets(p, { playhead: 0, includePlayhead: false })
   assert.equal(snapMove(9.9, 10, targets, 0.2, { clipId: 'v1' }), null, 'its own edges are excluded')
+})
+
+check('a drag moves the selected clips and everything after them', () => {
+  // These are the clips whose edges are NOT fixed snap targets during a drag.
+  const clips = [clip('a', 0, 5), clip('b', 0, 5), clip('c', 0, 5), clip('d', 0, 5)]
+  assert.deepEqual([...movingInLane(clips, new Set(['b']))], ['b', 'c', 'd'], 'b and its successors move')
+  assert.deepEqual([...movingInLane(clips, new Set(['a']))], ['a', 'b', 'c', 'd'], 'everything after the first')
+  assert.deepEqual([...movingInLane(clips, new Set())], [], 'nothing selected, nothing moves')
+})
+
+check('a move butts its end onto the next clip without chasing a pushed one', () => {
+  // End-only target at 8: the next clip's start.
+  const endOnly = [target(8, 'next', 'clip-start')]
+  const byEnd = snapMove(4.95, 3, [], 0.1, undefined, null, endOnly)
+  assert.equal(byEnd?.edge, 'end', 'the end edge takes the butt')
+  assert.equal(byEnd?.start, 5, 'landing its start one duration back')
+
+  // The start edge must ignore an end-only target, or it would overlap the clip.
+  assert.equal(snapMove(7.95, 3, [], 0.1, undefined, null, endOnly), null, 'the start edge does not use it')
+})
+
+check('playhead snap lands exactly on a timeline edge', () => {
+  // v1 0-5, v2 5-10: boundaries at 0, 5 and 10.
+  const p = project([clip('v1', 0, 5), clip('v2', 0, 5)])
+  const targets = collectTargets(p, { playhead: 0, includePlayhead: false })
+
+  assert.equal(snapPlayhead(4.94, targets, 0.1)?.time, 5, 'onto a clip start / cut at 5')
+  assert.equal(snapPlayhead(9.95, targets, 0.1)?.time, 10, 'onto a clip end at 10')
+  assert.equal(snapPlayhead(0.06, targets, 0.1)?.time, 0, 'onto the timeline start')
+  assert.equal(snapPlayhead(4.5, targets, 0.1), null, 'outside the threshold it does not snap')
+})
+
+check('playhead snap uses the zoom-scaled pixel threshold, not a fixed time', () => {
+  // 10 px at 80 px/s is 0.125 s; at 400 px/s the same 10 px is 0.025 s.
+  const targets = [target(5, 'n')]
+  assert.equal(snapPlayhead(4.9, targets, thresholdInSeconds(10, 80))?.time, 5, 'snaps when zoomed out')
+  assert.equal(snapPlayhead(4.9, targets, thresholdInSeconds(10, 400)), null, 'does not when zoomed in')
 })
 
 // ---------------------------------------------------------------------------
@@ -278,21 +335,37 @@ check('ACCEPTANCE 5, 6, 7 · outside snaps, inside latches, far away releases', 
   assert.equal(snapTrimEdge(9.5, all, 0.2, { clipId: 'drag' }, cut), null, '0.5 away: released')
 })
 
-check('the playhead drag is the one path that never snaps', () => {
+check('the playhead snaps, under its own toggle', () => {
   const playhead = dragCase('playhead')
-  assert.ok(!/snap/i.test(playhead), 'the playhead must not reference snapping')
-  assert.ok(/state\.seek\(t\)/.test(playhead), 'it goes exactly where the pointer is')
+  assert.ok(playhead.includes('snapPlayhead('), 'the playhead pulls to a nearby edge')
+  assert.ok(playhead.includes('state.playheadSnap()'), 'gated by its own toggle')
+  assert.ok(!playhead.includes('state.snapping()'), 'not by the clip/lane gate')
+  assert.ok(
+    !playhead.includes('state.clipSnap()') && !playhead.includes('state.laneSnap()'),
+    'and not by either clip toggle',
+  )
+  assert.ok(/state\.seek\(/.test(playhead), 'the result is applied through seek')
 })
 
-check('snapping has exactly two entry points, one per gesture', () => {
-  // Moving used to be deliberately unsnappable (ADR-6). ADR-11 reversed that,
-  // so the surface is now trim + move and nothing else.
+check('clip and lane snapping do not depend on the playhead toggle', () => {
+  const move = dragCase('move')
+  const trim = dragCase('trim')
+  assert.ok(move.includes('state.snapping()'), 'moving uses the clip/lane gate')
+  assert.ok(trim.includes('state.snapping()'), 'trimming uses the clip/lane gate')
+  assert.ok(
+    !move.includes('playheadSnap') && !trim.includes('playheadSnap'),
+    'neither consults the playhead toggle',
+  )
+})
+
+check('snapping has exactly three entry points, one per mode', () => {
+  // Clip/lane snapping is one surface (move + trim); the playhead is its own.
   assert.ok(!/export function snapClipMove/.test(snappingSource), 'the old helper name is not resurrected')
   const exported = [...snappingSource.matchAll(/export (?:function|const|interface|type) (\w+)/g)].map((m) => m[1])
   assert.deepEqual(
     exported.filter((n) => /^snap/.test(n!)).sort(),
-    ['snapMove', 'snapTrimEdge'],
-    'trim and move are the whole snapping surface',
+    ['snapMove', 'snapPlayhead', 'snapTrimEdge'],
+    'trim, move and playhead are the whole snapping surface',
   )
 })
 

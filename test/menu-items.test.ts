@@ -173,13 +173,17 @@ test('the lane menu reflects whether the lane has anything in it', () => {
 test('the app menu tracks undo availability and snapping', () => {
   const state = createAppState()
   const fresh = labels(menuItems(state, menu({ kind: 'app' }), layout, fullscreen))
-  assert.ok(fresh.includes('Snapping: on'), 'snapping starts on')
+  assert.ok(fresh.includes('Clip snap: on'), 'clip snapping starts on')
+  assert.ok(fresh.includes('Lane snap: on'), 'lane snapping starts on')
+  assert.ok(fresh.includes('Playhead snap: on'), 'playhead snapping starts on')
   const undo = menuItems(state, menu({ kind: 'app' }), layout, fullscreen).find((i) => i.label === 'Undo')
   assert.equal(undo?.disabled, true, 'nothing to undo yet')
 
-  state.setSnapping(false)
+  state.setClipSnap(false)
   const off = labels(menuItems(state, menu({ kind: 'app' }), layout, fullscreen))
-  assert.ok(off.includes('Snapping: off'), 'and the menu says so')
+  assert.ok(off.includes('Clip snap: off'), 'and the menu says so')
+  assert.ok(off.includes('Lane snap: on'), 'while lane snapping is untouched — the toggles are independent')
+  assert.ok(off.includes('Playhead snap: on'), 'and playhead snapping is untouched too')
 })
 
 test('the asset menu acts on the right-clicked asset', () => {

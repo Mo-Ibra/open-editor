@@ -438,6 +438,25 @@ function shiftLane(clips: Clip[], selected: ReadonlySet<ClipId>, delta: number):
 }
 
 /**
+ * Which clips in a lane move when the selection is dragged.
+ *
+ * The selected clips move by design, and so does every clip after the first
+ * selected one — positions are derived (`clipStart`), so a clip dragged right
+ * pushes its successors along. Their edges therefore travel with the drag, and
+ * a snap target that travels with the drag is a target the clip chases: that is
+ * the vibration. Only the clips *before* the first selected one are fixed.
+ */
+export function movingInLane(clips: Clip[], selected: ReadonlySet<ClipId>): Set<ClipId> {
+  const moving = new Set<ClipId>()
+  let past = false
+  for (const clip of clips) {
+    if (selected.has(clip.id)) past = true
+    if (past) moving.add(clip.id)
+  }
+  return moving
+}
+
+/**
  * How a drop behaves against whatever is already there.
  *
  * Both modes exist in every professional editor, and they answer different

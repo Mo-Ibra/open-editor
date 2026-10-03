@@ -7,19 +7,28 @@
  * no identity of its own.
  *
  * **The one thing worth reading here is the `Drag` union.** `locked` — the
- * latched snap target — is carried by the move and trim variants alike, because
- * both snap (ADR-11). It is absent only from the playhead drag, which must
- * follow the pointer exactly: a playhead that jumps to the nearest edge stops
- * being a measurement.
+ * latched snap target — is carried by every variant that snaps. There are three
+ * independent snapping modes: clip and lane snapping while moving or trimming
+ * (ADR-11), and a separate playhead snap while scrubbing. Each is gated by its
+ * own toggle and uses its own target list, so one cannot switch another on.
  */
 
 import { createEffect, createSignal, onCleanup, onMount, type Accessor } from 'solid-js'
 
-import { clipAtLane, clipDuration, clipEnd, clipStart, laneOf, type Lane } from '../../../model/project.js'
+import {
+  clipAtLane,
+  clipDuration,
+  clipEnd,
+  clipStart,
+  laneOf,
+  movingInLane,
+  type Lane,
+} from '../../../model/project.js'
 import {
   collectTargets,
   describeTarget,
   snapMove,
+  snapPlayhead,
   snapTrimEdge,
   thresholdInSeconds,
   type SnapTarget,
@@ -39,7 +48,7 @@ export const HANDLE = 8
 const SNAP_PIXELS = 10
 
 type Drag =
-  | { kind: 'playhead' }
+  | { kind: 'playhead'; locked: SnapTarget | null }
   | {
       kind: 'move'
       lane: Lane
@@ -48,6 +57,8 @@ type Drag =
       locked: SnapTarget | null
       /** Captured at drag start; see the note where it is built. */
       snapTargets: SnapTarget[]
+      /** End-edge-only targets (the next clip's start), also captured once. */
+      endSnapTargets: SnapTarget[]
     }
   | { kind: 'trim-in'; lane: Lane; index: number; locked: SnapTarget | null }
   | { kind: 'trim-out'; lane: Lane; index: number; locked: SnapTarget | null }
@@ -122,7 +133,33 @@ export function useTimelineDrag(
    * drag it to check what is at 1:14, you want 1:14, not 1:14 snapped to a
    * boundary.
    */
-  const targets = (): SnapTarget[] =>
+  /**
+   * The lanes whose edges are targets for a drag in `lane`.
+   *
+   * `clipSnap` contributes the dragged clip's own lane (align within a row);
+   * `laneSnap` contributes the other one (align picture to sound). The two are
+   * independent toggles, so either, both, or neither can be on.
+   */
+  const enabledLanes = (lane: Lane): Lane[] => {
+    const out: Lane[] = []
+    if (state.clipSnap()) out.push(lane)
+    if (state.laneSnap()) out.push(lane === 'video' ? 'audio' : 'video')
+    return out
+  }
+
+  const targets = (lane: Lane): SnapTarget[] =>
+    collectTargets(state.project, {
+      playhead: state.playhead(),
+      includePlayhead: false,
+      lanes: enabledLanes(lane),
+    })
+
+  /**
+   * The playhead snaps to every clip edge in both lanes, plus the timeline
+   * start. Not lane-filtered: the playhead has no lane of its own, and clip/lane
+   * snapping must not decide which points it can land on.
+   */
+  const playheadTargets = (): SnapTarget[] =>
     collectTargets(state.project, { playhead: state.playhead(), includePlayhead: false })
 
   const localX = (event: PointerEvent | MouseEvent): number => {
@@ -164,19 +201,34 @@ export function useTimelineDrag(
       const clip = laneOf(state.project, lane)[index]
       if (!clip) return
       state.selectClip(clip.id, selectModeOf(event))
+      const laneClips = laneOf(state.project, lane)
       const selected = new Set(state.selection())
+      // Only *fixed* edges are targets, captured once. The dragged clips move,
+      // and so does every clip after the first selected one (positions are
+      // derived, so a rightward drag pushes its successors). Their edges travel
+      // with the drag, and a target that moves with the clip is a target it
+      // chases — the vibration. Selected clips in the other lane move too, so
+      // they are excluded as well.
+      const moving = movingInLane(laneClips, selected)
+      const all = targets(lane)
+      let lastSelected = -1
+      for (let i = 0; i < laneClips.length; i++) if (selected.has(laneClips[i]!.id)) lastSelected = i
+      const next = lastSelected >= 0 ? laneClips[lastSelected + 1] : undefined
+      // The one useful downstream snap: the end edge butting the next clip's
+      // start. End-only, so the start edge cannot overlap it.
+      const butt = next
+        ? all.filter((t) => t.lane === lane && t.kind === 'clip-start' && t.clipId === next.id)
+        : []
       drag = {
         kind: 'move',
         lane,
         index,
         grabOffset: state.xToTime(x) - laneStart(lane, index),
         locked: null,
-        // Snapshotted once, not recomputed per frame. Moving pushes the clips
-        // after it, so their edges travel with the drag; snapping against their
-        // *live* positions made the clip chase a target that moved with it, and
-        // the result was a visible vibration. The dragging clips are excluded
-        // too — a group must not snap to its own edges.
-        snapTargets: targets().filter((t) => !t.clipId || !selected.has(t.clipId)),
+        snapTargets: all.filter(
+          (t) => !t.clipId || !(selected.has(t.clipId) || (t.lane === lane && moving.has(t.clipId))),
+        ),
+        endSnapTargets: butt,
       }
       return
     }
@@ -185,7 +237,7 @@ export function useTimelineDrag(
     // selection is dropped, because a left click on nothing means "I am done
     // with those clips" — and the next Delete should not take them.
     state.clearSelection()
-    drag = { kind: 'playhead' }
+    drag = { kind: 'playhead', locked: null }
     setGuide(null)
   }
 
@@ -196,8 +248,26 @@ export function useTimelineDrag(
 
     switch (drag.kind) {
       case 'playhead': {
-        // No snapping. The playhead goes exactly where the pointer is.
-        state.seek(t)
+        // Playhead snapping is its own mode, gated by its own toggle. It pulls
+        // to real edit points so the playhead lands on a cut exactly, rather
+        // than near it — and it is unaffected by clip or lane snapping.
+        let time = t
+        if (state.playheadSnap()) {
+          const threshold = thresholdInSeconds(SNAP_PIXELS, state.zoom())
+          const snapped = snapPlayhead(t, playheadTargets(), threshold, drag.locked)
+          if (snapped) {
+            time = snapped.time
+            drag.locked = snapped.target
+            setGuide({ time: snapped.time, label: describeTarget(snapped.target) })
+          } else {
+            drag.locked = null
+            setGuide(null)
+          }
+        } else {
+          drag.locked = null
+          setGuide(null)
+        }
+        state.seek(time)
         return
       }
 
@@ -218,7 +288,15 @@ export function useTimelineDrag(
         let start = raw
         if (state.snapping()) {
           const threshold = thresholdInSeconds(SNAP_PIXELS, state.zoom())
-          const snapped = snapMove(raw, clipDuration(clip), drag.snapTargets, threshold, undefined, drag.locked)
+          const snapped = snapMove(
+            raw,
+            clipDuration(clip),
+            drag.snapTargets,
+            threshold,
+            undefined,
+            drag.locked,
+            drag.endSnapTargets,
+          )
           if (snapped) {
             start = snapped.start
             drag.locked = snapped.target
@@ -289,7 +367,7 @@ export function useTimelineDrag(
         const proposed = t
         const snapped =
           threshold > 0
-            ? snapTrimEdge(proposed, targets(), threshold, { clipId: clip.id }, drag.locked)
+            ? snapTrimEdge(proposed, targets(drag.lane), threshold, { clipId: clip.id }, drag.locked)
             : null
 
         const laneStartTime = laneStart(drag.lane, drag.index)

@@ -43,6 +43,14 @@ export interface CollectOptions {
   /** Per-asset silence regions, keyed by assetId, mapped to timeline time by
    *  the caller because only the caller knows the clip layout. */
   silence?: { clipId: string; lane: Lane; regions: SilenceRegion[]; start: number }[]
+  /**
+   * Which lanes contribute clip edges. Defaults to both.
+   *
+   * The timeline passes one lane for "clip snap" (align within a lane) and the
+   * other for "lane snap" (align picture to sound), so the two toggles are
+   * independent.
+   */
+  lanes?: readonly Lane[]
 }
 
 /**
@@ -58,7 +66,7 @@ export function collectTargets(project: Project, options: CollectOptions): SnapT
     targets.push({ time: options.playhead, kind: 'playhead', lane: null, clipId: null })
   }
 
-  for (const lane of ['video', 'audio'] as const) {
+  for (const lane of options.lanes ?? (['video', 'audio'] as const)) {
     const clips = laneOf(project, lane)
     for (let i = 0; i < clips.length; i++) {
       const clip = clips[i]!
@@ -174,6 +182,13 @@ export function snapMove(
   threshold: number,
   exclude?: { clipId?: string | null; lane?: Lane | null },
   locked?: SnapTarget | null,
+  /**
+   * Targets only the **end** edge may pull to — the next clip's start, so a
+   * clip can still butt forward. Kept separate because that clip is pushed by
+   * the move: allowing its start as a target for the *start* edge would let the
+   * moving clip overlap it, and its end is meaningless.
+   */
+  endTargets: SnapTarget[] = [],
 ): MoveSnap | null {
   const edges: { edge: 'start' | 'end'; time: number }[] = [
     { edge: 'start', time: proposedStart },
@@ -194,7 +209,11 @@ export function snapMove(
   let best: MoveSnap | null = null
   let bestDistance = Infinity
   for (const e of edges) {
-    const target = nearestTarget(e.time, targets, threshold, exclude, null)
+    let target = nearestTarget(e.time, targets, threshold, exclude, null)
+    if (e.edge === 'end' && endTargets.length > 0) {
+      const extra = nearestTarget(e.time, endTargets, threshold, exclude, null)
+      if (extra && (!target || Math.abs(extra.time - e.time) < Math.abs(target.time - e.time))) target = extra
+    }
     if (!target) continue
     const distance = Math.abs(target.time - e.time)
     if (distance < bestDistance) {
@@ -203,6 +222,32 @@ export function snapMove(
     }
   }
   return best
+}
+
+export interface PlayheadSnap {
+  time: number
+  target: SnapTarget
+}
+
+/**
+ * Snap the playhead to a nearby edge.
+ *
+ * The playhead has no lane and no duration, so unlike a move or a trim it just
+ * pulls to the nearest target within the threshold. The targets are every clip
+ * start and end (both lanes) plus the timeline start, so the playhead lands on
+ * a real edit point rather than near it.
+ *
+ * This is its own mode. It does not consult the clip- or lane-snap toggles, and
+ * they do not consult it.
+ */
+export function snapPlayhead(
+  time: number,
+  targets: SnapTarget[],
+  threshold: number,
+  locked?: SnapTarget | null,
+): PlayheadSnap | null {
+  const target = nearestTarget(time, targets, threshold, undefined, locked)
+  return target ? { time: target.time, target } : null
 }
 
 /** Convert a pixel tolerance into seconds at the current zoom. */

@@ -9,7 +9,7 @@
  */
 
 import { Show } from 'solid-js'
-import { Copy, Magnet, Scissors, Trash2, Unlink } from 'lucide-solid'
+import { Copy, Crosshair, Magnet, Rows3, Scissors, Trash2, Unlink } from 'lucide-solid'
 import type { AppState } from '../../store/state.js'
 import type { LayoutState } from '../../store/layout.js'
 import { PanelToggle } from '../PanelToggle.js'
@@ -58,13 +58,33 @@ export function Toolbar(props: { state: AppState; anyClips: () => boolean; layou
 
       <button
         class="btn"
-        classList={{ '!border-accent/50 !text-accent': state.snapping() }}
+        classList={{ '!border-accent/50 !text-accent': state.clipSnap() }}
         disabled={!props.anyClips()}
-        onClick={() => state.setSnapping(!state.snapping())}
-        title="Magnetic snapping: a dragged clip or a trim handle pulls to clip edges and the timeline start (G)"
+        onClick={() => state.setClipSnap(!state.clipSnap())}
+        title="Clip snap: a dragged clip or trim pulls to other clips in the same lane, and the timeline start (G)"
       >
         <Magnet size={14} />
-        snap
+        clip
+      </button>
+      <button
+        class="btn"
+        classList={{ '!border-accent/50 !text-accent': state.laneSnap() }}
+        disabled={!props.anyClips()}
+        onClick={() => state.setLaneSnap(!state.laneSnap())}
+        title="Lane snap: also pull to clips in the other lane, so picture lines up with sound (⇧G)"
+      >
+        <Rows3 size={14} />
+        lane
+      </button>
+      <button
+        class="btn"
+        classList={{ '!border-accent/50 !text-accent': state.playheadSnap() }}
+        disabled={!props.anyClips()}
+        onClick={() => state.setPlayheadSnap(!state.playheadSnap())}
+        title="Playhead snap: dragging the playhead pulls it to a nearby clip edge (P)"
+      >
+        <Crosshair size={14} />
+        playhead
       </button>
 
       {/* Level is audio-only and hide is video-only. A level slider on a video

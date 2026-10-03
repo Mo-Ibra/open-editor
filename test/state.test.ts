@@ -193,6 +193,25 @@ test('moving a multi-selection shifts every selected clip', () => {
   )
 })
 
+test('the three snap toggles are independent', () => {
+  const state = createAppState()
+  assert.equal(state.clipSnap(), true, 'clip snap starts on')
+  assert.equal(state.laneSnap(), true, 'lane snap starts on')
+  assert.equal(state.playheadSnap(), true, 'playhead snap starts on')
+
+  // Clip/lane off leaves the playhead mode alone.
+  state.setClipSnap(false)
+  state.setLaneSnap(false)
+  assert.equal(state.snapping(), false, 'the clip/lane gate is off')
+  assert.equal(state.playheadSnap(), true, 'and playhead snapping is untouched')
+
+  // Turning the playhead off, then clip back on, must not turn the playhead on.
+  state.setPlayheadSnap(false)
+  state.setClipSnap(true)
+  assert.equal(state.snapping(), true, 'clip snapping is back')
+  assert.equal(state.playheadSnap(), false, 'but playhead snapping stayed off')
+})
+
 test('notices appear and are announced through the shared notify', () => {
   const state = createAppState()
   assert.equal(state.notices().length, 0)

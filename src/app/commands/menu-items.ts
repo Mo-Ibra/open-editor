@@ -183,9 +183,19 @@ export function menuItems(
     { label: 'Redo', shortcut: '⇧⌘Z', disabled: !state.canRedo(), run: state.redo },
     { separator: true, label: '', run: noop },
     {
-      label: state.snapping() ? 'Snapping: on' : 'Snapping: off',
+      label: state.clipSnap() ? 'Clip snap: on' : 'Clip snap: off',
       shortcut: 'G',
-      run: () => state.setSnapping(!state.snapping()),
+      run: () => state.setClipSnap(!state.clipSnap()),
+    },
+    {
+      label: state.laneSnap() ? 'Lane snap: on' : 'Lane snap: off',
+      shortcut: '⇧G',
+      run: () => state.setLaneSnap(!state.laneSnap()),
+    },
+    {
+      label: state.playheadSnap() ? 'Playhead snap: on' : 'Playhead snap: off',
+      shortcut: 'P',
+      run: () => state.setPlayheadSnap(!state.playheadSnap()),
     },
     // Only when there is sound to mute. A "Mute" row on a project with no audio
     // is a promise the app cannot keep, and it appears — and reads as broken —

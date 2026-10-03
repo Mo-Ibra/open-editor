@@ -130,21 +130,37 @@ is not something to pad the video with black for; the excess is simply not heard
 
 [`model/snapping.ts`](../src/model/snapping.ts). Toggle in the timeline toolbar or `G`.
 
-**Both gestures snap.** A trim handle is placed by eye, so a small magnetic zone
-around each cut lets you return to a previous cut without pixel-hunting. A moved
-clip pulls its start or its end to a nearby edge the same way — see
-[ADR-11](decisions/0011-snapping-moves-too.md), which reversed the earlier
+**Every gesture snaps, each under its own toggle.** A trim handle is placed by
+eye, so a small magnetic zone around each cut lets you return to a previous cut
+without pixel-hunting. A moved clip pulls its start or its end to a nearby edge
+the same way, and the playhead pulls to the nearest edge while it is scrubbed.
+See [ADR-11](decisions/0011-snapping-moves-too.md), which reversed the earlier
 trim-only rule.
+
+There are **three independent toggles**, each answering a different question:
+
+- **Clip snap** (`G`): align to clips in the **same lane**, plus the timeline
+  start. The cut-to-cut magnet.
+- **Lane snap** (`⇧G`): also align to clips in the **other lane**, so picture and
+  sound line up — useful once a pair has been broken apart.
+- **Playhead snap** (`P`): the playhead, while scrubbed, pulls to the nearest
+  clip edge or the timeline start, so it lands on a cut exactly rather than near
+  it.
+
+`collectTargets` takes a `lanes` list; the timeline passes the dragged lane for
+clip snap and the other lane for lane snap. The playhead has no lane of its own,
+so it uses every clip edge; the drop path uses both.
 
 The surface is structural, not a convention:
 
-- `model/snapping.ts` exports **exactly two** snapping functions: `snapMove` for
-  a clip drag and `snapTrimEdge` for a handle. Nothing else.
-- The `Drag` type carries `locked` on the move and trim variants, so both latch;
-  the playhead drag is the only one that cannot.
-- The **playhead is not a target**. Dragging it to check what is at 1:14 should
-  give 1:14, not 1:14 snapped to a boundary. `collectTargets` still supports
-  including it; the timeline opts out, and a test pins that refusal.
+- `model/snapping.ts` exports **exactly three** snapping functions: `snapMove`
+  for a clip drag, `snapTrimEdge` for a handle, `snapPlayhead` for the scrubber.
+  Nothing else.
+- The `Drag` type carries `locked` on all three, so each latches; the toggles are
+  read separately (`snapping()` for clip/lane, `playheadSnap()` for the
+  playhead), so one mode cannot switch another on.
+- The **playhead is never a target** — nothing snaps *to* it. `collectTargets`
+  still supports offering it; the timeline opts out, and a test pins that.
 
 Three things do the work:
 

@@ -396,8 +396,11 @@ function StatusFooter(props: { state: AppState; pictureHidden: () => boolean }) 
 
       <span class="flex-1" />
 
-      <Show when={state.snapping()}>
-        <span title="Clips and trim handles snap to nearby edges (G)">snap on</span>
+      <Show when={state.snapping() || state.playheadSnap()}>
+        <span title="Snapping: clip = within a lane (G), lane = across lanes (⇧G), playhead = scrubber (P)">
+          snap{state.clipSnap() ? ' clip' : ''}{state.laneSnap() ? ' lane' : ''}
+          {state.playheadSnap() ? ' playhead' : ''}
+        </span>
       </Show>
       <Show when={state.audio.isMuted}>
         <span class="text-warn" title="Everything is muted (M)">muted</span>
