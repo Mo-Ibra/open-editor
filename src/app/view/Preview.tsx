@@ -160,7 +160,13 @@ export function Preview(props: {
     }
 
     if (state.project.video.length === 0) {
-      explain('timeline is empty — add a clip first')
+      // Nothing to decode yet. Draw a plain black frame and let the DOM empty
+      // state ("Drop a video file anywhere to begin.") speak — the canvas
+      // diagnostic overlay is a developer readout, and putting it on top of the
+      // first screen a user ever sees reads as a crash.
+      renderBlank(context(), options())
+      lastError = null
+      paintedAt = t
       return
     }
 

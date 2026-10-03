@@ -9,6 +9,7 @@
  */
 
 import { Show } from 'solid-js'
+import { Copy, Magnet, Scissors, Trash2, Unlink } from 'lucide-solid'
 import type { AppState } from '../../store/state.js'
 import type { LayoutState } from '../../store/layout.js'
 import { PanelToggle } from '../PanelToggle.js'
@@ -20,7 +21,7 @@ export function Toolbar(props: { state: AppState; anyClips: () => boolean; layou
   return (
     <div class="flex h-9 shrink-0 items-center gap-1.5 border-b border-line-soft px-2">
       <button class="btn" onClick={() => state.splitAt(state.playhead())} disabled={!props.anyClips()}>
-        Split
+        <Scissors size={13} /> Split
       </button>
       <button
         class="btn"
@@ -28,7 +29,7 @@ export function Toolbar(props: { state: AppState; anyClips: () => boolean; layou
         disabled={count() === 0}
         title="Copy the selection. A linked pair is copied as a pair (Ctrl+D)"
       >
-        {count() > 1 ? `Duplicate ${count()}` : 'Duplicate'}
+        <Copy size={13} /> {count() > 1 ? `Duplicate ${count()}` : 'Duplicate'}
       </button>
       <button
         class="btn"
@@ -36,7 +37,7 @@ export function Toolbar(props: { state: AppState; anyClips: () => boolean; layou
         disabled={count() === 0}
         title="Delete the selection. Only selected clips go — not their pairs"
       >
-        {count() > 1 ? `Delete ${count()}` : 'Delete'}
+        <Trash2 size={13} /> {count() > 1 ? `Delete ${count()}` : 'Delete'}
       </button>
       <button
         class="btn"
@@ -44,7 +45,7 @@ export function Toolbar(props: { state: AppState; anyClips: () => boolean; layou
         onClick={() => state.breakSelectedLinks()}
         title="Cut these clips and their pairs apart, so they edit independently"
       >
-        {state.selectionHasLinks() ? 'Break link' : 'unlinked'}
+        <Unlink size={13} /> {state.selectionHasLinks() ? 'Break link' : 'unlinked'}
       </button>
 
       <Show when={count() > 1}>
@@ -62,7 +63,7 @@ export function Toolbar(props: { state: AppState; anyClips: () => boolean; layou
         onClick={() => state.setSnapping(!state.snapping())}
         title="Magnetic snapping: align clip edges, the playhead, and the timeline start (G)"
       >
-        <MagnetIcon on={state.snapping()} />
+        <Magnet size={14} />
         snap
       </button>
 
@@ -134,15 +135,5 @@ export function Toolbar(props: { state: AppState; anyClips: () => boolean; layou
         dir="down"
       />
     </div>
-  )
-}
-
-function MagnetIcon(props: { on: boolean }) {
-  return (
-    <svg viewBox="0 0 16 16" class="size-3.5" fill="none" stroke="currentColor" stroke-width="1.4">
-      <path d="M4 3v5a4 4 0 0 0 8 0V3" stroke-linecap="round" />
-      <path d="M2.5 3h3M10.5 3h3" stroke-linecap="round" opacity={props.on ? 1 : 0.35} />
-      <path d="M4 3h3v5M9 3h3" stroke-linecap="round" opacity={props.on ? 1 : 0.35} />
-    </svg>
   )
 }

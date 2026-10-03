@@ -13,8 +13,10 @@
 
 import { Show } from 'solid-js'
 import type { Accessor } from 'solid-js'
+import { Eye, EyeOff, Maximize2, Minimize2, Pause, Play, SkipBack, SkipForward, Volume2, VolumeX } from 'lucide-solid'
 import type { AppState } from '../../store/state.js'
 import { formatTime } from '../format.js'
+import { Tooltip } from '../ui/Tooltip.js'
 import { Scrubber } from './Scrubber.js'
 
 export function Transport(props: {
@@ -31,29 +33,37 @@ export function Transport(props: {
       <Scrubber state={state} />
       <div class="flex min-h-0 flex-1 items-center gap-3 px-3">
       <div class="flex items-center gap-1">
-        <button class="btn !px-2" onClick={() => state.step(-1)} title="Previous frame (←)">
-          <SkipIcon dir="left" />
-        </button>
-        <button
-          class="grid size-7 place-items-center rounded-full bg-fg text-bg transition-transform hover:scale-105 active:scale-95"
-          onClick={() => void state.togglePlay()}
-          title={state.playing() ? 'Pause (space)' : 'Play (space)'}
-        >
-          {state.playing() ? <PauseIcon /> : <PlayIcon />}
-        </button>
-        <button class="btn !px-2" onClick={() => state.step(1)} title="Next frame (→)">
-          <SkipIcon dir="right" />
-        </button>
+        <Tooltip label="Previous frame (←)">
+          <button class="btn !px-2" onClick={() => state.step(-1)} aria-label="Previous frame">
+            <SkipBack size={15} />
+          </button>
+        </Tooltip>
+        <Tooltip label={state.playing() ? 'Pause (space)' : 'Play (space)'}>
+          <button
+            class="grid size-7 place-items-center rounded-full bg-fg text-bg transition-transform hover:scale-105 active:scale-95"
+            onClick={() => void state.togglePlay()}
+            aria-label={state.playing() ? 'Pause' : 'Play'}
+          >
+            {state.playing() ? <Pause size={14} /> : <Play size={14} />}
+          </button>
+        </Tooltip>
+        <Tooltip label="Next frame (→)">
+          <button class="btn !px-2" onClick={() => state.step(1)} aria-label="Next frame">
+            <SkipForward size={15} />
+          </button>
+        </Tooltip>
         {/* Only when the project actually has sound. A master mute on an empty
             timeline is a control that cannot do anything. */}
         <Show when={state.project.audio.length > 0}>
-          <button
-            classList={{ 'btn !px-2': true, 'text-warn!': state.audio.isMuted }}
-            onClick={() => state.audio.setMuted(!state.audio.isMuted)}
-            title={state.audio.isMuted ? 'Unmute (M)' : 'Mute (M)'}
-          >
-            <SpeakerIcon muted={state.audio.isMuted} />
-          </button>
+          <Tooltip label={state.audio.isMuted ? 'Unmute (M)' : 'Mute (M)'}>
+            <button
+              classList={{ 'btn !px-2': true, 'text-warn!': state.audio.isMuted }}
+              onClick={() => state.audio.setMuted(!state.audio.isMuted)}
+              aria-label={state.audio.isMuted ? 'Unmute' : 'Mute'}
+            >
+              {state.audio.isMuted ? <VolumeX size={15} /> : <Volume2 size={15} />}
+            </button>
+          </Tooltip>
         </Show>
       </div>
 
@@ -65,28 +75,28 @@ export function Transport(props: {
 
       <span class="flex-1" />
 
-      <button
-        class="btn !px-2"
-        onClick={props.onTogglePicture}
-        title={
-          props.pictureHidden()
-            ? 'Show the picture (H)'
-            : 'Hide the picture for more timeline (H)'
-        }
-        aria-pressed={props.pictureHidden()}
-        data-preview-action="picture"
-      >
-        <EyeIcon hidden={props.pictureHidden()} />
-      </button>
-      <button
-        class="btn !px-2"
-        onClick={props.onToggleFullscreen}
-        title={props.fullscreen() ? 'Leave full screen (F)' : 'Full screen (F)'}
-        aria-pressed={props.fullscreen()}
-        data-preview-action="fullscreen"
-      >
-        <ExpandIcon active={props.fullscreen()} />
-      </button>
+      <Tooltip label={props.pictureHidden() ? 'Show the picture (H)' : 'Hide the picture (H)'}>
+        <button
+          class="btn !px-2"
+          onClick={props.onTogglePicture}
+          aria-pressed={props.pictureHidden()}
+          aria-label={props.pictureHidden() ? 'Show the picture' : 'Hide the picture'}
+          data-preview-action="picture"
+        >
+          {props.pictureHidden() ? <EyeOff size={15} /> : <Eye size={15} />}
+        </button>
+      </Tooltip>
+      <Tooltip label={props.fullscreen() ? 'Leave full screen (F)' : 'Full screen (F)'}>
+        <button
+          class="btn !px-2"
+          onClick={props.onToggleFullscreen}
+          aria-pressed={props.fullscreen()}
+          aria-label={props.fullscreen() ? 'Leave full screen' : 'Full screen'}
+          data-preview-action="fullscreen"
+        >
+          {props.fullscreen() ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+        </button>
+      </Tooltip>
 
       <label class="flex items-center gap-2 text-[10.5px] text-muted">
         <span>zoom</span>
@@ -115,96 +125,5 @@ export function Transport(props: {
       </span>
       </div>
     </div>
-  )
-}
-
-/** An eye with a slash, or without. One icon, two states. */
-function EyeIcon(props: { hidden: boolean }) {
-  return (
-    <svg viewBox="0 0 16 16" class="size-3.5" fill="none" stroke="currentColor" stroke-width="1.3">
-      <path d="M1.5 8S3.8 3.8 8 3.8 14.5 8 14.5 8 12.2 12.2 8 12.2 1.5 8 1.5 8Z" />
-      <circle cx="8" cy="8" r="1.9" />
-      {props.hidden && <path d="M2.5 13.5 13.5 2.5" stroke-linecap="round" />}
-    </svg>
-  )
-}
-
-/** Four corners inward when full screen, outward when not. */
-function ExpandIcon(props: { active: boolean }) {
-  return (
-    <svg
-      viewBox="0 0 16 16"
-      class="size-3.5"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.5"
-      stroke-linecap="round"
-    >
-      {props.active ? (
-        <>
-          <path d="M6 2.5H2.5V6M10 2.5h3.5V6M6 13.5H2.5V10M10 13.5h3.5V10" />
-        </>
-      ) : (
-        <>
-          <path d="M2.5 6V2.5H6M13.5 6V2.5H10M2.5 10v3.5H6M13.5 10v3.5H10" />
-        </>
-      )}
-    </svg>
-  )
-}
-
-
-function PlayIcon() {
-  return (
-    <svg viewBox="0 0 16 16" class="size-3" fill="currentColor">
-      <path d="M4 2.5v11l9-5.5-9-5.5Z" />
-    </svg>
-  )
-}
-
-function PauseIcon() {
-  return (
-    <svg viewBox="0 0 16 16" class="size-3" fill="currentColor">
-      <rect x="3.5" y="2.5" width="3.5" height="11" rx="1" />
-      <rect x="9" y="2.5" width="3.5" height="11" rx="1" />
-    </svg>
-  )
-}
-
-function SkipIcon(props: { dir: 'left' | 'right' }) {
-  return (
-    <svg
-      viewBox="0 0 16 16"
-      class="size-3.5"
-      fill="currentColor"
-      style={{ transform: props.dir === 'left' ? 'scaleX(-1)' : undefined }}
-    >
-      <path d="M3 3h1.6v10H3V3Zm9 0v10l-6-5 6-5Z" />
-    </svg>
-  )
-}
-
-function SpeakerIcon(props: { muted: boolean }) {
-  return (
-    <svg viewBox="0 0 16 16" class="size-3.5" fill="currentColor">
-      <path d="M7 2.5 4.2 5H2v6h2.2L7 13.5v-11Z" />
-      {props.muted ? (
-        <path
-          d="M10 6l3 4M13 6l-3 4"
-          stroke="currentColor"
-          stroke-width="1.3"
-          fill="none"
-          stroke-linecap="round"
-        />
-      ) : (
-        <path
-          d="M9.5 5.5a3.4 3.4 0 0 1 0 5M11.5 3.5a6 6 0 0 1 0 9"
-          stroke="currentColor"
-          stroke-width="1.3"
-          fill="none"
-          stroke-linecap="round"
-        />
-      )}
-    </svg>
   )
 }

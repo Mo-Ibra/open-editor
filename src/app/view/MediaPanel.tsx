@@ -22,6 +22,7 @@ import { createSignal, For, Show } from 'solid-js'
 import type { AppState } from '../store/state.js'
 import type { BatchItem, MediaState } from '../store/media-status.js'
 import { chooseFolder, filesFromDrop, type FolderFile } from './folder.js'
+import { Modal, PanelHeader } from './ui/Modal.js'
 
 const mb = (bytes: number): string => {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`
@@ -124,11 +125,11 @@ export function MediaPanel(props: {
   }
 
   return (
-    <div
-      class="fixed inset-0 z-40 flex items-start justify-center bg-black/35 pt-[8vh]"
-      onPointerDown={(e) => {
-        if (e.target === e.currentTarget) props.onClose()
-      }}
+    <Modal
+      placement="top"
+      onClose={props.onClose}
+      panelClass={`max-h-[82vh] w-[min(680px,94vw)] ${dropping() ? 'ring-1 ring-accent' : ''}`}
+      panelAttrs={{ 'data-media-panel': 'true', 'data-dropping': dropping() ? 'true' : 'false' }}
       // A folder dropped anywhere on the panel. `dragover` has to be prevented
       // or the browser navigates to the folder and the app is simply gone — the
       // one failure here with no recovery short of reloading.
@@ -145,33 +146,22 @@ export function MediaPanel(props: {
         void filesFromDrop(e.dataTransfer).then(runFolder)
       }}
     >
-      <div
-        class="flex max-h-[82vh] w-[min(640px,94vw)] flex-col rounded-lg border border-line bg-panel shadow-2xl"
-        classList={{ 'ring-1 ring-accent': dropping() }}
-        data-media-panel
-        data-dropping={dropping() ? 'true' : 'false'}
-      >
-        <header class="flex shrink-0 items-center gap-2 border-b border-line-soft px-4 py-2.5">
-          <span class="panel-label">Media</span>
-          <span class="text-[11px] text-muted">
-            {attached().length} of {media().length} attached
-          </span>
-          <span class="flex-1" />
-          <Show when={unresolved().length > 0}>
-            <button
-              class="btn"
-              disabled={busy() !== null}
-              onClick={() => void (props.pickFolder ?? chooseFolder)().then(runFolder)}
-              title="Match a whole folder against this project at once"
-              data-pick-folder
-            >
-              Choose folder…
-            </button>
-          </Show>
-          <button class="btn btn-ghost !px-2" onClick={props.onClose} aria-label="Close">
-            close
+      <PanelHeader title="Media" onClose={props.onClose}>
+        <span class="text-[11px] text-muted">
+          {attached().length} of {media().length} attached
+        </span>
+        <Show when={unresolved().length > 0}>
+          <button
+            class="btn"
+            disabled={busy() !== null}
+            onClick={() => void (props.pickFolder ?? chooseFolder)().then(runFolder)}
+            title="Match a whole folder against this project at once"
+            data-pick-folder
+          >
+            Choose folder…
           </button>
-        </header>
+        </Show>
+      </PanelHeader>
 
         <Show when={progress()}>
           {(pr) => (
@@ -290,7 +280,6 @@ export function MediaPanel(props: {
             refused, and the old one is kept.
           </footer>
         </Show>
-      </div>
-    </div>
+    </Modal>
   )
 }

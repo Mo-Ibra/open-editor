@@ -11,6 +11,7 @@
  */
 
 import { Show } from 'solid-js'
+import { Check, Link2 } from 'lucide-solid'
 import type { Clip as ClipModel, Lane } from '../../../model/project.js'
 import type { AppState } from '../../store/state.js'
 import { HANDLE } from './use-timeline-drag.js'
@@ -81,7 +82,7 @@ export function Clip(props: {
           class="pointer-events-none absolute left-1 top-1 z-30 flex size-3.5 items-center justify-center rounded-full bg-accent text-[9px] font-bold text-black"
           aria-label="selected"
         >
-          ✓
+          <Check size={10} strokeWidth={3} />
         </span>
       </Show>
 
@@ -134,7 +135,7 @@ export function Clip(props: {
           class="pointer-events-none absolute right-1.5 top-0.5 z-10 text-[9px] text-fg/60"
           title="Linked to its pair — edits apply to both"
         >
-          ⛓
+          <Link2 size={11} />
         </span>
       </Show>
 

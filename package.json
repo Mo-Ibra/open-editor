@@ -11,7 +11,9 @@
     "test": "node --experimental-strip-types --import ./test/register.mjs --test test/*.test.ts"
   },
   "dependencies": {
+    "@floating-ui/dom": "^1.8.0",
     "idb": "^8.0.3",
+    "lucide-solid": "^1.50.0",
     "mediabunny": "^1.60.0",
     "solid-js": "^1.9.15"
   },

@@ -12,7 +12,8 @@
  * is decoration.
  */
 
-import { createSignal, For, Show, type JSX } from 'solid-js'
+import { createEffect, createSignal, For, Show, type JSX } from 'solid-js'
+import { computePosition, flip, offset, shift } from '@floating-ui/dom'
 import { log } from '../../dev/debug.js'
 
 export interface MenuItem {
@@ -97,26 +98,53 @@ export function ContextMenu(props: {
   /** Items for the current target. */
   items: () => MenuItem[]
 }) {
-  // Keep the menu on screen. A right-click near the bottom edge would
-  // otherwise open a panel that extends past the viewport.
-  function position(): { left: number; top: number } {
+  const [menuEl, setMenuEl] = createSignal<HTMLDivElement>()
+  const [pos, setPos] = createSignal({ left: 0, top: 0 })
+
+  /*
+   * Keep the menu on screen with Floating UI rather than arithmetic.
+   *
+   * The old version guessed the menu's height from the item count and clamped
+   * against the window, which is wrong the moment a label wraps or the platform
+   * font differs — a menu opened near the bottom edge would still be clipped.
+   * Floating UI measures the real element and flips it above the pointer when
+   * there is no room below, which is the behaviour people expect.
+   *
+   * The reference is a virtual element at the pointer: there is no trigger to
+   * anchor to, only the click position.
+   */
+  createEffect(() => {
     const target = props.state.open()
-    if (!target) return { left: 0, top: 0 }
-    const width = 210
-    const height = props.items().length * 26 + 12
-    return {
-      left: Math.min(target.x, window.innerWidth - width - 8),
-      top: Math.min(target.y, window.innerHeight - height - 8),
+    const el = menuEl()
+    props.items() // re-place when the item set changes the menu's size
+    if (!target || !el) return
+    const virtual = {
+      getBoundingClientRect: (): DOMRect => ({
+        x: target.x,
+        y: target.y,
+        top: target.y,
+        left: target.x,
+        right: target.x,
+        bottom: target.y,
+        width: 0,
+        height: 0,
+        toJSON: () => ({}),
+      }),
     }
-  }
+    void computePosition(virtual as unknown as Element, el, {
+      placement: 'bottom-start',
+      middleware: [offset(4), flip({ padding: 8 }), shift({ padding: 8 })],
+    }).then(({ x, y }) => setPos({ left: x, top: y }))
+  })
 
   return (
     <Show when={props.state.open()}>
       {(target) => (
         <div
+          ref={setMenuEl}
           data-menu
-          class="fixed z-50 min-w-[200px] rounded-md border border-line bg-raised/98 py-1 shadow-xl shadow-black/50 backdrop-blur"
-          style={{ left: `${position().left}px`, top: `${position().top}px` }}
+          class="fixed z-50 min-w-[200px] rounded-md border border-line bg-raised/98 py-1 shadow-pop backdrop-blur"
+          style={{ left: `${pos().left}px`, top: `${pos().top}px` }}
           onContextMenu={(e) => e.preventDefault()}
           onPointerDown={(e) => e.stopPropagation()}
         >

@@ -17,6 +17,7 @@
 
 import { For } from 'solid-js'
 import type { Shortcut } from '../commands/keyboard.js'
+import { Modal, PanelHeader } from './ui/Modal.js'
 
 export function ShortcutsPanel(props: { shortcuts: Shortcut[]; onClose: () => void }) {
   // Grouped by the blank space between them in the source, so the panel's
@@ -31,25 +32,16 @@ export function ShortcutsPanel(props: { shortcuts: Shortcut[]; onClose: () => vo
   }
 
   return (
-    <div
-      class="fixed inset-0 z-40 flex items-start justify-center bg-black/35 pt-[12vh]"
-      onPointerDown={(e) => {
-        if (e.target === e.currentTarget) props.onClose()
-      }}
+    <Modal
+      placement="top"
+      onClose={props.onClose}
+      panelClass="max-h-[78vh] w-[min(740px,92vw)]"
+      panelAttrs={{ 'data-shortcuts-panel': 'true' }}
     >
-      <div
-        class="max-h-[76vh] w-[min(720px,92vw)] overflow-y-auto rounded-lg border border-line bg-panel shadow-2xl"
-        data-shortcuts-panel
-      >
-        <header class="sticky top-0 flex items-center gap-2 border-b border-line-soft bg-panel px-4 py-2.5">
-          <span class="panel-label">Keyboard</span>
-          <span class="flex-1" />
-          <button class="btn btn-ghost !px-2" onClick={props.onClose} aria-label="Close">
-            close
-          </button>
-        </header>
+      <PanelHeader title="Keyboard" onClose={props.onClose} />
 
-        <div class="grid gap-x-8 gap-y-5 p-4 sm:grid-cols-2">
+      <div class="min-h-0 flex-1 overflow-y-auto p-4">
+        <div class="grid gap-x-8 gap-y-5 sm:grid-cols-2">
           <For each={groups()}>
             {(group) => (
               <section>
@@ -72,6 +64,6 @@ export function ShortcutsPanel(props: { shortcuts: Shortcut[]; onClose: () => vo
           </For>
         </div>
       </div>
-    </div>
+    </Modal>
   )
 }

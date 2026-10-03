@@ -20,15 +20,24 @@
  * A video editor's job is to get out of the way of the picture. Everything
  * here is a near-neutral, deliberately low-chroma surface so the only saturated
  * colour on screen is the video itself, the playhead, and the clip tints.
+ *
+ * Surfaces step up in small, consistent increments — `bg` (the void behind
+ * everything) → `panel` (the chrome) → `raised` (a control on the chrome) →
+ * `raised-2` (a control on a control). Text steps down the same way: `fg` →
+ * `muted` → `faint`. Using the tokens rather than ad-hoc hex is what keeps the
+ * whole app reading as one surface instead of a pile of near-blacks.
  */
 @theme {
   --color-bg: #0a0a0c;
   --color-panel: #101015;
   --color-raised: #16171d;
+  --color-raised-2: #1c1e26;
   --color-line: #23242c;
   --color-line-soft: #1a1b22;
+  --color-line-strong: #2f313c;
   --color-fg: #e8e9ee;
   --color-muted: #858b9c;
+  --color-faint: #5b6070;
   --color-accent: #5b8cff;
   --color-accent-dim: #3a5fb8;
   --color-danger: #f2555a;
@@ -40,6 +49,12 @@
 
   /* Timecodes must not jitter as digits change. */
   --tabular-nums: tabular-nums;
+
+  --radius-control: 6px;
+  --radius-panel: 10px;
+
+  --shadow-pop: 0 14px 36px -10px rgb(0 0 0 / 0.65), 0 0 0 1px rgb(0 0 0 / 0.45);
+  --shadow-modal: 0 28px 70px -18px rgb(0 0 0 / 0.72), 0 0 0 1px rgb(0 0 0 / 0.5);
 }
 
 @layer base {
@@ -73,6 +88,19 @@
     color: inherit;
   }
 
+  /*
+   * One focus ring for the whole app.
+   *
+   * `:focus-visible` only, so a mouse click never draws it — but a keyboard user
+   * always can see where they are. The offset keeps the ring off the control's
+   * own border instead of blending into it.
+   */
+  :focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--color-accent) 80%, transparent);
+    outline-offset: 1px;
+    border-radius: 4px;
+  }
+
   ::selection {
     background: var(--color-accent-dim);
   }
@@ -94,6 +122,19 @@
     background: #3a3d4a;
     background-clip: content-box;
   }
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  select {
+    appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, var(--color-muted) 50%),
+      linear-gradient(135deg, var(--color-muted) 50%, transparent 50%);
+    background-position: right 12px center, right 7px center;
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
+    padding-right: 24px;
+  }
 }
 
 @utility btn {
@@ -111,10 +152,24 @@
   @apply border-transparent bg-transparent text-muted hover:bg-raised hover:text-fg;
 }
 
+/*
+ * An icon-only control. Same hit feel as `btn`, no label, so it needs a
+ * tooltip and a screen-reader name — which the components that use it supply.
+ */
+@utility icon-btn {
+  @apply inline-grid size-7 shrink-0 place-items-center rounded-md text-muted transition-colors
+         hover:bg-raised hover:text-fg disabled:pointer-events-none disabled:opacity-35;
+}
+
 @utility panel-label {
   @apply text-[10px] font-semibold tracking-[0.08em] text-muted uppercase;
 }
 
 @utility timecode {
   @apply font-mono tabular-nums;
+}
+
+@utility chip {
+  @apply inline-flex items-center gap-1 rounded-full border border-line bg-raised px-1.5 py-px
+         text-[10px] font-medium text-muted;
 }

@@ -16,6 +16,7 @@
 
 import { createMemo, createSignal, For, Show } from 'solid-js'
 import { clear, history, logRevision, type Level } from '../../dev/debug.js'
+import { Modal, PanelHeader } from './ui/Modal.js'
 
 const LEVELS: Level[] = ['debug', 'info', 'warn', 'error']
 
@@ -47,38 +48,30 @@ export function LogPanel(props: { onClose: () => void }) {
   }
 
   return (
-    <div
-      class="fixed inset-0 z-40 flex justify-end bg-black/35"
-      onPointerDown={(e) => {
-        if (e.target === e.currentTarget) props.onClose()
-      }}
+    <Modal
+      placement="right"
+      variant="drawer"
+      onClose={props.onClose}
+      panelClass="h-full w-[min(560px,90vw)]"
+      panelAttrs={{ 'data-log-panel': 'true' }}
     >
-      <aside
-        class="flex h-full w-[min(560px,90vw)] flex-col border-l border-line bg-panel shadow-2xl"
-        data-log-panel
-      >
-        <header class="flex h-11 shrink-0 items-center gap-2 border-b border-line-soft px-3">
-          <span class="panel-label">Logs</span>
-          <Show when={problems() > 0}>
-            <span
-              class="rounded-full bg-warn/20 px-1.5 text-[10px] font-semibold text-warn"
-              title={`${problems()} warnings or errors this session`}
-            >
-              {problems()}
-            </span>
-          </Show>
-          <span class="flex-1" />
-          <span class="text-[10.5px] text-muted">{entries().length} shown</span>
-          <button class="btn btn-ghost !px-2" onClick={() => void copyAll()}>
-            {copied() ? 'copied' : 'copy'}
-          </button>
-          <button class="btn btn-ghost !px-2" onClick={() => clear()} title="Empty the log buffer">
-            clear
-          </button>
-          <button class="btn btn-ghost !px-2" onClick={props.onClose} aria-label="Close the log panel">
-            close
-          </button>
-        </header>
+      <PanelHeader title="Logs" onClose={props.onClose}>
+        <Show when={problems() > 0}>
+          <span
+            class="rounded-full bg-warn/20 px-1.5 text-[10px] font-semibold text-warn"
+            title={`${problems()} warnings or errors this session`}
+          >
+            {problems()}
+          </span>
+        </Show>
+        <span class="text-[10.5px] text-muted">{entries().length} shown</span>
+        <button class="btn btn-ghost !px-2" onClick={() => void copyAll()}>
+          {copied() ? 'copied' : 'copy'}
+        </button>
+        <button class="btn btn-ghost !px-2" onClick={() => clear()} title="Empty the log buffer">
+          clear
+        </button>
+      </PanelHeader>
 
         <div class="flex shrink-0 items-center gap-1 border-b border-line-soft px-3 py-1.5">
           <span class="text-[10.5px] text-muted">show</span>
@@ -121,7 +114,6 @@ export function LogPanel(props: { onClose: () => void }) {
             </For>
           </Show>
         </div>
-      </aside>
-    </div>
+    </Modal>
   )
 }

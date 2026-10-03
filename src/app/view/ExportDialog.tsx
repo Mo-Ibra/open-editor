@@ -21,7 +21,9 @@ import { projectDuration } from '../../model/project.js'
 import { readMediaFacts, selfCheck, selfCheckLine } from '../../output/self-check.js'
 import { availablePlans, bitrateFor, even, type PlanCandidate } from '../../output/codecs.js'
 import { log } from '../../dev/debug.js'
+import { X } from 'lucide-solid'
 import type { AppState } from '../store/state.js'
+import { Modal } from './ui/Modal.js'
 
 const PRESETS = [
   { label: 'Match source', value: 'source' as const },
@@ -181,11 +183,15 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
   }
 
   return (
-    <div
-      class="fixed inset-0 z-50 grid place-items-center bg-black/70 p-6 backdrop-blur-sm"
-      onClick={(e) => e.target === e.currentTarget && !busy() && close()}
+    <Modal
+      placement="center"
+      tone="heavy"
+      z={50}
+      onClose={() => {
+        if (!busy()) close()
+      }}
+      panelClass="max-h-full w-full max-w-3xl"
     >
-      <div class="flex max-h-full w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-line bg-panel shadow-2xl shadow-black/60">
         {/* header */}
         <div class="flex h-11 shrink-0 items-center gap-3 border-b border-line px-4">
           <span class="text-[13px] font-semibold">Export</span>
@@ -193,8 +199,8 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
             {formatTime(state.duration())} · {state.project.video.length} video · {state.project.audio.length} audio
           </span>
           <span class="flex-1" />
-          <button class="btn btn-ghost !px-1.5" onClick={close} disabled={busy()} title="Close (Esc)">
-            ✕
+          <button class="icon-btn" onClick={close} disabled={busy()} title="Close (Esc)" aria-label="Close">
+            <X size={16} />
           </button>
         </div>
 
@@ -426,8 +432,7 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
             )}
           </Show>
         </div>
-      </div>
-    </div>
+    </Modal>
   )
 }
 

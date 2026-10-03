@@ -14,6 +14,7 @@
  */
 
 import { createEffect, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
+import { Download, Keyboard, ScrollText } from 'lucide-solid'
 
 import { AssetBin } from './AssetBin.js'
 import { ContextMenu, createContextMenu } from './ContextMenu.js'
@@ -350,10 +351,10 @@ function TopBar(props: {
           onClick={props.onOpenLogs}
           title="Show what the app has been logging — errors, decoder complaints, export steps"
         >
-          logs
+          <ScrollText size={13} /> logs
         </button>
         <button class="btn" onClick={props.onOpenKeys} title="Keyboard shortcuts (?)">
-          keys
+          <Keyboard size={13} /> keys
         </button>
         <button
           class="btn btn-primary"
@@ -361,7 +362,7 @@ function TopBar(props: {
           disabled={!state.project.video.length}
           title={state.project.video.length ? 'Export the timeline' : 'Add a video clip first'}
         >
-          Export
+          <Download size={13} /> Export
         </button>
       </div>
     </header>
