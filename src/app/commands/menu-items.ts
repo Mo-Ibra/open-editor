@@ -72,31 +72,33 @@ export function menuItems(
             },
           ]
         : [{ label: 'unlinked', status: true, run: noop }]),
-      // One row, and it says the right word for the lane. Mute for audio, hide
-      // for video, both for a mixed selection — because that is how the user
-      // thinks about it, and two near-identical rows would make them read both
-      // to work out which applies.
-      //
-      // Omitted entirely when nothing is selected: "Mute" on a video-only
-      // selection is a promise the app cannot keep, and a greyed-out row still
-      // reads as "this is a thing that exists here".
-      ...(audio.length > 0 || video.length > 0
+      // One row per lane, and each says exactly what it does to that lane.
+      // A single combined "Mute sound and picture" row used to appear whenever
+      // a linked pair was selected, so right-clicking the *video* offered
+      // "Mute" — which reads as an audio action on a picture clip. The video
+      // and audio rows are independent, so a mixed selection gets both and the
+      // user is never guessing which lane an action hits.
+      ...(video.length > 0
         ? [
-            (() => {
-              const only = audio.length === 0 ? 'video' : video.length === 0 ? 'audio' : null
-              const isOff = only === 'video' ? allHidden : only === 'audio' ? allMuted : false
-              const verb = only === 'video' ? (isOff ? 'Show' : 'Hide') : isOff ? 'Unmute' : 'Mute'
-              const noun = only === 'audio' ? '' : only === 'video' ? ' picture' : ' sound and picture'
-              return {
-                label: count(
-                  `${verb}${noun}`,
-                  `${verb} %d clips${noun}`,
-                ),
-                shortcut: 'M',
-                disabled: false,
-                run: () => state.toggleHideSelected(),
-              }
-            })(),
+            {
+              label: count(
+                allHidden ? 'Show picture' : 'Hide picture',
+                allHidden ? 'Show %d pictures' : 'Hide %d pictures',
+              ),
+              shortcut: 'M',
+              disabled: false,
+              run: () => state.toggleHiddenSelected(),
+            },
+          ]
+        : []),
+      ...(audio.length > 0
+        ? [
+            {
+              label: count(allMuted ? 'Unmute sound' : 'Mute sound', allMuted ? 'Unmute %d clips' : 'Mute %d clips'),
+              shortcut: 'M',
+              disabled: false,
+              run: () => state.toggleMuteSelected(),
+            },
           ]
         : []),
       { separator: true, label: '', run: noop },
@@ -185,11 +187,19 @@ export function menuItems(
       shortcut: 'G',
       run: () => state.setSnapping(!state.snapping()),
     },
-    {
-      label: state.audio.isMuted ? 'Unmute' : 'Mute',
-      shortcut: 'M',
-      run: () => state.audio.setMuted(!state.audio.isMuted),
-    },
+    // Only when there is sound to mute. A "Mute" row on a project with no audio
+    // is a promise the app cannot keep, and it appears — and reads as broken —
+    // on the empty timeline most users right-click first.
+    ...(state.project.audio.length > 0
+      ? [
+          { separator: true, label: '', run: noop },
+          {
+            label: state.audio.isMuted ? 'Unmute' : 'Mute',
+            shortcut: 'M',
+            run: () => state.audio.setMuted(!state.audio.isMuted),
+          },
+        ]
+      : []),
     { separator: true, label: '', run: noop },
     { label: 'Reset panels', run: () => layout.reset() },
     { label: 'Copy logs', run: () => void navigator.clipboard?.writeText(dump()) },

@@ -375,6 +375,7 @@ export function createAppState() {
     toggleMuteSelected: edits.toggleMuteSelected,
     toggleMute: edits.toggleMute,
     toggleHideSelected: edits.toggleHideSelected,
+    toggleHiddenSelected: edits.toggleHiddenSelected,
     toggleHidden: edits.toggleHidden,
     breakSelectedLinks: edits.breakSelectedLinks,
     selectionHasLinks: edits.selectionHasLinks,

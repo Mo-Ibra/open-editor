@@ -60,7 +60,7 @@ otherwise there would be no way to mute the whole project mid-edit.
 
 ## 3. The store commits *before* changing anything
 
-`src/app/store/edits.ts:90`:
+`src/app/store/edits.ts:96`:
 
 ```ts
 function splitAt(time: number, lane?: Lane): void {
@@ -121,7 +121,7 @@ divides by zero somewhere."
 
 ## 5. The batch path is not a loop
 
-`splitSelectionAtPlayhead` (`src/app/store/edits.ts:132`) is the multi-select
+`splitSelectionAtPlayhead` (`src/app/store/edits.ts:138`) is the multi-select
 case, and its docblock names the two things that make it more than a loop:
 
 - **A linked pair is split by `splitLinked`, which cuts both halves.** So a
@@ -190,7 +190,7 @@ store writes without reading what the setter does.
 ## 8. Nobody re-renders by hand
 
 There is no call to a render function, and nothing invalidates a cache. The
-timeline re-renders because `src/app/store/edits.ts:88` produced a *new array* and the store
+timeline re-renders because `src/app/store/edits.ts:96` produced a *new array* and the store
 setter signalled. Solid tracks that, and `src/app/view/timeline/Lane.tsx` re-runs
 its `For` over the changed array.
 

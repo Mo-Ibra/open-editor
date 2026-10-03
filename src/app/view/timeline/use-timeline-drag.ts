@@ -300,7 +300,21 @@ export function useTimelineDrag(
    * own page-zoom does not also happen.
    */
   function onWheel(event: WheelEvent): void {
-    if (!event.ctrlKey && !event.metaKey) return
+    if (!event.ctrlKey && !event.metaKey) {
+      // Plain wheel pans the timeline sideways. The timeline is one screen tall
+      // with only two lanes, so it has no vertical overflow to scroll — a plain
+      // wheel would otherwise do nothing at all. When there *is* vertical
+      // content (a very short timeline panel), the gesture is left native.
+      const scroller = elements.scroller()
+      if (!scroller) return
+      const canPan = scroller.scrollWidth > scroller.clientWidth
+      const mustScrollVertically = scroller.scrollHeight > scroller.clientHeight
+      if (!canPan || mustScrollVertically) return
+      event.preventDefault()
+      const step = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY
+      scroller.scrollLeft += step + event.deltaX
+      return
+    }
     wheelClientX = event.clientX
     // Must happen even though the zoom is deferred: this is the browser's own
     // page-zoom gesture, and the event does not wait for an animation frame.

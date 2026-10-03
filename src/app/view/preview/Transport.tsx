@@ -15,6 +15,7 @@ import { Show } from 'solid-js'
 import type { Accessor } from 'solid-js'
 import type { AppState } from '../../store/state.js'
 import { formatTime } from '../format.js'
+import { Scrubber } from './Scrubber.js'
 
 export function Transport(props: {
   state: AppState
@@ -26,7 +27,9 @@ export function Transport(props: {
 }) {
   const state = props.state
   return (
-    <div class="flex h-[48px] shrink-0 items-center gap-3 border-t border-line bg-panel px-3">
+    <div class="flex h-[48px] shrink-0 flex-col border-t border-line bg-panel">
+      <Scrubber state={state} />
+      <div class="flex min-h-0 flex-1 items-center gap-3 px-3">
       <div class="flex items-center gap-1">
         <button class="btn !px-2" onClick={() => state.step(-1)} title="Previous frame (←)">
           <SkipIcon dir="left" />
@@ -41,13 +44,17 @@ export function Transport(props: {
         <button class="btn !px-2" onClick={() => state.step(1)} title="Next frame (→)">
           <SkipIcon dir="right" />
         </button>
-        <button
-          classList={{ 'btn !px-2': true, 'text-warn!': state.audio.isMuted }}
-          onClick={() => state.audio.setMuted(!state.audio.isMuted)}
-          title={state.audio.isMuted ? 'Unmute (M)' : 'Mute (M)'}
-        >
-          <SpeakerIcon muted={state.audio.isMuted} />
-        </button>
+        {/* Only when the project actually has sound. A master mute on an empty
+            timeline is a control that cannot do anything. */}
+        <Show when={state.project.audio.length > 0}>
+          <button
+            classList={{ 'btn !px-2': true, 'text-warn!': state.audio.isMuted }}
+            onClick={() => state.audio.setMuted(!state.audio.isMuted)}
+            title={state.audio.isMuted ? 'Unmute (M)' : 'Mute (M)'}
+          >
+            <SpeakerIcon muted={state.audio.isMuted} />
+          </button>
+        </Show>
       </div>
 
       <div class="timecode flex items-baseline gap-1.5 text-[12px]">
@@ -106,6 +113,7 @@ export function Transport(props: {
         </Show>{' '}
         · ph {state.playhead().toFixed(2)}
       </span>
+      </div>
     </div>
   )
 }

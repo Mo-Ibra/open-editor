@@ -29,7 +29,7 @@ export function AssetBin(props: { state: AppState; menu: ContextMenuState; layou
 
   return (
     <aside
-      class="flex min-h-0 flex-col border-r border-line bg-panel"
+      class="flex min-h-0 min-w-0 flex-1 flex-col border-r border-line bg-panel"
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => {
         e.preventDefault()

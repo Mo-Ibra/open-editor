@@ -77,6 +77,8 @@ export interface EditSlice {
   toggleMute: (clipId: ClipId) => void
   /** Mute audio clips, hide video clips. */
   toggleHideSelected: () => void
+  /** Hide or show every selected video clip, leaving audio clips alone. */
+  toggleHiddenSelected: () => void
   toggleHidden: (clipId: ClipId) => void
   breakSelectedLinks: () => void
   selectionHasLinks: () => boolean
@@ -365,6 +367,26 @@ function toggleHideSelected(): void {
   notify('info', `${parts.join(' and ')} ${changed} ${noun}${changed === 1 ? '' : 's'}.`)
 }
 
+/**
+ * Hide or show every selected video clip, leaving audio clips alone.
+ *
+ * The lane-specific twin of `toggleMuteSelected`, so the context menu can offer
+ * "Hide picture" and "Mute sound" as two honest rows rather than one combined
+ * action whose label depends on what happened to be selected.
+ */
+function toggleHiddenSelected(): void {
+  const clips = sel.clips().filter((c) => c.lane === 'video')
+  if (clips.length === 0) return
+  // Hide all if any is currently visible, so one press hides the selection
+  // rather than flipping each clip independently.
+  const shouldHide = clips.some((c) => !c.hidden)
+  for (const clip of clips) {
+    if (Boolean(clip.hidden) === shouldHide) continue
+    setProject(replace(applyHidden(unwrap(project), clip.id)))
+  }
+  notify('info', `${shouldHide ? 'Hid' : 'Showed'} ${clips.length} clip${clips.length === 1 ? '' : 's'}.`)
+}
+
 /** Hide or show one clip, by lane. */
 function toggleHidden(clipId: ClipId): void {
   const before = findClip(project, clipId)
@@ -431,6 +453,7 @@ const selectionHasLinks = (): boolean => sel.clips().some((c) => Boolean(c.linkI
     toggleMuteSelected,
     toggleMute,
     toggleHideSelected,
+    toggleHiddenSelected,
     toggleHidden,
     breakSelectedLinks,
     selectionHasLinks,

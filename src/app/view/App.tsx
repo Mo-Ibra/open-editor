@@ -222,7 +222,7 @@ export function App() {
         class="relative grid min-h-0 flex-1"
         style={{ 'grid-template-columns': `${layout.sidebarTrack()} minmax(0, 1fr)` }}
       >
-        <div class="relative min-h-0 min-w-0 overflow-hidden">
+        <div class="relative flex min-h-0 min-w-0 overflow-hidden">
           <AssetBin state={state} menu={menu} layout={layout} />
         </div>
 
@@ -234,6 +234,7 @@ export function App() {
           onToggle={() => layout.toggleSidebar()}
           collapsed={layout.sidebarCollapsed()}
           title="Drag to resize · double-click to collapse"
+          label="Media"
         />
 
         <main
@@ -242,7 +243,7 @@ export function App() {
         >
           <Preview state={state} menu={menu} layout={layout} fullscreen={fullscreen} />
 
-          <div class="relative min-h-0 min-w-0 overflow-hidden">
+          <div class="relative flex min-h-0 min-w-0 overflow-hidden">
             <Timeline state={state} menu={menu} layout={layout} />
           </div>
 
@@ -263,6 +264,7 @@ export function App() {
               onToggle={() => layout.toggleTimeline()}
               collapsed={layout.timelineCollapsed()}
               title="Drag to resize · double-click to collapse"
+              label="Timeline"
             />
           </Show>
         </main>

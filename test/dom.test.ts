@@ -397,8 +397,9 @@ console.log('ref-binding assertions passed')
  *  2. Binding it through JSX `onWheel` makes that passive-ness the default on
  *     some engines, and gives no way to be explicit.
  *
- * Also pinned: a plain wheel must still be left alone, because panning is a
- * gesture people already have.
+ * Also pinned: a plain wheel pans the timeline sideways. The timeline has no
+ * vertical overflow of its own, so the gesture would otherwise do nothing —
+ * panning is a gesture people already have, and this is how it is honoured.
  */
 {
   const timeline = readFileSync(new URL('../src/app/view/timeline/use-timeline-drag.ts', import.meta.url), 'utf8')
@@ -422,8 +423,13 @@ console.log('ref-binding assertions passed')
   assert.ok(handler, 'onWheel should exist')
   assert.match(
     handler,
-    /if \(!event\.ctrlKey && !event\.metaKey\) return/,
-    'a plain wheel must be left alone so it still scrolls',
+    /scroller\.scrollLeft \+=/,
+    'a plain wheel must pan the timeline horizontally',
+  )
+  assert.match(
+    handler,
+    /mustScrollVertically[\s\S]{0,80}return/,
+    'but a wheel must stay native when there is vertical content to scroll',
   )
   assert.match(handler, /event\.preventDefault\(\)/, 'and ctrl+wheel must stop the browser zooming the page')
 

@@ -10,7 +10,7 @@
  * clip cannot drift out of order however it was edited (docs/data-model.md).
  */
 
-import { createEffect, createSignal, Show } from 'solid-js'
+import { createEffect, createSignal, onCleanup, onMount, Show } from 'solid-js'
 import type { Lane } from '../../model/project.js'
 import type { AppState } from '../store/state.js'
 import type { ContextMenuState } from './ContextMenu.js'
@@ -40,8 +40,26 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
     scroller: () => scrollerEl,
   })
 
-  /** The track is at least this wide, so an empty timeline is still grabbable. */
-  const contentWidth = (): number => Math.max(600, state.timeToX(state.duration()) + 200)
+  /**
+   * The scroller's own width, tracked so the track can fill it.
+   *
+   * Without this the track was a flat 600px (or the timeline's length), so an
+   * empty or short timeline showed lanes that stopped two thirds of the way
+   * across the window — the empty half read as a layout bug, because it was one.
+   */
+  const [viewportWidth, setViewportWidth] = createSignal(0)
+  onMount(() => {
+    const el = scrollerEl
+    if (!el) return
+    const observer = new ResizeObserver(() => setViewportWidth(el.clientWidth))
+    observer.observe(el)
+    setViewportWidth(el.clientWidth)
+    onCleanup(() => observer.disconnect())
+  })
+
+  /** The track fills the viewport, and grows past it once the timeline is long. */
+  const contentWidth = (): number =>
+    Math.max(viewportWidth(), 600, state.timeToX(state.duration()) + 200)
 
   const anyClips = (): boolean =>
     state.project.video.length > 0 || state.project.audio.length > 0
@@ -155,7 +173,7 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
   }
 
   return (
-    <section class="flex h-[236px] shrink-0 flex-col border-t border-line bg-panel">
+    <section class="flex min-h-0 flex-1 flex-col border-t border-line bg-panel">
       <Toolbar state={state} anyClips={anyClips} layout={props.layout} />
 
       {/* ruler + lanes */}
