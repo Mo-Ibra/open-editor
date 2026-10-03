@@ -49,7 +49,7 @@ export function Toolbar(props: { state: AppState; anyClips: () => boolean; layou
       </button>
 
       <Show when={count() > 1}>
-        <span class="rounded-full border border-accent/50 bg-accent/15 px-2 py-0.5 text-[10.5px] font-semibold text-accent">
+        <span class="rounded-full border border-accent/50 bg-accent/15 px-2 py-0.5 text-tiny font-semibold text-accent">
           {count()} clips selected
         </span>
       </Show>
@@ -76,7 +76,7 @@ export function Toolbar(props: { state: AppState; anyClips: () => boolean; layou
         {(clip) => (
           <>
           <Show when={clip().lane === 'audio'}>
-            <label class="flex items-center gap-2 text-[10.5px] text-muted">
+            <label class="flex items-center gap-2 text-tiny text-muted">
               level
               <input
                 type="range"
@@ -120,7 +120,7 @@ export function Toolbar(props: { state: AppState; anyClips: () => boolean; layou
 
       <span class="flex-1" />
 
-      <span class="timecode pr-1 text-[10.5px] text-muted">
+      <span class="timecode pr-1 text-tiny text-muted">
         {state.project.video.length} video · {state.project.audio.length} audio
       </span>
       <PanelToggle

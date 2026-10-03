@@ -53,6 +53,20 @@
   --radius-control: 6px;
   --radius-panel: 10px;
 
+  /*
+   * The small-type scale.
+   *
+   * The UI had grown nine different arbitrary sizes between 9px and 13px —
+   * 10.5, 11.5, 12.5 and the rest — which is not a hierarchy, it is noise.
+   * These four steps are the whole small scale; the body is 13px. None of them
+   * carries a line-height, so text that set only a size keeps the inherited
+   * line box and layouts do not move when the class changes.
+   */
+  --text-micro: 9.5px;
+  --text-tiny: 10.5px;
+  --text-mini: 11.5px;
+  --text-small: 12.5px;
+
   --shadow-pop: 0 14px 36px -10px rgb(0 0 0 / 0.65), 0 0 0 1px rgb(0 0 0 / 0.45);
   --shadow-modal: 0 28px 70px -18px rgb(0 0 0 / 0.72), 0 0 0 1px rgb(0 0 0 / 0.5);
 }
@@ -139,7 +153,7 @@
 
 @utility btn {
   @apply inline-flex items-center gap-1.5 rounded-md border border-line bg-raised px-2.5 py-1
-         text-[12px] font-medium text-fg transition-colors select-none
+         text-small font-medium text-fg transition-colors select-none
          hover:bg-[#1d1f27] hover:border-[#2f313c] active:translate-y-px
          disabled:pointer-events-none disabled:opacity-35 disabled:translate-y-0;
 }
@@ -162,7 +176,7 @@
 }
 
 @utility panel-label {
-  @apply text-[10px] font-semibold tracking-[0.08em] text-muted uppercase;
+  @apply text-tiny font-semibold tracking-[0.08em] text-muted uppercase;
 }
 
 @utility timecode {
@@ -171,5 +185,5 @@
 
 @utility chip {
   @apply inline-flex items-center gap-1 rounded-full border border-line bg-raised px-1.5 py-px
-         text-[10px] font-medium text-muted;
+         text-tiny font-medium text-muted;
 }

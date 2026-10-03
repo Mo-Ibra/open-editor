@@ -48,8 +48,8 @@ export function ShortcutsPanel(props: { shortcuts: Shortcut[]; onClose: () => vo
                 <ul class="flex flex-col gap-1">
                   <For each={group}>
                     {(s) => (
-                      <li class="flex items-baseline gap-3 text-[12px]">
-                        <kbd class="timecode w-16 shrink-0 rounded border border-line bg-raised px-1.5 py-0.5 text-center text-[10.5px]">
+                      <li class="flex items-baseline gap-3 text-small">
+                        <kbd class="timecode w-16 shrink-0 rounded border border-line bg-raised px-1.5 py-0.5 text-center text-tiny">
                           {s.hint}
                         </kbd>
                         <span class="min-w-0 flex-1 text-muted">

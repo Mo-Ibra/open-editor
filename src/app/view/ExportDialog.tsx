@@ -195,7 +195,7 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
         {/* header */}
         <div class="flex h-11 shrink-0 items-center gap-3 border-b border-line px-4">
           <span class="text-[13px] font-semibold">Export</span>
-          <span class="timecode text-[11px] text-muted">
+          <span class="timecode text-mini text-muted">
             {formatTime(state.duration())} · {state.project.video.length} video · {state.project.audio.length} audio
           </span>
           <span class="flex-1" />
@@ -211,7 +211,7 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
               <label class="flex flex-col gap-1.5">
                 <span class="panel-label">Resolution</span>
                 <select
-                  class="rounded-md border border-line bg-raised px-2.5 py-1.5 text-[12px] outline-none
+                  class="rounded-md border border-line bg-raised px-2.5 py-1.5 text-small outline-none
                          focus:border-accent"
                   value={String(preset())}
                   onChange={(e) => setPreset(e.currentTarget.value === 'source' ? 'source' : Number(e.currentTarget.value))}
@@ -224,7 +224,7 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
 
               <div class="flex flex-col gap-1.5">
                 <span class="panel-label">Output</span>
-                <span class="timecode text-[12px] text-muted">
+                <span class="timecode text-small text-muted">
                   {describeSettings(sourceSize(), preset())}
                 </span>
               </div>
@@ -250,7 +250,7 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
               <span class="panel-label">Format</span>
               <Show
                 when={plans().length > 0}
-                fallback={<p class="text-[11px] text-warn">Checking what this browser can encode…</p>}
+                fallback={<p class="text-mini text-warn">Checking what this browser can encode…</p>}
               >
                 <div class="flex flex-col gap-1">
                   <For each={plans()}>
@@ -270,20 +270,20 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
                           onChange={() => setFormatId(plan.id)}
                         />
                         <span class="flex min-w-0 flex-col">
-                          <span class="flex items-center gap-2 text-[12px]">
+                          <span class="flex items-center gap-2 text-small">
                             {plan.label}
                             <Show when={plan.compatibility === 'partial'}>
-                              <span class="rounded bg-[#3a3320] px-1 text-[9px] font-semibold uppercase text-warn">
+                              <span class="rounded bg-[#3a3320] px-1 text-micro font-semibold uppercase text-warn">
                                 not all platforms
                               </span>
                             </Show>
                             <Show when={plan.compatibility === 'silent'}>
-                              <span class="rounded bg-[#2f2a3a] px-1 text-[9px] font-semibold uppercase text-muted">
+                              <span class="rounded bg-[#2f2a3a] px-1 text-micro font-semibold uppercase text-muted">
                                 no sound
                               </span>
                             </Show>
                           </span>
-                          <span class="truncate text-[10.5px] text-muted">{plan.blurb}</span>
+                          <span class="truncate text-tiny text-muted">{plan.blurb}</span>
                         </span>
                       </label>
                     )}
@@ -295,7 +295,7 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
                   omits MP4 reads as "this app cannot do MP4", which is a
                   different and much more annoying claim. */}
               <Show when={rejections().length > 0}>
-                <details class="mt-1 text-[10.5px] text-muted">
+                <details class="mt-1 text-tiny text-muted">
                   <summary class="cursor-pointer select-none hover:text-fg">
                     Why not the other formats?
                   </summary>
@@ -307,7 +307,7 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
 
               <Show when={chosenPlan()}>
                 {(plan) => (
-                  <p class="mt-1 text-[10.5px] text-muted">
+                  <p class="mt-1 text-tiny text-muted">
                     Will be saved as <span class="timecode text-fg">export.{plan().extension}</span>
                     {plan().audio ? '' : ' (no audio track)'}
                   </p>
@@ -315,7 +315,7 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
               </Show>
             </div>
 
-            <p class="mt-4 text-[11.5px] leading-relaxed text-muted">
+            <p class="mt-4 text-mini leading-relaxed text-muted">
               The output matches your source by default — a cutter's input is your own footage, so the right result is
               the same footage trimmed. Format and codec are negotiated against what this browser can actually encode,
               and the file is played back here before it is offered as a download.
@@ -326,12 +326,12 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
           <Show when={busy()}>
             <div class="py-2">
               <div class="mb-2 flex items-baseline gap-2">
-                <span class="text-[12px] font-medium capitalize">{progress().stage}</span>
+                <span class="text-small font-medium capitalize">{progress().stage}</span>
                 <Show when={progress().message}>
-                  <span class="text-[11.5px] text-muted">{progress().message}</span>
+                  <span class="text-mini text-muted">{progress().message}</span>
                 </Show>
                 <span class="flex-1" />
-                <span class="timecode text-[11px] text-muted">
+                <span class="timecode text-mini text-muted">
                   {progress().fps > 0 && `${progress().fps.toFixed(0)} fps · `}
                   {progress().eta > 0 && `${progress().eta.toFixed(0)}s left`}
                 </span>
@@ -351,7 +351,7 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
           </Show>
 
           <Show when={error()}>
-            <p class="rounded-md border border-l-2 border-line border-l-danger bg-raised px-3 py-2 text-[12px] text-danger">
+            <p class="rounded-md border border-l-2 border-line border-l-danger bg-raised px-3 py-2 text-small text-danger">
               {error()}
             </p>
           </Show>
@@ -398,7 +398,7 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
                     Download {output().extension}
                   </a>
 
-                  <dl class="space-y-1.5 text-[11.5px]">
+                  <dl class="space-y-1.5 text-mini">
                     <Row label="format">
                       {output().plan.label}
                       {output().plan.id !== formatId() ? ' · not your choice' : ''}
@@ -421,7 +421,7 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
                   </dl>
 
                   <Show when={meta()}>
-                    <p class="rounded-md border border-line bg-raised px-2 py-1.5 text-[11px] text-muted">{meta()}</p>
+                    <p class="rounded-md border border-line bg-raised px-2 py-1.5 text-mini text-muted">{meta()}</p>
                   </Show>
 
                   <button class="btn mt-auto" onClick={() => void start()}>

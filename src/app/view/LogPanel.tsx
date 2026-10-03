@@ -58,13 +58,13 @@ export function LogPanel(props: { onClose: () => void }) {
       <PanelHeader title="Logs" onClose={props.onClose}>
         <Show when={problems() > 0}>
           <span
-            class="rounded-full bg-warn/20 px-1.5 text-[10px] font-semibold text-warn"
+            class="rounded-full bg-warn/20 px-1.5 text-tiny font-semibold text-warn"
             title={`${problems()} warnings or errors this session`}
           >
             {problems()}
           </span>
         </Show>
-        <span class="text-[10.5px] text-muted">{entries().length} shown</span>
+        <span class="text-tiny text-muted">{entries().length} shown</span>
         <button class="btn btn-ghost !px-2" onClick={() => void copyAll()}>
           {copied() ? 'copied' : 'copy'}
         </button>
@@ -74,11 +74,11 @@ export function LogPanel(props: { onClose: () => void }) {
       </PanelHeader>
 
         <div class="flex shrink-0 items-center gap-1 border-b border-line-soft px-3 py-1.5">
-          <span class="text-[10.5px] text-muted">show</span>
+          <span class="text-tiny text-muted">show</span>
           <For each={LEVELS}>
             {(level) => (
               <button
-                class="btn btn-ghost !px-2 !py-0.5 !text-[10.5px] capitalize"
+                class="btn btn-ghost !px-2 !py-0.5 !text-tiny capitalize"
                 classList={{ '!border-accent/50 !text-accent': min() === level }}
                 onClick={() => setMin(level)}
                 aria-pressed={min() === level}
@@ -89,7 +89,7 @@ export function LogPanel(props: { onClose: () => void }) {
           </For>
         </div>
 
-        <div class="min-h-0 flex-1 overflow-y-auto font-mono text-[11px] leading-relaxed">
+        <div class="min-h-0 flex-1 overflow-y-auto font-mono text-mini leading-relaxed">
           <Show
             when={entries().length > 0}
             fallback={

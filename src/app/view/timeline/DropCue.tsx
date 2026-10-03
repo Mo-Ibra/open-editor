@@ -57,7 +57,7 @@ export function DropCue(props: {
             data-drop-caret={at().mode}
           >
             <span
-              class="absolute -top-px left-0 rounded-sm px-1 text-[9px] font-bold uppercase leading-[13px] text-black"
+              class="absolute -top-px left-0 rounded-sm px-1 text-micro font-bold uppercase leading-[13px] text-black"
               classList={{ 'bg-[#d29922]': at().mode === 'insert', 'bg-danger text-white': at().mode === 'overwrite' }}
             >
               {at().mode === 'insert' ? 'insert' : 'over'}

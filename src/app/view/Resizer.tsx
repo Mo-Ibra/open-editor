@@ -124,7 +124,7 @@ function ExpandTab(props: { axis: 'x' | 'right' | 'y'; label?: string }) {
         <path d="M10.2 3.3 5.5 8l4.7 4.7 1.1-1.1L7.7 8l3.6-3.6-1.1-1.1Z" />
       </svg>
       <span
-        class="text-[9.5px] font-semibold uppercase tracking-[0.12em]"
+        class="text-micro font-semibold uppercase tracking-[0.12em]"
         style={vertical() ? { 'writing-mode': 'vertical-rl', transform: 'rotate(180deg)' } : undefined}
       >
         {props.label}

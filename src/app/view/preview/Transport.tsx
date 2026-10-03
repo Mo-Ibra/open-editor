@@ -67,7 +67,7 @@ export function Transport(props: {
         </Show>
       </div>
 
-      <div class="timecode flex items-baseline gap-1.5 text-[12px]">
+      <div class="timecode flex items-baseline gap-1.5 text-small">
         <span>{formatTime(state.playhead())}</span>
         <span class="text-muted">/</span>
         <span class="text-muted">{formatTime(state.duration())}</span>
@@ -98,7 +98,7 @@ export function Transport(props: {
         </button>
       </Tooltip>
 
-      <label class="flex items-center gap-2 text-[10.5px] text-muted">
+      <label class="flex items-center gap-2 text-tiny text-muted">
         <span>zoom</span>
         {/* The picture's zoom, not the timeline's. The exact timeline zoom is
             read from the track's data-zoom, because this slider is step="10"
@@ -115,7 +115,7 @@ export function Transport(props: {
       </label>
 
       <span
-        class="timecode rounded border border-line bg-raised px-1.5 py-0.5 text-[10px] text-muted"
+        class="timecode rounded border border-line bg-raised px-1.5 py-0.5 text-tiny text-muted"
         title="playback state — the tick count proves the clock is running"
       >
         <Show when={state.playing()} fallback={<>stopped</>}>

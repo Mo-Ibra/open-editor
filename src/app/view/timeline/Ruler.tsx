@@ -24,7 +24,7 @@ export function Ruler(props: {
       <For each={ticks(state.duration(), state.zoom())}>
         {(tick) => (
           <span
-            class="absolute top-0 h-full border-l border-line pl-1.5 pt-1 timecode text-[9.5px] text-muted"
+            class="absolute top-0 h-full border-l border-line pl-1.5 pt-1 timecode text-micro text-muted"
             style={{ left: `${state.timeToX(tick)}px` }}
           >
             {formatTick(tick)}

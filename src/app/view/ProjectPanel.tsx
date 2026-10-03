@@ -122,16 +122,16 @@ export function ProjectPanel(props: {
                     <Show
                       when={editing() === p.id}
                       fallback={
-                        <p class="truncate text-[12.5px]">
+                        <p class="truncate text-small">
                           {p.name}
                           <Show when={p.id === projects().id()}>
-                            <span class="ml-2 text-[10px] uppercase tracking-wide text-accent">open</span>
+                            <span class="ml-2 text-tiny uppercase tracking-wide text-accent">open</span>
                           </Show>
                         </p>
                       }
                     >
                       <input
-                        class="w-full rounded border border-line bg-raised px-1.5 py-0.5 text-[12.5px]"
+                        class="w-full rounded border border-line bg-raised px-1.5 py-0.5 text-small"
                         value={draft()}
                         autofocus
                         onInput={(e) => setDraft(e.currentTarget.value)}
@@ -146,7 +146,7 @@ export function ProjectPanel(props: {
                         }}
                       />
                     </Show>
-                    <p class="text-[10.5px] text-muted">
+                    <p class="text-tiny text-muted">
                       {p.clipCount} clip{p.clipCount === 1 ? '' : 's'} · {kb(p.mediaBytes)} media · saved{' '}
                       {ago(p.updated)}
                     </p>
@@ -215,14 +215,14 @@ export function ProjectPanel(props: {
           <div class="h-1.5 overflow-hidden rounded-full bg-raised">
             <div class="h-full rounded-full bg-accent/70" style={{ width: `${percent()}%` }} />
           </div>
-          <p class="mt-1.5 text-[10.5px] text-muted">
+          <p class="mt-1.5 text-tiny text-muted">
             {kb(storage().used)}
             <Show when={storage().quota > 0}> of about {kb(storage().quota)} available</Show> — projects hold a
             copy of their media.
           </p>
         </Show>
         <p
-          class="text-[10.5px]"
+          class="text-tiny"
           classList={{ 'text-warn': !storage().persisted, 'text-muted': storage().persisted }}
         >
           <Show
@@ -233,12 +233,12 @@ export function ProjectPanel(props: {
           </Show>
         </p>
         <Show when={projects().missing().length > 0}>
-          <p class="mt-1 text-[10.5px] text-warn">
+          <p class="mt-1 text-tiny text-warn">
             {projects().missing().length} file(s) in the open project have no stored media — the clips are intact,
             re-import the files to see them.
           </p>
         </Show>
-        <p class="mt-1 text-[10px] text-muted">
+        <p class="mt-1 text-tiny text-muted">
           <kbd class="timecode">⌘S</kbd> saves now · <kbd class="timecode">⌘O</kbd> this list ·{' '}
           <kbd class="timecode">⌘E</kbd> export file · <kbd class="timecode">⌘I</kbd> import file.
           {canPickSavePath() ? '' : ' Files are downloaded rather than saved in place — this browser has no file picker.'}

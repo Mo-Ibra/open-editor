@@ -4,9 +4,20 @@
  * Densely packed, because a folder of clips is a list, not a gallery — a
  * thumbnail grid is prettier and slower to scan, and the metadata is what
  * people actually compare on.
+ *
+ * Three things make it usable once a shoot's worth of files is in it:
+ *
+ * - **Search and a type filter**, because scrolling is not a way to find a file
+ *   you already know the name of.
+ * - **Hover actions** (add, remove) on the row itself. The context menu still
+ *   has everything, but the two actions people repeat are one click.
+ * - **Keyboard reachability.** The row is a real button: Enter adds, Space
+ *   selects, Delete removes. A drag target is an affordance, not the only one.
  */
 
-import { For, Show } from 'solid-js'
+import { createMemo, createSignal, For, Show } from 'solid-js'
+import { Plus, Search, Trash2 } from 'lucide-solid'
+import type { Asset } from '../../model/project.js'
 import type { AppState } from '../store/state.js'
 import type { ContextMenuState } from './ContextMenu.js'
 import type { LayoutState } from '../store/layout.js'
@@ -15,9 +26,26 @@ import { PanelToggle } from './PanelToggle.js'
 export function AssetBin(props: { state: AppState; menu: ContextMenuState; layout: LayoutState }) {
   const state = props.state
   let input!: HTMLInputElement
+  const [query, setQuery] = createSignal('')
+  const [kind, setKind] = createSignal<'all' | 'video' | 'audio'>('all')
 
-  const ids = () => state.assetIds()
-  const hasFiles = () => ids().length > 0
+  const allIds = () => state.assetIds()
+
+  /** The ids that pass the text and type filters, in bin order. */
+  const ids = createMemo(() => {
+    const q = query().trim().toLowerCase()
+    const filter = kind()
+    return allIds().filter((id) => {
+      const asset = state.getAsset(id)
+      if (!asset) return false
+      if (filter === 'video' && !asset.hasVideo) return false
+      if (filter === 'audio' && !asset.hasAudio) return false
+      if (q && !asset.name.toLowerCase().includes(q)) return false
+      return true
+    })
+  })
+
+  const hasFiles = (): boolean => allIds().length > 0
 
   function choose(): void {
     input.click()
@@ -41,9 +69,12 @@ export function AssetBin(props: { state: AppState; menu: ContextMenuState; layou
     >
       <div class="flex h-9 shrink-0 items-center gap-2 border-b border-line-soft px-3">
         <span class="panel-label">Media</span>
+        <Show when={hasFiles()}>
+          <span class="chip">{ids().length === allIds().length ? allIds().length : `${ids().length}/${allIds().length}`}</span>
+        </Show>
         <span class="flex-1" />
-        <button class="btn btn-ghost !px-1.5 !py-0.5 text-[11px]" onClick={choose} disabled={state.loading()}>
-          {state.loading() ? 'reading…' : 'add'}
+        <button class="icon-btn" onClick={choose} disabled={state.loading()} title="Add files" aria-label="Add files">
+          <Plus size={15} />
         </button>
         <PanelToggle
           panel="media"
@@ -64,6 +95,38 @@ export function AssetBin(props: { state: AppState; menu: ContextMenuState; layou
         />
       </div>
 
+      <Show when={hasFiles()}>
+        <div class="flex shrink-0 items-center gap-1.5 border-b border-line-soft px-2 py-1.5">
+          <label class="relative flex min-w-0 flex-1 items-center">
+            <Search size={13} class="pointer-events-none absolute left-2 text-faint" />
+            <input
+              type="search"
+              value={query()}
+              onInput={(e) => setQuery(e.currentTarget.value)}
+              placeholder="Filter…"
+              class="w-full rounded-md border border-line bg-raised py-1 pl-7 pr-2 text-mini text-fg outline-none placeholder:text-faint focus:border-accent/60"
+            />
+          </label>
+          <div class="flex shrink-0 items-center rounded-md border border-line bg-raised p-0.5">
+            <For each={['all', 'video', 'audio'] as const}>
+              {(k) => (
+                <button
+                  class="rounded px-1.5 py-0.5 text-tiny font-medium capitalize transition-colors"
+                  classList={{
+                    'bg-accent/20 text-accent': kind() === k,
+                    'text-muted hover:text-fg': kind() !== k,
+                  }}
+                  onClick={() => setKind(k)}
+                  aria-pressed={kind() === k}
+                >
+                  {k}
+                </button>
+              )}
+            </For>
+          </div>
+        </div>
+      </Show>
+
       <div class="min-h-0 flex-1 overflow-y-auto p-1.5">
         <Show
           when={hasFiles()}
@@ -74,26 +137,29 @@ export function AssetBin(props: { state: AppState; menu: ContextMenuState; layou
               onClick={choose}
             >
               <DropIcon />
-              <span class="text-[12px]">Drop files here</span>
-              <span class="text-[10.5px] opacity-70">or click to browse</span>
+              <span class="text-small">Drop files here</span>
+              <span class="text-tiny opacity-70">or click to browse</span>
             </button>
           }
         >
-          <ul class="flex flex-col gap-px">
-            <For each={ids()}>
-              {(id) => {
-                const entry = () => state.entryFor(id)
-                return (
-                  <Show when={entry()}>
-                    {(e) => (
-                      <li>
-                        <button
-                          class="group w-full rounded-md border px-2 py-1.5 text-left transition-colors hover:border-line hover:bg-raised"
+          <Show when={ids().length > 0} fallback={<p class="px-2 py-6 text-center text-mini text-muted">No files match.</p>}>
+            <ul class="flex flex-col gap-px">
+              <For each={ids()}>
+                {(id) => {
+                  const entry = () => state.entryFor(id)
+                  const asset = () => state.getAsset(id)
+                  return (
+                    <Show when={entry() && asset()}>
+                      <li class="group relative">
+                        <div
+                          role="button"
+                          tabindex="0"
+                          class="flex w-full cursor-grab items-center gap-2 rounded-md border px-2 py-1.5 text-left transition-colors hover:border-line hover:bg-raised active:cursor-grabbing"
                           classList={{
                             'border-accent/50 bg-accent/10': state.selectedAsset() === id,
                             'border-transparent': state.selectedAsset() !== id,
                           }}
-                          title={`${e().asset.name} — drag anywhere onto the timeline, or double-click to append`}
+                          title={`${asset()!.name} — drag onto the timeline, or double-click to append`}
                           draggable={true}
                           onDragStart={(ev) => {
                             // HTML5 drag rather than pointer events: it gives a
@@ -101,9 +167,9 @@ export function AssetBin(props: { state: AppState; menu: ContextMenuState; layou
                             // timeline's pointer-capture drags.
                             draggingId = id
                             ev.dataTransfer?.setData(DND_ASSET, id)
-                            ev.dataTransfer?.setData('text/plain', e().asset.name)
-                            // `copyMove`, not `copy`: the timeline offers 'move' for an overwrite
-                            // drop, and an effect it did not allow is a drop the
+                            ev.dataTransfer?.setData('text/plain', asset()!.name)
+                            // `copyMove`, not `copy`: the timeline offers 'move' for an
+                            // overwrite drop, and an effect it did not allow is a drop the
                             // browser silently refuses.
                             if (ev.dataTransfer) ev.dataTransfer.effectAllowed = 'copyMove'
                           }}
@@ -123,44 +189,64 @@ export function AssetBin(props: { state: AppState; menu: ContextMenuState; layou
                             state.addAssetToTimeline(id)
                             ev.currentTarget.blur()
                           }}
+                          onKeyDown={(ev) => {
+                            if (ev.key === 'Enter') {
+                              ev.preventDefault()
+                              state.addAssetToTimeline(id)
+                            } else if (ev.key === ' ') {
+                              ev.preventDefault()
+                              state.setSelectedAsset(state.selectedAsset() === id ? null : id)
+                            } else if (ev.key === 'Delete' || ev.key === 'Backspace') {
+                              ev.preventDefault()
+                              state.removeAsset(id)
+                            }
+                          }}
                           onContextMenu={(ev) => {
                             ev.preventDefault()
                             state.setSelectedAsset(id)
                             props.menu.show({ kind: 'asset', assetId: id, x: ev.clientX, y: ev.clientY })
                           }}
                         >
-                          <span class="flex items-center gap-1.5">
-                            <span
-                              class={`grid size-4 shrink-0 place-items-center rounded-[3px] text-[9px] font-bold ${
-                                e().asset.hasVideo ? 'bg-[#1e3a63] text-[#8fb6ff]' : 'bg-[#14402f] text-[#6fd39a]'
-                              }`}
-                            >
-                              {e().asset.hasVideo ? 'V' : 'A'}
-                            </span>
-                            <span class="truncate text-[12px]">{e().asset.name}</span>
-                          </span>
-                          <span class="mt-0.5 block pl-[22px] timecode text-[10px] text-muted">
-                            {e().asset.hasVideo && `${e().asset.width}×${e().asset.height} · `}
-                            {e().asset.variableFrameRate
-                              ? `vfr ~${e().asset.frameRate.toFixed(1)}`
-                              : `${e().asset.frameRate.toFixed(0)}fps`}
-                            {' · '}
-                            {formatDuration(e().asset.duration)}
-                            {e().asset.rotation !== 0 && ` · ${e().asset.rotation}°`}
-                          </span>
-                          <Show when={e().error}>
-                            <span class="mt-0.5 block pl-[22px] text-[10px] text-danger">{e().error}</span>
-                          </Show>
-                        </button>
+                          <TypeTile asset={asset()!} />
+                          <div class="min-w-0 flex-1">
+                            <div class="truncate text-small text-fg">{asset()!.name}</div>
+                            <div class="truncate text-tiny text-muted">{describe(asset()!)}</div>
+                          </div>
+                        </div>
+                        {/* Hidden until hover, so a dense list stays readable. */}
+                        <div class="absolute right-1.5 top-1/2 hidden -translate-y-1/2 items-center gap-0.5 group-hover:flex group-focus-within:flex">
+                          <button
+                            class="icon-btn !size-6 bg-raised/80 backdrop-blur"
+                            title="Add to the timeline"
+                            aria-label="Add to the timeline"
+                            onClick={(ev) => {
+                              ev.stopPropagation()
+                              state.addAssetToTimeline(id)
+                            }}
+                          >
+                            <Plus size={13} />
+                          </button>
+                          <button
+                            class="icon-btn !size-6 bg-raised/80 text-muted backdrop-blur hover:text-danger"
+                            title="Remove from the project. The file on disk is untouched."
+                            aria-label="Remove from the project"
+                            onClick={(ev) => {
+                              ev.stopPropagation()
+                              state.removeAsset(id)
+                            }}
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
                       </li>
-                    )}
-                  </Show>
-                )
-              }}
-            </For>
-          </ul>
+                    </Show>
+                  )
+                }}
+              </For>
+            </ul>
+          </Show>
 
-          <p class="px-2 py-2 text-[10.5px] leading-relaxed text-muted">
+          <p class="px-2 py-2 text-tiny leading-relaxed text-muted">
             Drag a file onto a lane, or double-click to append it.
           </p>
         </Show>
@@ -183,6 +269,32 @@ export const DND_ASSET = 'application/x-open-editor-asset'
 let draggingId: string | null = null
 export function draggedAssetId(): string | null {
   return draggingId
+}
+
+/** A small coloured tile standing in for a thumbnail. */
+function TypeTile(props: { asset: Asset }) {
+  const video = () => props.asset.hasVideo
+  return (
+    <span
+      class="grid size-7 shrink-0 place-items-center rounded-[5px] text-tiny font-bold"
+      classList={{
+        'bg-[#1e3a63] text-[#8fb6ff]': video(),
+        'bg-[#14402f] text-[#6fd39a]': !video(),
+      }}
+    >
+      {video() ? 'V' : 'A'}
+    </span>
+  )
+}
+
+/** One line saying what a source file is, for the bin row. */
+function describe(asset: Asset): string {
+  const duration = formatDuration(asset.duration)
+  if (!asset.hasVideo) return `audio · ${duration}`
+  const fps = asset.variableFrameRate
+    ? `vfr ~${asset.frameRate.toFixed(1)}`
+    : `${asset.frameRate.toFixed(0)}fps`
+  return `${asset.width}×${asset.height} · ${fps} · ${duration}`
 }
 
 function DropIcon() {

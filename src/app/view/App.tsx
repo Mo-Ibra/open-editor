@@ -324,18 +324,18 @@ function TopBar(props: {
   return (
     <header class="flex h-11 shrink-0 items-center gap-3 border-b border-line bg-panel px-3">
       <div class="flex items-center gap-2 pr-1">
-        <span class="grid size-6 place-items-center rounded-[5px] bg-accent text-[11px] font-bold text-white">oe</span>
+        <span class="grid size-6 place-items-center rounded-[5px] bg-accent text-mini font-bold text-white">oe</span>
         <span class="text-[13px] font-semibold tracking-tight">open-editor</span>
       </div>
 
       <span class="h-5 w-px bg-line" />
 
       <div class="flex min-w-0 items-center gap-3 text-muted">
-        <span class="timecode text-[11px]">
+        <span class="timecode text-mini">
           {state.project.video.length} video · {state.project.audio.length} audio
         </span>
         <Show when={state.canUndo()}>
-          <span class="rounded-full border border-line bg-raised px-1.5 py-px text-[10px]">edited</span>
+          <span class="rounded-full border border-line bg-raised px-1.5 py-px text-tiny">edited</span>
         </Show>
       </div>
 
@@ -381,7 +381,7 @@ function TopBar(props: {
 function StatusFooter(props: { state: AppState; pictureHidden: () => boolean }) {
   const state = props.state
   return (
-    <footer class="flex h-7 shrink-0 items-center gap-3 border-t border-line bg-panel px-3 text-[10.5px] text-muted">
+    <footer class="flex h-7 shrink-0 items-center gap-3 border-t border-line bg-panel px-3 text-tiny text-muted">
       <span class="timecode text-fg">{formatTime(state.playhead())}</span>
       <span class="timecode">/ {formatTime(state.duration())}</span>
 
@@ -421,7 +421,7 @@ function Notices(props: { notices: readonly { kind: keyof typeof NOTICE_BORDER; 
       <For each={props.notices}>
         {(notice) => (
           <div
-            class={`pointer-events-auto rounded-md border border-l-2 bg-raised/95 px-3 py-2 text-[12px] shadow-lg shadow-black/40 backdrop-blur ${NOTICE_BORDER[notice.kind]}`}
+            class={`pointer-events-auto rounded-md border border-l-2 bg-raised/95 px-3 py-2 text-small shadow-lg shadow-black/40 backdrop-blur ${NOTICE_BORDER[notice.kind]}`}
           >
             {notice.text}
           </div>
@@ -469,7 +469,7 @@ function SaveIndicator(props: { state: AppState; onOpenProjects: () => void }) {
 
   return (
     <button
-      class="flex items-center gap-1.5 rounded px-1.5 py-0.5 text-[11px] text-muted transition-colors hover:bg-raised hover:text-fg"
+      class="flex items-center gap-1.5 rounded px-1.5 py-0.5 text-mini text-muted transition-colors hover:bg-raised hover:text-fg"
       onClick={props.onOpenProjects}
       title={`${hint()} — click for the project list (⌘O)`}
       data-save-state={projects().saveState()}
@@ -484,7 +484,7 @@ function SaveIndicator(props: { state: AppState; onOpenProjects: () => void }) {
         }}
       />
       <span class="max-w-[18ch] truncate">{projects().name()}</span>
-      <span class="text-[10px] uppercase tracking-wide">{text()}</span>
+      <span class="text-tiny uppercase tracking-wide">{text()}</span>
     </button>
   )
 }

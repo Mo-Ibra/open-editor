@@ -79,7 +79,7 @@ export function Clip(props: {
           reads as a group even when the rings are only a couple of pixels. */}
       <Show when={isSelected() && !isPrimary()}>
         <span
-          class="pointer-events-none absolute left-1 top-1 z-30 flex size-3.5 items-center justify-center rounded-full bg-accent text-[9px] font-bold text-black"
+          class="pointer-events-none absolute left-1 top-1 z-30 flex size-3.5 items-center justify-center rounded-full bg-accent text-micro font-bold text-black"
           aria-label="selected"
         >
           <Check size={10} strokeWidth={3} />
@@ -98,7 +98,7 @@ export function Clip(props: {
           user is most likely to forget they set. */}
       <Show when={props.clip.muted && props.lane === 'audio'}>
         <span
-          class="pointer-events-none absolute right-1 top-1 z-30 rounded bg-[#d29922] px-1 text-[9px] font-bold uppercase text-black"
+          class="pointer-events-none absolute right-1 top-1 z-30 rounded bg-[#d29922] px-1 text-micro font-bold uppercase text-black"
           aria-label="muted"
           title="Muted — the audio is still here, it is just silent. Press M to unmute."
         >
@@ -107,7 +107,7 @@ export function Clip(props: {
       </Show>
       <Show when={props.clip.hidden && props.lane === 'video'}>
         <span
-          class="pointer-events-none absolute right-1 top-1 z-30 rounded bg-[#6c6f8a] px-1 text-[9px] font-bold uppercase text-black"
+          class="pointer-events-none absolute right-1 top-1 z-30 rounded bg-[#6c6f8a] px-1 text-micro font-bold uppercase text-black"
           aria-label="hidden"
           title="Hidden — this clip is black in the preview and in the export. Press M to show it."
         >
@@ -126,13 +126,13 @@ export function Clip(props: {
         <Waveform clip={props.clip} state={state} />
       </Show>
 
-      <span class="pointer-events-none absolute left-2 top-1 z-10 max-w-[calc(100%-34px)] truncate text-[10.5px] text-fg/90 [text-shadow:0_1px_2px_#000a]">
+      <span class="pointer-events-none absolute left-2 top-1 z-10 max-w-[calc(100%-34px)] truncate text-tiny text-fg/90 [text-shadow:0_1px_2px_#000a]">
         {asset()?.name ?? '?'}
       </span>
 
       <Show when={linked()}>
         <span
-          class="pointer-events-none absolute right-1.5 top-0.5 z-10 text-[9px] text-fg/60"
+          class="pointer-events-none absolute right-1.5 top-0.5 z-10 text-micro text-fg/60"
           title="Linked to its pair — edits apply to both"
         >
           <Link2 size={11} />

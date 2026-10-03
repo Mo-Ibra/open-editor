@@ -10,13 +10,14 @@
  * clip cannot drift out of order however it was edited (docs/data-model.md).
  */
 
-import { createEffect, createSignal, onCleanup, onMount, Show } from 'solid-js'
+import { createEffect, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
 import type { Lane } from '../../model/project.js'
 import type { AppState } from '../store/state.js'
 import type { ContextMenuState } from './ContextMenu.js'
 import { DND_ASSET, draggedAssetId } from './AssetBin.js'
 import { Lane as LaneView, type DropPreview } from './timeline/Lane.js'
 import { Ruler } from './timeline/Ruler.js'
+import { ticks } from './timeline/ticks.js'
 import { Toolbar } from './timeline/Toolbar.js'
 import type { LayoutState } from '../store/layout.js'
 import { useTimelineDrag } from './timeline/use-timeline-drag.js'
@@ -201,6 +202,16 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
         >
           <Ruler state={state} onDrop={onDropTrack} onDragOver={onDragOverTrack} />
 
+          {/* Vertical gridlines, aligned to the ruler's ticks. They give the
+              lanes something to be measured against, so a clip's start reads as
+              a time rather than a position. Behind everything, and only from
+              below the ruler down. */}
+          <div class="pointer-events-none absolute inset-x-0 bottom-0 top-6 z-0">
+            <For each={ticks(state.duration(), state.zoom())}>
+              {(t) => <div class="absolute bottom-0 top-0 w-px bg-line-soft" style={{ left: `${state.timeToX(t)}px` }} />}
+            </For>
+          </div>
+
           <LaneView
             lane="video"
             label="video"
@@ -221,7 +232,7 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
           />
 
           <Show when={!anyClips()}>
-            <p class="pointer-events-none absolute inset-x-0 top-16 text-center text-[11.5px] text-muted">
+            <p class="pointer-events-none absolute inset-x-0 top-16 text-center text-mini text-muted">
               Double-click a file in Media, or drag one onto a lane.
             </p>
           </Show>
@@ -234,7 +245,7 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
                 class="pointer-events-none absolute bottom-0 top-0 z-30 w-px bg-warn"
                 style={{ left: `${state.timeToX(g().time)}px` }}
               >
-                <span class="absolute -top-px left-1 rounded bg-warn px-1 text-[9px] font-semibold text-black">
+                <span class="absolute -top-px left-1 rounded bg-warn px-1 text-micro font-semibold text-black">
                   {g().label}
                 </span>
               </div>

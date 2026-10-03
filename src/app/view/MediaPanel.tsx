@@ -151,7 +151,7 @@ export function MediaPanel(props: {
       }}
     >
       <PanelHeader title="Media" onClose={props.onClose}>
-        <span class="text-[11px] text-muted">
+        <span class="text-mini text-muted">
           {attached().length} of {media().length} attached
         </span>
         <Show when={unresolved().length > 0}>
@@ -176,7 +176,7 @@ export function MediaPanel(props: {
                   style={{ width: pr().total > 0 ? `${Math.round((pr().done / pr().total) * 100)}%` : '0%' }}
                 />
               </div>
-              <p class="mt-1 truncate text-[10.5px] text-muted">
+              <p class="mt-1 truncate text-tiny text-muted">
                 Checking {pr().done} of {pr().total} that could match{pr().label ? ` — ${pr().label}` : ''}
               </p>
             </div>
@@ -186,7 +186,7 @@ export function MediaPanel(props: {
         <div class="min-h-0 flex-1 overflow-y-auto">
           <Show when={batch()?.proposals.length}>
             <div class="border-b border-line-soft bg-warn/5 px-4 py-2.5" data-proposals>
-              <p class="text-[11px] text-warn">
+              <p class="text-mini text-warn">
                 {batch()!.proposals.length} file{batch()!.proposals.length === 1 ? '' : 's'} look plausible but
                 could not be verified. Nothing has been attached.
               </p>
@@ -194,8 +194,8 @@ export function MediaPanel(props: {
                 <For each={batch()!.proposals}>
                   {(item) => (
                     <li class="flex flex-wrap items-baseline gap-x-2 gap-y-1 py-1" data-proposal={item.assetId}>
-                      <span class="truncate text-[11.5px]">{item.name}</span>
-                      <span class="text-[10.5px] text-muted">
+                      <span class="truncate text-mini">{item.name}</span>
+                      <span class="text-tiny text-muted">
                         ← {item.proposals[0]!.file.name} ({item.proposals[0]!.match.reason})
                       </span>
                       <span class="flex-1" />
@@ -215,7 +215,7 @@ export function MediaPanel(props: {
           </Show>
 
           <Show when={batch() && batch()!.attached.length > 0}>
-            <p class="border-b border-line-soft px-4 py-2 text-[10.5px] text-ok" data-attached>
+            <p class="border-b border-line-soft px-4 py-2 text-tiny text-ok" data-attached>
               {batch()!.attached.length} matched exactly and {batch()!.attached.length === 1 ? 'is' : 'are'} now
               attached.
             </p>
@@ -229,13 +229,13 @@ export function MediaPanel(props: {
                   return (
                     <li class="border-b border-line-soft px-4 py-2.5" data-media-row={m.assetId}>
                       <div class="flex items-baseline gap-2">
-                        <span class="truncate text-[12.5px]">{m.name}</span>
+                        <span class="truncate text-small">{m.name}</span>
                         <span class="flex-1" />
-                        <span class={`text-[10px] uppercase tracking-wide ${VERDICT[m.status].tone}`}>
+                        <span class={`text-tiny uppercase tracking-wide ${VERDICT[m.status].tone}`}>
                           {VERDICT[m.status].label}
                         </span>
                       </div>
-                      <div class="mt-0.5 flex items-baseline gap-2 text-[10.5px] text-muted">
+                      <div class="mt-0.5 flex items-baseline gap-2 text-tiny text-muted">
                         <span>
                           {mb(m.size)}
                           {m.duration > 0 && ` · ${m.duration.toFixed(1)}s`}
@@ -248,7 +248,7 @@ export function MediaPanel(props: {
                       <Show when={verdict()}>
                         {(v) => (
                           <p
-                            class="mt-1 text-[10.5px]"
+                            class="mt-1 text-tiny"
                             classList={{ 'text-ok': v().ok, 'text-danger': !v().ok }}
                             data-relink-verdict={m.assetId}
                           >
@@ -277,7 +277,7 @@ export function MediaPanel(props: {
         </div>
 
         <Show when={unresolved().length > 0}>
-          <footer class="shrink-0 border-t border-line-soft px-4 py-2.5 text-[10.5px] text-muted">
+          <footer class="shrink-0 border-t border-line-soft px-4 py-2.5 text-tiny text-muted">
             The timeline is intact and editable. Choose a folder to check many files at
             once, or drop one here. Files are matched by content, so a re-encode or a
             renamed copy is never attached on its own — you will be told when a file is

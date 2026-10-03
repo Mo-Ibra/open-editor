@@ -47,7 +47,7 @@ export function Tooltip(props: {
         <div
           ref={setTipEl}
           role="tooltip"
-          class="pointer-events-none fixed z-[60] whitespace-nowrap rounded-md border border-line bg-raised px-2 py-1 text-[11px] text-fg shadow-pop"
+          class="pointer-events-none fixed z-[60] whitespace-nowrap rounded-md border border-line bg-raised px-2 py-1 text-mini text-fg shadow-pop"
           style={{ left: `${pos().x}px`, top: `${pos().y}px` }}
         >
           {props.label}

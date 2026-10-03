@@ -153,10 +153,10 @@ export function ContextMenu(props: {
               item.separator ? (
                 <div class="my-1 h-px bg-line" />
               ) : item.status ? (
-                <div class="px-3 py-1 text-[11px] text-muted">{item.label}</div>
+                <div class="px-3 py-1 text-mini text-muted">{item.label}</div>
               ) : (
                 <button
-                  class="flex w-full items-center gap-3 px-3 py-1 text-left text-[12px] transition-colors hover:bg-accent/15 disabled:pointer-events-none disabled:opacity-35"
+                  class="flex w-full items-center gap-3 px-3 py-1 text-left text-small transition-colors hover:bg-accent/15 disabled:pointer-events-none disabled:opacity-35"
                   classList={{ 'text-danger': item.danger }}
                   disabled={item.disabled}
                   onClick={() => {
@@ -167,7 +167,7 @@ export function ContextMenu(props: {
                 >
                   <span class="flex-1 truncate">{item.label}</span>
                   <Show when={item.shortcut}>
-                    <kbd class="rounded border border-line bg-black/30 px-1 font-mono text-[9.5px] leading-[14px] text-muted">
+                    <kbd class="rounded border border-line bg-black/30 px-1 font-mono text-micro leading-[14px] text-muted">
                       {item.shortcut}
                     </kbd>
                   </Show>
