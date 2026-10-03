@@ -19,7 +19,7 @@
  */
 
 import { batch, createSignal } from 'solid-js'
-import { createStore, reconcile } from 'solid-js/store'
+import { createStore, produce, reconcile } from 'solid-js/store'
 
 import { applyLanes, type Lanes } from '../../model/project-store.js'
 import {
@@ -251,6 +251,17 @@ export function createAppState() {
     notify,
     setLanes,
     setAsset: (assetId, asset) => setProject('assets', assetId, asset),
+    // Deleting the key is not the same as writing `undefined` to it: a plain
+    // store set keeps the key, so the media bin (which lists `Object.keys`)
+    // would still show the row. `produce` actually removes it, and the revision
+    // tells the bin to re-read.
+    dropAsset: (assetId) => {
+      applyProject('assets', produce((map: Project['assets']) => {
+        delete map[assetId]
+      }))
+      setAssetsRevision((n) => n + 1)
+    },
+    pruneMedia: () => void projects.pruneUnusedMedia(),
     // Deferred, because `transport` is built after this: it needs `edits`, which
     // needs the assets. Reading it lazily keeps the two slices from needing each
     // other at construction time — the same trick the transport slice uses.

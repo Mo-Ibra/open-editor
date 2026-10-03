@@ -142,6 +142,10 @@ export function MediaPanel(props: {
       }}
       onDrop={(e) => {
         e.preventDefault()
+        // This drop means "relink these files", not "import them into the
+        // project". Stopping the bubble keeps the app shell's own drop handler
+        // from adding every file in the folder as a new asset.
+        e.stopPropagation()
         setDropping(false)
         void filesFromDrop(e.dataTransfer).then(runFolder)
       }}

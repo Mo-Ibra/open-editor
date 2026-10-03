@@ -78,6 +78,15 @@ export interface AssetDeps {
   /** Write both lanes. The only way the timeline changes. */
   setLanes: (video: Clip[], audio: Clip[]) => void
   setAsset: (assetId: AssetId, asset: Project['assets'][string]) => void
+  /**
+   * Remove an asset from the project entirely.
+   *
+   * Separate from dropping its clips: the bin is driven by `project.assets`, so
+   * an asset whose clips are gone but whose map entry survives is still a row.
+   */
+  dropAsset: (assetId: AssetId) => void
+  /** Reclaim the bytes of any asset no longer in the project. */
+  pruneMedia: () => void
   /** Store an asset's bytes, once. Supplied by the project store. */
   rememberMedia: (assetId: AssetId, file: File) => void
   /** Read for snapping a drop: the playhead is a snap target like any other. */
@@ -155,7 +164,7 @@ export function createAssets(deps: AssetDeps): AssetSlice {
     for (const id of ids) addAssetAt(id, lane, time, mode)
   }
 
-  /** Drop a file and every clip that used it. */
+  /** Drop a file, every clip that used it, and its bytes. */
   function removeAsset(assetId: AssetId): void {
     history.commit()
     const keep = (c: Clip) => c.assetId !== assetId
@@ -164,6 +173,12 @@ export function createAssets(deps: AssetDeps): AssetSlice {
     if (selectedAsset() === assetId) setSelectedAsset(null)
     selection.clear()
     library.remove(assetId)
+    // The bin lists `project.assets`, not the library, so the map entry has to
+    // go too — otherwise the row stays even though its decoder is gone. And
+    // then the stored bytes are pruned, or deleting and re-importing a file
+    // leaks a copy every time.
+    deps.dropAsset(assetId)
+    deps.pruneMedia()
     notify('info', 'Removed from the project. The file on disk is untouched.')
   }
 

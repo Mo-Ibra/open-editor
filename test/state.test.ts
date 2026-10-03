@@ -154,6 +154,26 @@ test('zoom scales pixels but not time', () => {
   assert.equal(state.xToTime(state.timeToX(10)), 10, 'and time is unchanged by zoom')
 })
 
+test('removing an asset removes it from the project, not just its clips', () => {
+  // The bin lists `project.assets`, so filtering the clips and dropping the
+  // decoder is not enough: the map entry has to go too, or the row lingers and
+  // the asset is written back on the next autosave.
+  const state = createAppState()
+  state.project.assets['ast_1'] = {
+    id: 'ast_1', name: 'a.mp4', duration: 5, width: 1920, height: 1080, rotation: 0,
+    frameRate: 30, variableFrameRate: false, hasVideo: true, hasAudio: true,
+    audioSampleRate: 48000, audioChannels: 2, videoCodec: 'avc', audioCodec: 'aac', size: 10,
+  }
+  state.project.video.push({ id: 'c1', lane: 'video', assetId: 'ast_1', in: 0, out: 5 })
+
+  assert.deepEqual(state.assetIds(), ['ast_1'])
+  state.removeAsset('ast_1')
+
+  assert.deepEqual(state.assetIds(), [], 'the asset is gone from the bin')
+  assert.equal(state.project.assets['ast_1'], undefined, 'and from the project map')
+  assert.equal(state.project.video.length, 0, 'and its clips with it')
+})
+
 test('notices appear and are announced through the shared notify', () => {
   const state = createAppState()
   assert.equal(state.notices().length, 0)

@@ -33,6 +33,9 @@ export function AssetBin(props: { state: AppState; menu: ContextMenuState; layou
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => {
         e.preventDefault()
+        // Stop here: the app shell also listens for drops and imports files, so
+        // without this a file dropped on the bin is imported twice.
+        e.stopPropagation()
         useFiles([...(e.dataTransfer?.files ?? [])])
       }}
     >

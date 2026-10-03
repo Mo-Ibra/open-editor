@@ -93,8 +93,13 @@ export function Lane(props: LaneProps) {
 
   function onDrop(event: DragEvent): void {
     const assetId = draggedId(event)
+    // A file from the desktop has no asset id yet; leave it for the track (and
+    // the shell) rather than swallowing it here.
     if (!assetId) return
     event.preventDefault()
+    // The track handler would otherwise see the same drop and add the clip a
+    // second time.
+    event.stopPropagation()
     const mode = event.shiftKey ? 'insert' : 'overwrite'
     // Snapped here as well as in the preview, so what was drawn is what happens
     // even if the pointer moved a pixel between the last dragover and the drop.

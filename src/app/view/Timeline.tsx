@@ -158,6 +158,9 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
     const assetId = dt.getData(DND_ASSET) || draggedAssetId()
     if (assetId) {
       event.preventDefault()
+      // Handled here, so it must not also reach the app shell's own drop
+      // listener — that would import and place the same asset twice.
+      event.stopPropagation()
       state.addAssetAt(assetId, targetLane(assetId, event.clientY), time, mode)
       return
     }
@@ -165,6 +168,7 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
     const files = [...(dt.files ?? [])]
     if (files.length > 0) {
       event.preventDefault()
+      event.stopPropagation()
       // Import *and* place, in one gesture. Importing alone left the file
       // sitting in the bin, which is not what dropping a file on a timeline
       // means anywhere else.
