@@ -96,12 +96,18 @@ export function AssetBin(props: { state: AppState; menu: ContextMenuState; layou
                             // HTML5 drag rather than pointer events: it gives a
                             // native drag image and does not collide with the
                             // timeline's pointer-capture drags.
+                            draggingId = id
                             ev.dataTransfer?.setData(DND_ASSET, id)
                             ev.dataTransfer?.setData('text/plain', e().asset.name)
                             // `copyMove`, not `copy`: the timeline offers 'move' for an overwrite
                             // drop, and an effect it did not allow is a drop the
                             // browser silently refuses.
                             if (ev.dataTransfer) ev.dataTransfer.effectAllowed = 'copyMove'
+                          }}
+                          // Fires for a completed drop *and* a cancelled drag, so
+                          // the shared id never outlives the gesture.
+                          onDragEnd={() => {
+                            draggingId = null
                           }}
                           onClick={(ev) => {
                             // A click only SELECTS. Adding to the timeline is a
@@ -162,6 +168,19 @@ export function AssetBin(props: { state: AppState; menu: ContextMenuState; layou
 
 /** Shared with the timeline's drop handling. */
 export const DND_ASSET = 'application/x-open-editor-asset'
+
+/**
+ * The asset currently being dragged from the bin, if any.
+ *
+ * The drag's `dataTransfer` is in protected mode during `dragover`, where the
+ * spec says `getData` returns an empty string — Firefox enforces this, and the
+ * timeline's drop cue would silently stop appearing. The data store is readable
+ * on `drop`, but the preview needs it earlier, so the id is kept here as well.
+ */
+let draggingId: string | null = null
+export function draggedAssetId(): string | null {
+  return draggingId
+}
 
 function DropIcon() {
   return (

@@ -10,7 +10,7 @@
 
 import { For } from 'solid-js'
 import { laneOf, type Lane } from '../../../model/project.js'
-import { DND_ASSET } from '../AssetBin.js'
+import { DND_ASSET, draggedAssetId } from '../AssetBin.js'
 import type { AppState } from '../../store/state.js'
 import { Clip } from './Clip.js'
 import { DropCue } from './DropCue.js'
@@ -54,8 +54,10 @@ export function Lane(props: LaneProps) {
   const draggingOver = (): boolean => props.dropAt() !== null
 
   const timeAtClientX = (clientX: number): number => state.xToTime(clientX - props.trackLeft())
+  // `getData` is empty during `dragover` in browsers that enforce protected
+  // mode, so the id recorded at `dragstart` is the reliable source here.
   const draggedId = (event: DragEvent): string | null =>
-    event.dataTransfer?.getData(DND_ASSET) || null
+    event.dataTransfer?.getData(DND_ASSET) || draggedAssetId()
 
   /**
    * Work out what a drag over this lane would do, and show it.
@@ -114,7 +116,14 @@ export function Lane(props: LaneProps) {
       data-lane-accepts={accepts() ? 'yes' : undefined}
       style={{ height: `${props.height}px` }}
       onDragOver={previewDrop}
-      onDragLeave={() => props.setDropAt(null)}
+      onDragLeave={(event) => {
+        // `dragleave` also fires when the pointer moves from the lane onto one
+        // of its own children (a clip, a handle). Clearing on those made the cue
+        // flicker. Only a leave to somewhere outside the lane is real.
+        const to = event.relatedTarget as Node | null
+        if (to && event.currentTarget.contains(to)) return
+        props.setDropAt(null)
+      }}
       onDrop={onDrop}
     >
       <span class="panel-label pointer-events-none absolute right-2 top-1.5 z-10">{props.label}</span>

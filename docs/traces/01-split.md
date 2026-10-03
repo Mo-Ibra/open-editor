@@ -141,7 +141,7 @@ accept a hand-edited call while the store has to answer a keystroke.
 
 ## 6. One write path, and a prune
 
-Back in `src/app/store/state.ts:103`, every edit goes through `setProject`, which
+Back in `src/app/store/state.ts:121`, every edit goes through `setProject`, which
 is deliberately overloaded to distinguish the three kinds of write:
 
 ```ts

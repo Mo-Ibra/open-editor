@@ -84,6 +84,9 @@ audible during an export.
 | `app/store/assets.ts` | Import, remove, and getting files onto the timeline. |
 | `app/store/edits.ts` | Every clip operation. Intent here, meaning in `model/project.ts`. |
 | `app/store/transport.ts` | Playhead, playback, and what is derived from them. |
+| `app/store/project-store.ts` | What is open, what is saved, what is missing. Autosave, rehydration, boot. |
+| `app/store/project-format.ts` | The saved-file format, and the forward migration chain. Pure — no IndexedDB, no DOM. |
+| `app/store/persistence.ts` | The IndexedDB layer: projects, blobs, meta. No mediabunny, no DOM. |
 | `app/commands/shortcuts.ts` | The shortcut list — the single source for handler and legend. |
 | `app/commands/keyboard.ts` | Matching and legend derivation. Pure, no browser. |
 | `app/commands/menu-items.ts` | The context menu, as a pure function of (state, target). |

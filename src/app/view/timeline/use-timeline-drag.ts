@@ -80,6 +80,15 @@ export function useTimelineDrag(
   elements: { track: () => HTMLDivElement | undefined; scroller: () => HTMLDivElement | undefined },
 ): TimelineDrag {
   let drag: Drag | null = null
+  /**
+   * Whether this gesture has recorded its "before" state in the undo history.
+   *
+   * A move or trim spans dozens of pointermove events, each writing the lanes.
+   * Committing on pointerdown would add a history entry for every plain click
+   * that only selects a clip, so the first actual movement is what commits —
+   * once — and the per-move writes land inside that single entry.
+   */
+  let dragCommitted = false
   /** Wheel bursts are summed and applied once per frame. */
   let pendingNotches = 0
   let rafId = 0
@@ -120,6 +129,7 @@ export function useTimelineDrag(
   }
 
   function onPointerDown(event: PointerEvent): void {
+    dragCommitted = false
     const target = event.target as HTMLElement
     const lane = target.closest('[data-lane]')?.getAttribute('data-lane') as Lane | undefined
     elements.track()?.setPointerCapture(event.pointerId)
@@ -170,6 +180,10 @@ export function useTimelineDrag(
       case 'move': {
         const clips = laneOf(state.project, drag.lane)
         if (!clips[drag.index]) return
+        if (!dragCommitted) {
+          state.commit()
+          dragCommitted = true
+        }
 
         // FREE MOVEMENT. No snapping, no target list, no latch, no guide line.
         // The clip goes exactly where the pointer says.
@@ -205,6 +219,10 @@ export function useTimelineDrag(
         const clips = laneOf(state.project, drag.lane)
         const clip = clips[drag.index]
         if (!clip) return
+        if (!dragCommitted) {
+          state.commit()
+          dragCommitted = true
+        }
 
         // Snap in TIMELINE space, then convert to source.
         //

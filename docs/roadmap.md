@@ -38,9 +38,9 @@ collaborative editor, a clip library. See
 
 - [ ] **Which browsers do we claim to support — and do we say so on the README?**
       Currently untested anywhere but Chromium.
-- [ ] **Do users want to keep a project across sessions, or is one sitting
-      session the whole product?** If the latter, persistence drops off entirely
-      and `idb` should be removed.
+- [x] **Do users want to keep a project across sessions, or is one sitting
+      session the whole product?** Answered by building it. `idb` is now used, and
+      the cost is stated in [risks.md](risks.md#r7--a-project-costs-as-much-disk-as-its-media).
 - [ ] **What is the non-negotiable floor** — the one feature that, if missing,
       makes this useless?
 - [ ] **Is canvas zoom (`transform.scale`) good enough,** or do users want

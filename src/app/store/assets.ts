@@ -78,7 +78,15 @@ export interface AssetDeps {
   /** Write both lanes. The only way the timeline changes. */
   setLanes: (video: Clip[], audio: Clip[]) => void
   setAsset: (assetId: AssetId, asset: Project['assets'][string]) => void
+  /** Store an asset's bytes, once. Supplied by the project store. */
+  rememberMedia: (assetId: AssetId, file: File) => void
   /** Read for snapping a drop: the playhead is a snap target like any other. */
+  /**
+   * Bumped when the whole assets map is replaced, so `ids()` — and therefore
+   * the media bin's `<For>` — re-runs. Solid merges object writes in place, so
+   * the map's reference does not change on its own.
+   */
+  assetsRevision: Accessor<number>
   playhead: () => number
   snapping: () => boolean
   /** Timeline pixels per second, so the snap threshold is a fixed *screen* distance. */
@@ -87,7 +95,7 @@ export interface AssetDeps {
 
 export function createAssets(deps: AssetDeps): AssetSlice {
   const { project, library, audio, history, selection, notify, setLanes, setAsset } = deps
-  const { playhead, snapping, pixelsPerSecond } = deps
+  const { playhead, snapping, pixelsPerSecond, rememberMedia } = deps
 
   /**
    * The bin's selected file. Selecting does NOT add it to the timeline — a
@@ -118,6 +126,10 @@ export function createAssets(deps: AssetDeps): AssetSlice {
         }
         setAsset(entry.asset.id, entry.asset)
         added.push(entry.asset.id)
+        // The bytes go to storage now, once, and are never rewritten. A save is
+        // then a few KB of JSON rather than a gigabyte of video, which is the
+        // whole reason autosave is affordable.
+        void rememberMedia(entry.asset.id, file)
         // Describe what the file *is*. "tone.m4a — 0x0" tells the user nothing,
         // and reads like the import failed.
         notify('info', `Added ${file.name} — ${describe(entry.asset)}`)
@@ -268,7 +280,10 @@ export function createAssets(deps: AssetDeps): AssetSlice {
 
   const addClip = (assetId: AssetId): void => addAssetToTimeline(assetId)
 
-  const ids = (): AssetId[] => Object.keys(project.assets)
+  const ids = (): AssetId[] => {
+    deps.assetsRevision()
+    return Object.keys(project.assets)
+  }
   const get = (assetId: AssetId) => project.assets[assetId]
 
   /**

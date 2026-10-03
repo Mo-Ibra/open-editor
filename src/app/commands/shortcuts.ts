@@ -25,9 +25,27 @@ export interface ShortcutContext {
   fullscreen: Fullscreen
   /** Opens the keyboard reference. `?` is where everyone looks for it. */
   openKeys: () => void
+  /** Opens the project list. */
+  openProjects: () => void
+  /** Export / import the project file. These live here so the panel buttons
+   *  and the keys do the same thing. */
+  exportProject: () => void
+  importProject: () => void
+  /** Opens the media review screen. */
+  openMedia: () => void
 }
 
-export function createShortcuts({ state, closeMenu, layout, fullscreen, openKeys }: ShortcutContext): Shortcut[] {
+export function createShortcuts({
+  state,
+  closeMenu,
+  layout,
+  fullscreen,
+  openKeys,
+  openProjects,
+  exportProject,
+  importProject,
+  openMedia,
+}: ShortcutContext): Shortcut[] {
   const hasClips = (): boolean => state.project.video.length > 0 || state.project.audio.length > 0
   const hasSelection = (): boolean => state.selectionCount() > 0
 
@@ -118,6 +136,24 @@ export function createShortcuts({ state, closeMenu, layout, fullscreen, openKeys
     // The keymap left the footer, so it needs a key of its own — or moving it
     // would have made it harder to find than the thing it replaced.
     { keys: ['?'], hint: '?', label: 'keyboard', run: openKeys },
+
+    // --- projects ----------------------------------------------------------
+    // `Cmd+S` is a save *now*, not a "save as": autosave already covers the
+    // steady state, and a key that does nothing most of the time is worse than
+    // no key. This one always does something visible.
+    {
+      keys: ['s'],
+      accel: true,
+      hint: '⌘S',
+      label: 'save now',
+      run: () => void state.projects.saveNow(),
+    },
+    { keys: ['o'], accel: true, hint: '⌘O', label: 'projects', run: openProjects },
+    { keys: ['e'], accel: true, hint: '⌘E', label: 'export project file', run: exportProject },
+    { keys: ['i'], accel: true, hint: '⌘I', label: 'import project file', run: importProject },
+    // `M` is taken by mute, and rightly so — it is the key an editor reaches for
+    // constantly. `⌘M` is free, and on a Mac the bare `M` still means mute.
+    { keys: ['m'], accel: true, hint: '⌘M', label: 'media review', run: openMedia },
 
     // --- panels ------------------------------------------------------------
     // The panels were collapsible only by double-clicking a 1px hairline, so

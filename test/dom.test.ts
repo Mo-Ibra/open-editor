@@ -920,3 +920,321 @@ function repoRootFor(): string {
   assert.match(assets, /const lanes: Lane\[\] = canVideo && canAudio \? \['video', 'audio'\]/, 'a file with both tracks makes a linked pair')
   console.log('  dropping works anywhere, in both modes, for both kinds of file')
 }
+
+/**
+ * Persistence ordering and storage-shape invariants.
+ *
+ * Two of these were real bugs, and both were invisible in the type checker, the
+ * unit tests, and the *build* — they only showed up when a saved project was
+ * actually reopened:
+ *
+ * - **`MediaLibrary` is a plain `Map`, so it is not reactive.** The media bin's
+ *   rows read it with `<Show when={state.entryFor(id)}>`, which evaluates once
+ *   and never re-checks. Writing the project *before* rehydrating therefore
+ *   created the rows while the library was still empty, and they stayed
+ *   invisible: a bin showing its populated branch with nothing in it, while the
+ *   clip titles — which read the store — looked perfectly fine.
+ * - **Solid merges object writes instead of replacing them.** After `open()`,
+ *   the asset keys were readable through the proxy but `project.assets` was
+ *   still the same object, so `<For each={Object.keys(project.assets)}>` never
+ *   re-ran. `reconcile` does not help; it mutates in place too.
+ */
+{
+  const read = (f: string): string => readFileSync(join(repoRootFor(), f), 'utf8')
+  const store = read('src/app/store/project-store.ts')
+  const state = read('src/app/store/state.ts')
+  const assets = read('src/app/store/assets.ts')
+
+  // Library first, then the project. The reverse produces an empty-looking bin.
+  const rehydrateAt = store.indexOf('await rehydrateAll(')
+  const writeAt = store.indexOf('deps.write(project)')
+  assert.ok(rehydrateAt > 0 && writeAt > 0, 'open() must rehydrate and write')
+  assert.ok(
+    rehydrateAt < writeAt,
+    'the library must be populated before the project is written — the bin reads a plain Map, which is not reactive',
+  )
+
+  // The assets map needs something to depend on.
+  assert.match(state, /setAssetsRevision\(\(n\) => n \+ 1\)/, 'replacing the project must bump the assets revision')
+  assert.match(assets, /deps\.assetsRevision\(\)/, 'and the asset ids must read it, or the bin never re-renders')
+  // Every top-level key is written on its own line. Wrapping the whole project
+  // in `reconcile` is what blanked `assets` and `version` once, because a
+  // reconciler sets every key the target does not mention to `undefined`.
+  for (const key of ['version', 'assets', 'video', 'audio', 'captions']) {
+    assert.match(state, new RegExp(`applyProject\\('${key}'`), `${key} is written explicitly`)
+  }
+  assert.doesNotMatch(
+    state,
+    /applyProject\(reconcile\(\{|applyProject\(reconcile\(next\b/,
+    'the project must never be handed to a reconciler as a whole',
+  )
+  // `reconcile` is now used on the assets map, which is the one place it is
+  // right: a plain set *merges* and can only add keys, so starting a new project
+  // left the old project's files in the bin and in the saved file. It is safe
+  // only because that map is complete, never partial.
+  assert.match(state, /applyProject\('assets', reconcile\(next\.assets\)\)/, 'the assets map is replaced, not merged')
+
+  // Bytes are written once, at import, and never on a save.
+  assert.match(assets, /void rememberMedia\(entry\.asset\.id, file\)/, 'media must be stored when a file is imported')
+  // Only the body of `saveNow`. Slicing to the end of the file would match
+  // `rememberMedia`'s *definition*, which is exactly where the write belongs.
+  const saveStart = store.indexOf('async function saveNow')
+  const saveEnd = store.indexOf('\n  /**', saveStart)
+  const savePath = store.slice(saveStart, saveEnd > 0 ? saveEnd : undefined)
+  assert.ok(savePath.length > 0, 'found the save path')
+  assert.doesNotMatch(savePath, /rememberMedia|putMedia/, 'a save must never rewrite the media')
+  assert.match(savePath, /saveProject\(/, 'and it must write the edit')
+  console.log('  persistence rehydrates before it writes, and the assets map is not reactive either')
+}
+
+/**
+ * The project list, and the one prompt the app is allowed to show.
+ *
+ * `beforeunload` is the guard worth having. The browser's "leave site?" dialog
+ * is the most irritating thing an app can do, and it stops working the first
+ * time it appears for no reason — people learn to click through it. So it is
+ * gated on the save state, and the gate is the assertion.
+ */
+{
+  const read = (f: string): string => readFileSync(join(repoRootFor(), f), 'utf8')
+  const app = read('src/app/view/App.tsx')
+  const shortcuts = read('src/app/commands/shortcuts.ts')
+  const panel = read('src/app/view/ProjectPanel.tsx')
+  const store = read('src/app/store/project-store.ts')
+  const media = read('src/app/view/MediaPanel.tsx')
+  const transfer = read('src/app/view/transfer.ts')
+
+  // --- the prompt, and the gate -----------------------------------------
+  assert.match(app, /addEventListener\('beforeunload'/, 'the prompt exists')
+  assert.match(
+    app,
+    /if \(state_ !== 'dirty' && state_ !== 'error'\) return/,
+    'and it is gated on there being unsaved work — an ungated prompt is worse than none',
+  )
+  assert.match(app, /e\.returnValue = ''/, 'setting returnValue is what Chromium actually checks')
+  assert.doesNotMatch(
+    app,
+    /addEventListener\('beforeunload',[^\n]*\)\s*\n\s*\n\s*onMount/,
+    'and it must be removed on cleanup, or a remount stacks listeners',
+  )
+  assert.match(app, /removeEventListener\('beforeunload'/, '')
+
+  // --- the keys ---------------------------------------------------------
+  assert.match(shortcuts, /keys: \['s'\],\s*\n\s*accel: true,[\s\S]{0,200}save now/, '⌘S saves now')
+  assert.match(shortcuts, /keys: \['o'\], accel: true, hint: '⌘O', label: 'projects'/, '⌘O opens the list')
+  // The plain `s` (split) must still be reachable, which is the whole point of
+  // the accel check in the matcher.
+  assert.match(shortcuts, /keys: \['s'\],\s*\n\s*hint: 'S',\s*\n\s*label: 'split'/, 'plain s is still split')
+
+  // --- stage 3: the folder walk, and the cost of it -----------------------
+  const folder = read('src/app/view/folder.ts')
+
+  // The chain this replaced was hand-maintained, and two test files were added
+  // without being added to it — so the suite reported green while never running
+  // them. A glob cannot be left out of.
+  assert.match(read('package.json'), /"test":[^\n]*test\/\*\.test\.ts/,
+    'the test script globs the test files, so a new one cannot be left out')
+
+  // The loop, not a single call. `readEntries` returns at most ~100 entries and
+  // reports no error, so one call silently truncates a large folder to a batch.
+  assert.match(folder, /while \(;;\)|for \(;;\)/, 'the reader is drained')
+  assert.match(folder, /if \(batch\.length === 0\) break/, 'until it says it is done')
+  assert.match(folder, /webkitGetAsEntry/, 'a dropped folder is walked, not just its top level')
+  assert.match(folder, /webkitdirectory/, 'and a folder can also be picked')
+  // Both paths are needed, not one with a fallback: Firefox has no directory
+  // picker, so a drop is its only way to give this app a folder.
+  assert.match(folder, /MAX_FOLDER_FILES = \d+/, 'a dragged home directory is bounded')
+  assert.match(folder, /MAX_FOLDER_DEPTH = \d+/, 'as is a symlink loop')
+
+  // The cost claim, asserted. A folder is gigabytes, so anything hashed before
+  // the free name-and-size filter is minutes of frozen tab.
+  const mediaStatus = read('src/app/store/media-status.ts')
+  assert.match(mediaStatus, /export function prefilter/, 'the cheap filter is a pure function')
+  const relinkFrom = store.slice(store.indexOf('async function relinkFromFolder'))
+  assert.match(relinkFrom, /prefilter\([\s\S]{0,400}?worth\.set/, 'the filter runs before anything is read')
+  assert.match(relinkFrom, /await fingerprintOf\(/, 'and only survivors are hashed')
+  assert.match(relinkFrom, /const items = planBatch\(/, 'and the assignment is decided purely')
+  assert.match(relinkFrom, /if \(!certain\) continue/, 'only a certain match is applied')
+  assert.match(relinkFrom, /const proposals = items\.filter\(\(i\) => i\.certain === null/,
+    'everything weaker is returned for a person to confirm')
+
+  // One file backs at most one asset. Without it "use this" attaches the same
+  // file twice, which is an edit that saves cleanly and is not the one you made.
+  assert.match(mediaStatus, /claimed\.add\(file\.assetId\)/,
+    'a proposal claims its file, so no file is offered twice')
+
+  // --- the media review screen -------------------------------------------
+  assert.match(app, /<MediaPanel[\s\S]{0,160}?state=\{state\}/, 'the review screen is reachable')
+  assert.match(app, /setMediaOpen\(true\)/, 'and something opens it')
+  assert.match(app, /report\.missing\.length > 0 \|\| report\.rejected\.length > 0/,
+    'the import opens it only when the import could not settle itself')
+  assert.match(app, /openMedia: \(\) => setMediaOpen\(true\)/, '⌘M opens it too')
+  assert.match(media, /data-media-row=\{m\.assetId\}/, 'every asset gets a row')
+  assert.match(media, /data-relink=\{m\.assetId\}/, 'and a way to relink it')
+  assert.match(media, /data-pick-folder/, 'a whole folder can be checked at once')
+  assert.match(media, /filesFromDrop\(e\.dataTransfer\)/, 'or dropped on the panel')
+  // A drop must be cancelled, or the browser navigates to the folder and the
+  // app is gone with no way back but a reload.
+  assert.match(media, /onDragOver=\{\(e\) => \{\s*\n?\s*e\.preventDefault\(\)/,
+    'the drop is cancelled, so the browser does not navigate to the folder')
+  assert.match(media, /data-progress/, 'the work reports itself')
+  assert.match(media, /data-accept=\{item\.assetId\}/, 'a proposal takes an explicit yes')
+  assert.match(media, /Nothing has been attached\./, 'and the panel says so up front')
+  // The relink must show its reasoning either way, or a refusal is invisible and
+  // the user assumes the button is broken.
+  assert.match(media, /not attached — \$\{v\(\)\.reason\}/, 'a refusal says so on the row')
+  assert.match(media, /It was left exactly as it was\./, 'and says the old file survived')
+
+  // The one invariant the screen rests on: nothing is ever attached without
+  // checking. The decision lives in a pure function so it is unit tested; this
+  // only asserts the panel calls it rather than deciding for itself.
+  assert.match(store, /decideRelink\(/, 'relinking goes through the certainty rule')
+  assert.match(transfer, /export async function chooseOneMediaFile/, 'and asks for a File, not text')
+
+  // --- the panel, and the things it must not skip -----------------------
+  // Matched on the props that matter rather than the whole opening tag, so
+  // adding a prop to the panel does not read as the panel disappearing.
+  assert.match(app, /<ProjectPanel[\s\S]{0,200}?state=\{state\}/, 'the panel is reachable')
+  assert.match(app, /onClick=\{props\.onOpenProjects\}/, 'and the topbar indicator opens it')
+  assert.match(panel, /data-projects-panel/, 'it has a hook for the tests')
+  // Deleting takes a project's media with it and has no undo, so it needs a
+  // second click. One click is how people lose work.
+  assert.match(panel, /setConfirming\(p\.id\)/, 'delete asks first')
+  assert.match(panel, /Really delete/, 'and says what the button does')
+  // `remove` must appear exactly once, inside the "Really delete" button. Two
+  // calls would mean one of them is a single click away from deleting a project
+  // and its media with no undo.
+  const removes = panel.match(/projects\(\)\.remove\(/g) ?? []
+  assert.equal(removes.length, 1, `remove() must be called from one place, found ${removes.length}`)
+  // The call sits in the button's `onClick`, which JSX emits *before* its label,
+  // so the confirm branch is a window around the call rather than after it.
+  const at = panel.indexOf('projects().remove(')
+  // The confirm button is the only danger-styled one, and its `onClick` is the
+  // only `remove` call. Matching the style is sturdier than matching the label,
+  // which JSX emits after the handler.
+  const around = panel.slice(Math.max(0, at - 320), at + 120)
+  assert.match(around, /!border-danger/, 'and that one place is the danger-styled confirm button')
+  // The cost of the design, on screen.
+  assert.match(panel, /projects hold a\s*\n?\s*copy of their media/, 'the storage cost is stated, not hidden')
+  assert.match(panel, /may reclaim this project/, 'including that the browser may evict it')
+
+  // --- the store can actually do it -------------------------------------
+  for (const fn of ['open', 'startNew', 'rename', 'duplicate', 'remove', 'refreshList', 'refreshUsage']) {
+    assert.match(store, new RegExp(`\\b${fn}\\b`), `the store exposes ${fn}`)
+  }
+  assert.match(store, /await saveNow\(\)/, 'switching or duplicating saves the current project first')
+  console.log('  the project list is wired, and the unload prompt is gated on unsaved work')
+}
+
+/**
+ * Switching projects must actually switch.
+ *
+ * Found by driving the panel: after "New", the timeline was empty but the media
+ * bin still showed a row, and starting a project left the previous project's
+ * files inside the new one. Two different reasons, both worth pinning:
+ *
+ * - **Solid merges object writes.** A plain `set('assets', {})` adds nothing and
+ *   removes nothing, so the old keys were still there. Only a reconciler deletes,
+ *   and that is safe on *this* key precisely because the map is complete.
+ * - **The library is not reactive and not cleared.** Its entries hold live
+ *   decoders, so carrying them into another project leaks them and keeps the old
+ *   files visible.
+ */
+{
+  const state = readFileSync(join(repoRootFor(), 'src/app/store/state.ts'), 'utf8')
+  const store = readFileSync(join(repoRootFor(), 'src/app/store/project-store.ts'), 'utf8')
+  const library = readFileSync(join(repoRootFor(), 'src/media/library.ts'), 'utf8')
+
+  assert.match(
+    state,
+    /applyProject\('assets', reconcile\(next\.assets\)\)/,
+    'a plain set merges, so the assets map needs a reconciler to actually empty',
+  )
+  // A `clear()` that only dropped the maps would leak the decoders.
+  assert.match(library, /clear\(\): void \{[\s\S]{0,200}input\.dispose\(\)/, 'clearing the library must dispose its inputs')
+  assert.match(store, /deps\.releaseLibrary\(\)/, 'switching and starting a project must release the old library')
+  // Scoped to the function body, not a character window: the `unlessBusy` branch
+  // sits between the signature and the call, and a window that happened to stop
+  // short of it would fail for a reason that has nothing to do with the bug.
+  const startNewAt = store.indexOf('async function startNew')
+  const startNewBody = store.slice(startNewAt, store.indexOf('\n  /**', startNewAt))
+  assert.ok(
+    startNewBody.includes('releaseLibrary()'),
+    'a new project must release the old decoders before it is written',
+  )
+  console.log('  switching projects clears the assets map and the decoders')
+}
+
+/**
+ * The portable project file: the format, and the one rule about matching.
+ *
+ * The rule is the important part. An exported project carries fingerprints and no
+ * media, and on another machine it has to find its way back to the files. If the
+ * matcher claims a certainty it does not have, the user gets an export that looks
+ * right and is not — the worst outcome a video editor can produce, because
+ * nothing about it looks wrong.
+ *
+ * So: **only an identical hash may be applied without asking**, and a file that
+ * is missing is still imported, because the edit is the irreplaceable part.
+ */
+{
+  const read = (f: string): string => readFileSync(join(repoRootFor(), f), 'utf8')
+  const file = read('src/app/store/project-file.ts')
+  const prints = read('src/app/store/fingerprint.ts')
+  const app = read('src/app/view/App.tsx')
+  const shortcuts = read('src/app/commands/shortcuts.ts')
+  const transfer = read('src/app/view/transfer.ts')
+
+  // --- the format is plain, versioned, and has no paths in it ------------
+  assert.match(file, /export const EXPORT_FORMAT = 'open-editor\.project'/, 'the format is named')
+  assert.match(file, /export const EXPORT_FORMAT_VERSION = \d+/, 'and versioned on its own')
+  // The envelope's fields, exactly. A `path` or `directory` key appearing here
+  // would be a bug twice over: it means nothing on another machine, and honouring
+  // one from a file the user opened is an attack surface.
+  const envelope = file.slice(file.indexOf('export interface ProjectFile'), file.indexOf('/** Build the envelope'))
+  const fields = [...envelope.matchAll(/^  (\w+)\??:/gm)].map((m) => m[1])
+  assert.deepEqual(
+    fields.sort(),
+    ['app', 'format', 'formatVersion', 'media', 'name', 'playhead', 'project', 'savedAt', 'selection'],
+    'the envelope carries only these fields — and no path, so a file opened from ' +
+      'elsewhere cannot steer this one at anything on this machine',
+  )
+  // A file from a newer build is refused, and the message reassures.
+  assert.match(file, /exported by a newer version/, 'and says so')
+  assert.match(file, /has not been changed/, 'without blaming the file')
+  // The model keeps its shape: fingerprints live beside the project.
+  assert.match(file, /media: Record<string, ExportedMedia>/, 'fingerprints sit in their own bag')
+  assert.match(file, /const project = parseProject\(/, 'and the model still gets what it expects')
+
+  // --- the ladder: certainty is earned ------------------------------------
+  assert.match(prints, /isCertain[\s\S]{0,120}kind === 'identical'/, 'only identical is certain')
+  assert.match(
+    prints,
+    /want\.quickHash === candidate\.quickHash && want\.size === candidate\.size/,
+    'identity needs the hash *and* the size, not the hash alone',
+  )
+  assert.match(prints, /content differs/, 'and a hash disagreement is a definite no, not a proposal')
+  assert.match(prints, /not verified/, 'a fallback match admits it was not verified')
+
+  // --- import never loses the edit ---------------------------------------
+  const store = read('src/app/store/project-store.ts')
+  assert.match(store, /const attached/, 'an import reports what it found')
+  assert.match(store, /const missing/, 'and what it did not')
+  assert.match(store, /isCertain\(matchFingerprint/, 'only a certain match is applied without asking')
+  // A near-miss is recorded and rejected, not offered. The decision is the
+  // user's: different bytes means the cuts were made against something else.
+  assert.match(store, /const rejected: \{ name: string; reason: string \}\[\]/, 'near-misses are recorded with their reason')
+  assert.match(store, /if \(!certain && candidates\.length > 0\)/, 'and only a certain match is ever attached')
+
+  // --- the keys, and one implementation ---------------------------------
+  assert.match(shortcuts, /keys: \['e'\], accel: true, hint: '⌘E', label: 'export project file'/, '⌘E exports')
+  assert.match(shortcuts, /keys: \['i'\], accel: true, hint: '⌘I', label: 'import project file'/, '⌘I imports')
+  assert.match(app, /exportProject: \(\) => void runExport\(\)/, 'the key and the button share one path')
+  assert.match(transfer, /chooseSaveTarget/, 'the save picker is opened before the slow hashing, to keep the gesture')
+  assert.match(
+    transfer,
+    /webkitdirectory|type="file"/,
+    'and the universal path is a real input element, so this is not Chromium-gated',
+  )
+  console.log('  the portable project file is plain, versioned, and only ever certain when it is')
+}

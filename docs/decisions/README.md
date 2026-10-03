@@ -14,6 +14,7 @@ means the same thing forever, which is why code comments can point at one.
 | [0007](0007-no-ffmpeg.md) | No ffmpeg.wasm | Accepted |
 | [0008](0008-negotiate-never-hardcode-a-codec.md) | Never hardcode an output codec | Accepted — and it bit us |
 | [0009](0009-hide-the-picture-keeps-the-transport.md) | Hiding the picture keeps the transport | Accepted |
+| [0010](0010-copy-media-and-reopen-what-you-can.md) | Copy the media into storage, and reopen what you can | Accepted |
 
 ## Writing a new one
 

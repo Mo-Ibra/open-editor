@@ -1,0 +1,87 @@
+<!doctype html><html><head><meta charset="utf-8"></head><body>
+<iframe id="f" src="/index.html" style="width:1500px;height:900px;border:0"></iframe><pre id="o">pending</pre>
+<script>
+const _o=document.getElementById('o')
+window.addEventListener('error',e=>{_o.textContent='BOOM: '+(e.message||e.error)})
+</script>
+<script type="module">
+const L=[]
+const log=(k,v,d)=>{L.push((v===true?'PASS ':v===false?'FAIL ':'  -- ')+k+(d?' :: '+d:''));document.getElementById('o').textContent=L.join('\n')}
+const report=()=>fetch('http://localhost:5311/',{method:'POST',body:L.join('\n')}).catch(()=>{})
+const wait=(ms)=>new Promise(r=>{const t0=Date.now();const tick=()=>{if(Date.now()-t0>=ms)r();else setTimeout(tick,25)};tick()})
+const frame=document.getElementById('f')
+const ready=()=>new Promise(r=>{const d=frame.contentDocument
+  if(d&&d.readyState==='complete'&&frame.contentWindow)return r()
+  frame.addEventListener('load',()=>r(),{once:true});setTimeout(()=>r(),8000)})
+const q=s=>frame.contentDocument.querySelector(s), qa=s=>[...frame.contentDocument.querySelectorAll(s)]
+const w=()=>frame.contentWindow
+const accel=k=>{const W=w();frame.contentDocument.dispatchEvent(new W.KeyboardEvent('keydown',{key:k,metaKey:true,bubbles:true}))}
+const bins=()=>qa('aside *').filter(e=>/\.mp4/.test(e.getAttribute('title')||'')).length
+const lum=()=>{const c=q('canvas');if(!c)return -1;const x=c.getContext('2d');const d=x.getImageData(0,0,c.width,c.height).data;
+  let s=0,n=0;for(let i=0;i<d.length;i+=4000){s+=d[i]+d[i+1]+d[i+2];n++}return Math.round(s/n/3)}
+let exported=null
+const capture=()=>{const W=w();if(W.__p)return;W.__p=true
+  const r=W.URL.createObjectURL.bind(W.URL);W.URL.createObjectURL=b=>{exported=b;return r(b)}
+  delete W.showSaveFilePicker; delete W.showOpenFilePicker}
+let pending=null
+const patchInput=()=>{const W=w(),doc=W.document;if(doc.__p)return;doc.__p=true
+  const orig=doc.createElement.bind(doc)
+  doc.createElement=(tag,...rest)=>{const el=orig(tag,...rest)
+    if(String(tag).toLowerCase()==='input'){const c=el.click.bind(el)
+      el.click=()=>{if(pending&&el.type==='file'){const dt=new W.DataTransfer();dt.items.add(pending)
+        el.files=dt.files;el.dispatchEvent(new W.Event('change',{bubbles:true}));return}c()}}
+    return el}}
+const importVia=(name,text)=>{pending=new (w().File)([new Blob([text])],name,{type:'application/json'})
+  accel('o')}
+const clickImport=async()=>{accel('o');await wait(900)
+  const b=[...q('[data-projects-panel]').querySelectorAll('button')].find(b=>/Import file/.test(b.textContent))
+  b.click();await wait(5000)}
+try{
+await ready(); await wait(3000); capture(); patchInput()
+
+// 1. put the media on this machine, and a clip that uses it
+const mk=async n=>{const W=w();return new W.File([await (await fetch('/fixture.mp4')).blob()],n,{type:'video/mp4'})}
+const W=w(); const d=new W.DataTransfer(); d.items.add(await mk('shot.mp4'))
+q('main').dispatchEvent(new W.DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:d}))
+await wait(3000)
+qa('aside *').find(e=>/shot\.mp4/.test(e.textContent||'')&&e.children.length===0)?.dispatchEvent(new (w().MouseEvent)('dblclick',{bubbles:true}))
+await wait(3000)
+log('1. media on the machine and on the timeline',bins()===1&&qa('[data-clip-index]').length>0,
+    bins()+' files, '+qa('[data-clip-index]').length+' clips')
+
+// 2. export
+accel('e'); await wait(3500)
+const text=exported?await exported.text():''
+const parsed=text?JSON.parse(text):null
+const mediaKeys=parsed?Object.keys(parsed.media):[]
+log('2. exported',!!parsed,(parsed?Object.keys(parsed.project.assets).length:0)+' assets, '+mediaKeys.length+' fingerprinted')
+log('2. every asset has a fingerprint',parsed&&Object.keys(parsed.project.assets).every(a=>parsed.media[a]),
+    mediaKeys.map(a=>a+'='+(parsed.media[a].quickHash?'hash ok':'NO HASH')).join(' '))
+log('2. the hash is real',parsed&&mediaKeys.length>0&&/^[0-9a-f]{64}$/.test(parsed.media[mediaKeys[0]].quickHash),
+    String(parsed?.media?.[mediaKeys[0]]?.quickHash).slice(0,16))
+const clipsBefore=qa('[data-clip-index]').length
+
+// 3. wipe, and put the SAME media back (in the bin only, no clips)
+await new Promise(res=>{const r=indexedDB.deleteDatabase('open-editor');r.onsuccess=()=>res();r.onerror=()=>res();r.onblocked=()=>res()})
+await wait(1200)
+w().location.reload(); await ready(); await wait(5000); capture(); patchInput()
+const W2=w(); const d2=new W2.DataTransfer(); d2.items.add(await mk('shot.mp4'))
+q('main').dispatchEvent(new W2.DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:d2}))
+await wait(3500)
+log('3. wiped, then the same media re-added to the bin',bins()===1,bins()+' files, '+qa('[data-clip-index]').length+' clips')
+
+// 4. import the project — the hash should attach it with no asking
+await clickImport()
+log('4. imported',qa('[data-clip-index]').length===clipsBefore,
+    clipsBefore+' -> '+qa('[data-clip-index]').length+' clips')
+log('4. THE MEDIA WAS ATTACHED BY HASH',bins()>0,bins()+' bin rows')
+log('4. and it says it matched',/matched exactly/.test(qa('.rounded-md.border-l-2').map(n=>n.textContent).join(' ')),
+    (qa('.rounded-md.border-l-2').map(n=>n.textContent).join(' ')||'').slice(-100))
+{const W3=w();frame.contentDocument.dispatchEvent(new W3.KeyboardEvent('keydown',{key:'Home',bubbles:true}))}
+await wait(3000)
+log('4. so the picture decodes',lum()>8,'mean luma='+lum())
+log('done',true)
+}catch(e){log('THREW',false,(e&&e.stack)||String(e))}
+document.getElementById('o').textContent=L.join('\n')
+await report()
+</script></body></html>

@@ -96,10 +96,40 @@ week, and none are a cutter. **The moment the render pass grows a second code
 path, [ADR-1](decisions/0001-one-render-function.md) is dead** — which is the
 single most load-bearing invariant in the project.
 
-## R7 — Project persistence is missing
+## R7 — A project costs as much disk as its media
 
-Reloading loses the timeline. Panel sizes survive, in `localStorage`. `idb` is a
-dependency and is not yet used for anything.
+Solved, with a bill attached. Projects are saved, and the source files are
+**copied into browser storage**, because a `File` is an OS handle and nothing can
+recover it after a reload — a stored path would be worthless, because the web
+platform cannot reopen a file by path.
 
-Whether this is a gap or the *right* scope is an open question — see
-[roadmap.md](roadmap.md#open-questions).
+So the trade is:
+
+- A 2 GB project uses ~2 GB of browser storage, and the bytes are written **once**,
+  at import. Only the few-KB edit is rewritten on every autosave, which is what
+  makes autosaving affordable at all.
+- `navigator.storage.persisted()` is checked, and a project living in evictable
+  storage is reported. The browser may reclaim the origin under disk pressure, and
+  a project that silently vanishes is worse than one that was never saved.
+- **Projects are tied to one browser profile.** They are not portable and not
+  shareable. Writing a real folder to disk is a separate feature, and it is
+  Chromium-only today (File System Access API).
+
+Media is deliberately *not* deduplicated by content hash. Sharing one blob
+between projects would save space when the same file is used twice, but it needs
+reference counting, and a wrong reference count silently deletes somebody's
+footage. Per-project keys are boring and correct.
+
+## R8 — Reopening must never destroy the edit
+
+A saved project whose media has gone — evicted, or copied between browsers —
+**still opens**. The clips and the timeline are intact, the assets that could not
+be rebuilt are listed in the store as `missing`, and the user is told what to
+re-import.
+
+Refusing to open would have been simpler and would have thrown away the one
+irreplaceable part. Media can be re-imported; a mangled timeline cannot. The
+same reasoning is why the file format has a migration chain from the start:
+`[docs/app/store/project-format.ts]` walks v2 forward a version at a time, and
+refuses anything it cannot read *with a message that says the file is fine and
+only the app is behind**.

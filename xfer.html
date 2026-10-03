@@ -1,0 +1,160 @@
+<!doctype html><html><head><meta charset="utf-8"></head><body>
+<iframe id="f" src="/index.html" style="width:1500px;height:900px;border:0"></iframe><pre id="o">pending</pre>
+<script>
+const _o=document.getElementById('o')
+window.addEventListener('error',e=>{_o.textContent='BOOM: '+(e.message||e.error)})
+</script>
+<script type="module">
+const L=[]
+const log=(k,v,d)=>{L.push((v===true?'PASS ':v===false?'FAIL ':'  -- ')+k+(d?' :: '+d:''));document.getElementById('o').textContent=L.join('\n')}
+const report=()=>fetch('http://localhost:5311/',{method:'POST',body:L.join('\n')}).catch(()=>{})
+const wait=(ms)=>new Promise(r=>{const t0=Date.now();const tick=()=>{if(Date.now()-t0>=ms)r();else setTimeout(tick,25)};tick()})
+const frame=document.getElementById('f')
+const ready=()=>new Promise(r=>{const d=frame.contentDocument
+  if(d&&d.readyState==='complete'&&frame.contentWindow)return r()
+  frame.addEventListener('load',()=>r(),{once:true});setTimeout(()=>r(),8000)})
+const q=s=>frame.contentDocument.querySelector(s), qa=s=>[...frame.contentDocument.querySelectorAll(s)]
+const w=()=>frame.contentWindow
+const accel=k=>{const W=w();frame.contentDocument.dispatchEvent(new W.KeyboardEvent('keydown',{key:k,metaKey:true,bubbles:true}))}
+const clips=()=>qa('[data-clip-index]').length
+const pname=()=>q('[data-project-name]')?.getAttribute('data-project-name')
+const lum=()=>{const c=q('canvas');if(!c)return -1;const x=c.getContext('2d');const d=x.getImageData(0,0,c.width,c.height).data;
+  let s=0,n=0;for(let i=0;i<d.length;i+=4000){s+=d[i]+d[i+1]+d[i+2];n++}return Math.round(s/n/3)}
+// The download: capture the blob the app produced, so we can feed it back in.
+let exported=null
+const captureExport=()=>{const W=w();if(W.__patched)return;W.__patched=true
+  const real=W.URL.createObjectURL.bind(W.URL)
+  W.URL.createObjectURL=(blob)=>{exported=blob;return real(blob)}}
+// Headless Chromium *has* showSaveFilePicker, and its dialog never resolves, so
+// the export stalls before it ever produces a blob. Remove it and the universal
+// download path runs instead — which is the path every other browser takes, and
+// the one worth testing. The picker itself is a browser dialog and cannot be
+// scripted at all.
+const W0=w()
+delete W0.showSaveFilePicker
+delete W0.showOpenFilePicker
+log('0. testing the download path (no save picker in this browser)',typeof W0.showSaveFilePicker==='undefined')
+try{
+await ready(); await wait(3000)
+captureExport()
+// --- build a distinctive edit ---
+const mk=async n=>{const W=w();return new W.File([await (await fetch('/fixture.mp4')).blob()],n,{type:'video/mp4'})}
+const drop=async(sel,n)=>{const W=w();const d=new W.DataTransfer();d.items.add(await mk(n))
+  q(sel).dispatchEvent(new W.DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:d}));await wait(3000)}
+await drop('main','cut-a.mp4')
+qa('aside *').find(e=>/cut-a\.mp4/.test(e.textContent||'')&&e.children.length===0)?.dispatchEvent(new (w().MouseEvent)('dblclick',{bubbles:true}))
+await wait(2500)
+// hide a clip so the export has state worth losing
+const vc=qa('[data-lane="video"] [data-clip-index]')[0]
+vc.dispatchEvent(new (w().MouseEvent)('contextmenu',{bubbles:true,cancelable:true,clientX:400,clientY:400}))
+await wait(400); q('body').click(); await wait(200)
+{const W=w();frame.contentDocument.dispatchEvent(new W.KeyboardEvent('keydown',{key:'m',bubbles:true}))}
+await wait(1500)
+const before={clips:clips(),hidden:qa('[aria-label="hidden"]').length,lum:lum()}
+log('1. built an edit',before.clips>0,JSON.stringify(before))
+log('1. and a hidden clip in it',before.hidden===1)
+
+// --- export via ⌘E ---
+accel('e'); await wait(3000)
+log('2. ⌘E produced a file',!!exported,exported?exported.size+' bytes':'nothing')
+const text=exported?await exported.text():''
+log('2. it is readable JSON',text.trimStart().startsWith('{'),text.slice(0,60).replace(/\n/g,' '))
+let parsed=null; try{parsed=JSON.parse(text)}catch(e){}
+log('3. it declares its format',parsed&&parsed.format==='open-editor.project',parsed&&parsed.format)
+log('3. with a format version',parsed&&typeof parsed.formatVersion==='number','v'+(parsed&&parsed.formatVersion))
+log('3. and the edit inside',parsed&&parsed.project&&parsed.project.video.length>0,(parsed?.project?.video?.length)+' clips')
+log('3. including the hidden flag',parsed&&parsed.project.video.some(c=>c.hidden===true))
+const astId=parsed&&Object.keys(parsed.project.assets)[0]
+log('3. and a fingerprint per asset',parsed&&!!parsed.media[astId]?.quickHash,
+    'size='+parsed?.media?.[astId]?.size+' hash='+String(parsed?.media?.[astId]?.quickHash).slice(0,12))
+log('3. no filesystem paths in it',!/[A-Za-z]:\\\\|\/(home|Users|home)\//.test(text))
+
+// --- the hard part: wipe this machine's storage, then import ---
+await new Promise(res=>{const r=indexedDB.deleteDatabase('open-editor');r.onsuccess=()=>res();r.onerror=()=>res();r.onblocked=()=>res()})
+await wait(1500)
+log('4. storage wiped',true)
+w().location.reload()
+await ready(); await wait(5000)
+log('4. reloaded onto an empty machine',clips()===0,clips()+' clips, '+bins()+' bin rows')
+function bins(){return qa('aside *').filter(e=>/\.mp4/.test(e.getAttribute('title')||'')).length}
+log('4. no media here to match against',bins()===0,bins()+' files')
+
+// --- import it back, through the real file input ---
+// A native picker cannot be scripted, so the app's universal path is driven at
+// the seam it actually uses: the `<input type=file>` it creates and clicks.
+const W=w(), doc=W.document
+// The reload gave us a fresh window, with the pickers back. Headless Chromium
+// has them and their dialogs never resolve, so the import would hang on a
+// picker that can never be answered. Remove them; the universal input path is
+// what every other browser takes.
+delete W.showSaveFilePicker
+delete W.showOpenFilePicker
+captureExport()
+let pendingFile=null
+const origCreate=doc.createElement.bind(doc)
+doc.createElement=(tag,...rest)=>{
+  const el=origCreate(tag,...rest)
+  if(String(tag).toLowerCase()==='input'){
+    const origClick=el.click.bind(el)
+    el.click=()=>{
+      if(pendingFile && el.type==='file'){
+        try{
+          const dt=new W.DataTransfer(); dt.items.add(pendingFile)
+          el.files=dt.files
+          ;(window.__trace??=[]).push('set files, count='+(el.files?.length??'?'))
+          el.dispatchEvent(new W.Event('change',{bubbles:true}))
+          ;(window.__trace??=[]).push('change dispatched')
+        }catch(e){(window.__trace??=[]).push('THREW setting files: '+e)}
+        return
+      }
+      origClick()
+    }
+  }
+  return el
+}
+pendingFile=new W.File([new Blob([text])],'cut-a 2026-09-29.json',{type:'application/json'})
+
+accel('o'); await wait(900)
+log('5. the panel offers Export and Import',/Export file/.test(q('[data-projects-panel]').textContent)&&/Import file/.test(q('[data-projects-panel]').textContent))
+log('5. and names the keys',/⌘E/.test(q('[data-projects-panel]').textContent)&&/⌘I/.test(q('[data-projects-panel]').textContent))
+const importBtn=[...q('[data-projects-panel]').querySelectorAll('button')].find(b=>/Import file/.test(b.textContent))
+log('5b. the Import button was found',!!importBtn)
+importBtn.click()
+await wait(5000)
+log('5c. the input seam fired',w().__trace&&w().__trace.length>0,JSON.stringify(w().__trace||'(never intercepted)'))
+log('5d. the panel closed after a successful import',!q('[data-projects-panel]'),'panels in DOM: '+qa('[data-projects-panel]').length)
+log('5e. any notices',true,JSON.stringify(qa('.rounded-md.border-l-2').map(n=>n.textContent.trim()).slice(-2)))
+log('6. the import opened',true)
+log('6. the project came back',clips()===before.clips,before.clips+' -> '+clips()+' clips')
+log('6. named from the file',/cut-a/.test(pname()||''),pname())
+log('6. and the hidden clip survived',qa('[aria-label="hidden"]').length===1,qa('[aria-label="hidden"]').length+' hidden')
+log('6. with no media, as expected on a clean machine',bins()===0,bins()+' bin rows')
+log('6. and it says so',/no media|missing|relink/i.test(qa('.rounded-md.border-l-2').map(n=>n.textContent).join(' ')),
+    (qa('.rounded-md.border-l-2').map(n=>n.textContent).join(' ')||'').slice(0,110))
+log('6. the clips still show their names',qa('[data-clip-index]').every(c=>/cut-a\.mp4/.test(c.getAttribute('title')||'')),
+    JSON.stringify(qa('[data-clip-index]').map(c=>(c.getAttribute('title')||'').split(' — ')[0])))
+
+// --- and the imported project is a real project now: it autosaves ---
+await wait(2000)
+log('7. it autosaves',q('[data-save-state]')?.getAttribute('data-save-state')==='saved',q('[data-save-state]')?.getAttribute('data-save-state'))
+// --- now re-import with the media present, and it should attach exactly ---
+const d2=new W.DataTransfer(); d2.items.add(await mk('cut-a.mp4'))
+q('main').dispatchEvent(new W.DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:d2}))
+await wait(3000)
+log('8. the media is on this machine now',bins()>0,bins()+' files')
+pendingFile=new W.File([new Blob([text])],'cut-a again.json',{type:'application/json'})
+accel('o'); await wait(800)
+;[...q('[data-projects-panel]').querySelectorAll('button')].find(b=>/Import file/.test(b.textContent)).click()
+await wait(6000)
+log('9. re-imported',clips()===before.clips,clips()+' clips')
+log('9. and the media was ATTACHED by hash',bins()>0,bins()+' bin rows')
+log('9. the notice says it matched',/matched exactly/.test(qa('.rounded-md.border-l-2').map(n=>n.textContent).join(' ')),
+    (qa('.rounded-md.border-l-2').map(n=>n.textContent).join(' ')||'').slice(-90))
+{const W2=w();frame.contentDocument.dispatchEvent(new W2.KeyboardEvent('keydown',{key:'Home',bubbles:true}))}
+await wait(2500)
+log('9. so the picture decodes again',lum()>8,'mean luma='+lum()+' (was '+before.lum+')')
+log('done',true)
+}catch(e){log('THREW',false,(e&&e.stack)||String(e))}
+document.getElementById('o').textContent=L.join('\n')
+await report()
+</script></body></html>

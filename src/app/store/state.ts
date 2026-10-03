@@ -19,7 +19,7 @@
  */
 
 import { batch, createSignal } from 'solid-js'
-import { createStore } from 'solid-js/store'
+import { createStore, reconcile } from 'solid-js/store'
 
 import { applyLanes, type Lanes } from '../../model/project-store.js'
 import {
@@ -39,10 +39,12 @@ import {
 import { AudioEngine } from '../../audio/audio-engine.js'
 import { FrameCache } from '../../media/frame-cache.js'
 import { MediaLibrary } from '../../media/library.js'
+import { log } from '../../dev/debug.js'
 
 import { createAssets } from './assets.js'
 import { createEdits } from './edits.js'
 import { createHistory } from './history.js'
+import { createProjectStore } from './project-store.js'
 import { createSelection } from './selection.js'
 import { createTransport } from './transport.js'
 import { clampZoom, ZOOM_DEFAULT } from './zoom.js'
@@ -68,6 +70,23 @@ export function createAppState() {
   const [project, applyProject] = createStore<Project>(emptyProject())
   const [zoom, setZoomLevel] = createSignal(ZOOM_DEFAULT) // pixels per second
   const [notices, setNotices] = createSignal<Notice[]>([])
+
+  /**
+   * Bumped when the whole assets map is replaced.
+   *
+   * Solid's store setter **merges** into an object rather than replacing it, and
+   * this bit the media bin on the first saved project it ever opened: after
+   * `open()` the three asset keys were readable through the proxy — so the clip
+   * titles showed the right filenames — but `project.assets` was still the same
+   * object, and `<For each={Object.keys(project.assets)}>` never re-ran. The bin
+   * sat on its empty state with three files loaded, and it was not a media bug
+   * at all.
+   *
+   * `reconcile` does not help either: it mutates the existing object in place, so
+   * the reference is still stable. An explicit counter gives those consumers
+   * something to depend on. Same idea as `logRevision`.
+   */
+  const [assetsRevision, setAssetsRevision] = createSignal(0)
   /** Magnetic snapping. Off means every position is exactly where you put it. */
   const [snapping, setSnapping] = createSignal(true)
 
@@ -107,10 +126,66 @@ export function createAppState() {
     // A plain two-key set, never `reconcile` — see model/project-store.ts for
     // the media library that reconcile deleted.
     else applyLanes((lanes) => applyProject(lanes), a as Lanes, sel.prune)
+    // Every edit goes through here, so this is the only place that has to know
+    // a save is due. A caller that forgets to mark itself dirty is exactly how a
+    // feature like this silently stops working.
+    projects.markDirty()
   }
 
   const setLanes = (video: Clip[], audioClips: Clip[]): void =>
     setProject({ video, audio: audioClips })
+
+  /**
+   * Drop the open project's decoders.
+   *
+   * Called before a project is replaced. A `MediaLibrary` entry holds a live
+   * `Input` and a `CanvasSink`, so carrying them across a project switch leaks
+   * decoder resources for files the new project does not have — and keeps the
+   * old files visible in the bin, because a row is drawn whenever the library
+   * has an entry.
+   */
+  function releaseLibrary(): void {
+    library.clear()
+  }
+
+  /**
+   * Replace the entire project, for opening a saved one.
+   *
+   * Every top-level key is written **explicitly**, never through `reconcile`.
+   * This is the same trap that once deleted the media library: a setter given
+   * only some keys sets the missing ones to `undefined`, and a project with no
+   * `assets` key is a project whose clips point at nothing. Spelled out, key by
+   * key, because that is the only shape here that cannot be got wrong by
+   * omission.
+   */
+  function replaceProject(next: Project): void {
+    applyProject('version', next.version)
+    // `reconcile` — but only here, and only for this key.
+    //
+    // Every other key is set plainly, because a *partial* object through a
+    // reconciler is exactly what deleted the media library once: keys the target
+    // did not mention were set to `undefined`. That is why `video` and `audio`
+    // are written on their own lines rather than through this call.
+    //
+    // The assets map is the one place a plain set is wrong in the other
+    // direction. Solid *merges* object writes, so it can add keys but never
+    // remove them, and starting a new project left the previous project's files
+    // sitting in the bin — and, worse, written into the new project. Only a
+    // reconciler deletes, and here the target is a complete map, so there is
+    // nothing to lose.
+    applyProject('assets', reconcile(next.assets))
+    applyProject('video', next.video)
+    applyProject('audio', next.audio)
+    // `captions` is optional, so a plain set of `undefined` is not a deletion.
+    // Returning `undefined` from the updater is Solid's way to remove a key, and
+    // leaving the previous project's captions attached to a new one would be
+    // worse than losing them.
+    if (next.captions === undefined) applyProject('captions', () => undefined)
+    else applyProject('captions', next.captions)
+    // The merge above did not change the reference, so anything iterating the map
+    // has to be told. See the note on the signal.
+    setAssetsRevision((n) => n + 1)
+  }
 
   const history = createHistory(
     project,
@@ -119,6 +194,53 @@ export function createAppState() {
     (lanes) => setLanes(lanes.video, lanes.audio),
     () => sel.clear(),
   )
+
+  // Declared before `setProject` uses it, like `sel`. The read is a thunk so a
+  // save always sees the current project, never a captured copy.
+  const projects = createProjectStore({
+    read: () => project,
+    write: (next) => replaceProject(next),
+    rehydrate: async (asset, file) => {
+      try {
+        const entry = await library.add(file, asset.id)
+        if (entry.error) return { ok: false, reason: entry.error }
+        // Trust the probe over the stored metadata: a stale duration or frame
+        // count would disagree with the bytes silently, and the bytes are the
+        // truth. Handed back rather than written here, because the whole project
+        // is about to be written over the top.
+        return { ok: true, probed: entry.asset }
+      } catch (err) {
+        return { ok: false, reason: err instanceof Error ? err.message : String(err) }
+      }
+    },
+    fileFor: (assetId) => library.get(assetId)?.file ?? null,
+    libraryEntries: () =>
+      library.entries().map(([assetId, e]) => ({
+        assetId,
+        name: e.asset.name,
+        size: e.asset.size,
+        duration: e.asset.duration,
+        quickHash: e.quickHash,
+      })),
+    writeAsset: (asset) => setProject('assets', asset.id, asset),
+    releaseLibrary,
+    // Re-add a matched file under the id the *imported* project gave it. The
+    // asset metadata is written after the project, so it always reflects the
+    // probe rather than whatever the file claimed when it was exported.
+    restoreFile: async (file, assetId, name) => {
+      const entry = await library.add(file, assetId)
+      if (entry.error) {
+        log.warn('persistence: a relinked file would not load', { name, reason: entry.error })
+        return
+      }
+      setProject('assets', assetId, { ...entry.asset, name })
+    },
+    select: (clipIds) => sel.replaceAll(clipIds),
+    seek: (time) => transport.seek(time),
+    playhead: () => transport.playhead(),
+    selected: () => sel.ids(),
+    notify,
+  })
 
   const assets = createAssets({
     project,
@@ -135,6 +257,8 @@ export function createAppState() {
     playhead: () => transport.playhead(),
     snapping,
     pixelsPerSecond: zoom,
+    assetsRevision,
+    rememberMedia: (assetId, file) => void projects.rememberMedia(assetId, file),
   })
 
   // Declared before `edits` reads it, and only ever called once playback is
@@ -177,6 +301,8 @@ export function createAppState() {
 
   return {
     project,
+    /** Projects: what is open, whether it is saved, what is missing. */
+    projects,
 
     // --- selection ---
     // `selected` is the primary clip and `selection` is the whole set. Both

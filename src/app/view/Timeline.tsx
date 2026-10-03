@@ -14,7 +14,7 @@ import { createEffect, createSignal, Show } from 'solid-js'
 import type { Lane } from '../../model/project.js'
 import type { AppState } from '../store/state.js'
 import type { ContextMenuState } from './ContextMenu.js'
-import { DND_ASSET } from './AssetBin.js'
+import { DND_ASSET, draggedAssetId } from './AssetBin.js'
 import { Lane as LaneView, type DropPreview } from './timeline/Lane.js'
 import { Ruler } from './timeline/Ruler.js'
 import { Toolbar } from './timeline/Toolbar.js'
@@ -107,7 +107,9 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
     const time = state.dropTimeFor(timeAtClientX(event.clientX))
 
     if (internal) {
-      const assetId = dt.getData(DND_ASSET)
+      // `getData` is empty during `dragover` where protected mode is enforced,
+      // so fall back to the id captured at `dragstart`.
+      const assetId = dt.getData(DND_ASSET) || draggedAssetId()
       if (!assetId) return
       setDropAt({
         lane: targetLane(assetId, event.clientY),
@@ -135,7 +137,7 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
     const time = state.dropTimeFor(timeAtClientX(event.clientX))
     setDropAt(null)
 
-    const assetId = dt.getData(DND_ASSET)
+    const assetId = dt.getData(DND_ASSET) || draggedAssetId()
     if (assetId) {
       event.preventDefault()
       state.addAssetAt(assetId, targetLane(assetId, event.clientY), time, mode)

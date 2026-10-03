@@ -287,9 +287,12 @@ function duplicateSelected(): void {
   notify('info', copies.length === 1 ? 'Duplicated clip.' : `Duplicated ${copies.length} clips.`)
 }
 
+// No `history.commit()` here (or in `place`/`trim`): these run many times per
+// drag gesture, and the drag controller records the gesture once, at its first
+// movement. Committing per call made one drag fill the undo stack, and leaving
+// it out entirely made undo skip past the drag.
 function reorder(lane: Lane, from: number, to: number): void {
   if (from === to) return
-  history.commit()
   setProject(replace(moveClip(unwrap(project), lane, from, to)))
 }
 

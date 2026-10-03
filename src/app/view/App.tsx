@@ -21,6 +21,9 @@ import { createFullscreen } from './fullscreen.js'
 import { ExportDialog } from './ExportDialog.js'
 import { LogPanel } from './LogPanel.js'
 import { Preview } from './Preview.js'
+import { ProjectPanel } from './ProjectPanel.js'
+import { MediaPanel } from './MediaPanel.js'
+import { chooseOneMediaFile, chooseFileToRead, chooseSaveTarget, downloadText } from './transfer.js'
 import { ShortcutsPanel } from './ShortcutsPanel.js'
 import { formatTime } from './format.js'
 import type { AppState } from '../store/state.js'
@@ -42,6 +45,8 @@ export function App() {
   const [exportOpen, setExportOpen] = createSignal(false)
   const [logOpen, setLogOpen] = createSignal(false)
   const [keysOpen, setKeysOpen] = createSignal(false)
+  const [projectsOpen, setProjectsOpen] = createSignal(false)
+  const [mediaOpen, setMediaOpen] = createSignal(false)
 
   // One list, three consumers: the key handler, the keyboard panel, and the
   // topbar's own tooltips. Deriving all of them from it is what stops the app
@@ -52,7 +57,66 @@ export function App() {
     layout,
     fullscreen,
     openKeys: () => setKeysOpen(true),
+    openProjects: () => setProjectsOpen(true),
+    exportProject: () => void runExport(),
+    importProject: () => void runImport(),
+    openMedia: () => setMediaOpen(true),
   })
+
+  /**
+   * Export / import, shared by the topbar keys and the panel buttons.
+   *
+   * One implementation, because a shortcut that does something subtly different
+   * from the button next to it is worse than having neither.
+   */
+  const runExport = async (): Promise<void> => {
+    const suggested = state.projects.exportFilename()
+    // The picker is opened before the hashing: it needs a user gesture, and a
+    // gesture spent fingerprinting first is gone by the time it is called.
+    const target = await chooseSaveTarget(suggested)
+    if (target?.cancelled) return
+    try {
+      state.notify('info', 'Fingerprinting media for the export…')
+      const text = await state.projects.exportText()
+      if (target) await target.write(text)
+      else await downloadText(text, suggested)
+      state.notify(
+        /"quickHash": "[0-9a-f]{8}/.test(text) ? 'info' : 'warn',
+        `Exported ${suggested} — ${(text.length / 1024).toFixed(1)} KB.` +
+          (/"quickHash": "[0-9a-f]{8}/.test(text)
+            ? ' Media can be recognised automatically on another machine.'
+            : ' This browser could not hash files, so media will be matched by name and size.'),
+      )
+    } catch (err) {
+      // Writing to a chosen path, or hashing a file, can fail. Report it rather
+      // than leaving an unhandled rejection that explains nothing.
+      state.notify('error', `Export failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  const runImport = async (): Promise<void> => {
+    const chosen = await chooseFileToRead()
+    if (!chosen) return
+    try {
+      const report = await state.projects.importText(chosen.text)
+      setProjectsOpen(false)
+      const bits = [`Opened \u201c${report.projectName}\u201d \u2014 ${report.clipCount} clips.`]
+      if (report.attached.length > 0) bits.push(`${report.attached.length} matched exactly.`)
+      if (report.missing.length > 0) {
+        bits.push(`${report.missing.length} have no media here \u2014 the clips are intact, relink them from the list.`)
+      }
+      state.notify(report.missing.length > 0 ? 'warn' : 'info', bits.join(' '))
+      // Straight to the review screen when the import could not settle itself. The
+      // notice above says what happened; this is where the work is. Opening it
+      // only when there is something to do keeps the import path quiet when the
+      // project arrived whole.
+      if (report.missing.length > 0 || report.rejected.length > 0) setMediaOpen(true)
+    } catch (err) {
+      // A wrong file, a newer format, or a damaged edit: `parseProjectFile`
+      // writes a message meant for a person. It must reach one.
+      state.notify('error', err instanceof Error ? err.message : String(err))
+    }
+  }
 
   // Built ONCE. Calling createKeyHandler again for the removal would hand
   // removeEventListener a different function object, silently fail to unregister
@@ -65,11 +129,50 @@ export function App() {
   // panels themselves: opening a panel does not move focus, so a handler on the
   // panel would only fire for the user who happened to tab into it first. The
   // keyboard panel had no Escape at all for exactly that reason.
+  // Open whatever was open last time, or start a new project. Async and
+  // non-blocking on purpose: the app is usable while storage negotiates, and a
+  // failure here leaves an empty project rather than a blank screen.
+  onMount(() => {
+    void state.projects.boot()
+  })
+
+  /**
+   * Warn before leaving with unsaved work — and only then.
+   *
+   * The browser's "leave site?" prompt is the most annoying thing an app can do,
+   * and it becomes noise the moment it appears for no reason: people learn to
+   * click through it, which defeats it entirely. Autosave closes the window
+   * within 700 ms, so `dirty` is genuinely brief and this should almost never
+   * appear. `error` is the case that matters — a save that is failing will not
+   * save itself, and the user needs to know before they close the tab.
+   *
+   * The handler sets `returnValue`, which is what Chromium actually checks; the
+   * string is ignored by modern browsers but is required by the spec.
+   */
+  onMount(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent): void => {
+      const state_ = state.projects.saveState()
+      if (state_ !== 'dirty' && state_ !== 'error') return
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    onCleanup(() => window.removeEventListener('beforeunload', onBeforeUnload))
+  })
+
   onMount(() => {
     const onEscape = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
       if (keysOpen()) {
         setKeysOpen(false)
+        return
+      }
+      if (projectsOpen()) {
+        setProjectsOpen(false)
+        return
+      }
+      if (mediaOpen()) {
+        setMediaOpen(false)
         return
       }
       if (logOpen()) setLogOpen(false)
@@ -112,6 +215,7 @@ export function App() {
         onExport={() => setExportOpen(true)}
         onOpenLogs={() => setLogOpen(true)}
         onOpenKeys={() => setKeysOpen(true)}
+        onOpenProjects={() => setProjectsOpen(true)}
       />
 
       <div
@@ -178,6 +282,21 @@ export function App() {
       <Show when={keysOpen()}>
         <ShortcutsPanel shortcuts={shortcuts} onClose={() => setKeysOpen(false)} />
       </Show>
+      <Show when={projectsOpen()}>
+        <ProjectPanel
+          state={state}
+          onClose={() => setProjectsOpen(false)}
+          onExport={runExport}
+          onImport={runImport}
+          onMedia={() => {
+            setProjectsOpen(false)
+            setMediaOpen(true)
+          }}
+        />
+      </Show>
+      <Show when={mediaOpen()}>
+        <MediaPanel state={state} onClose={() => setMediaOpen(false)} pickFile={chooseOneMediaFile} />
+      </Show>
 
       <Notices notices={state.notices()} />
     </div>
@@ -196,6 +315,7 @@ function TopBar(props: {
   onExport: () => void
   onOpenLogs: () => void
   onOpenKeys: () => void
+  onOpenProjects: () => void
 }) {
   const state = props.state
   return (
@@ -222,6 +342,7 @@ function TopBar(props: {
         <Show when={state.notices().length > 0}>
           <span class="size-1.5 rounded-full bg-warn" title={state.notices().at(-1)?.text} />
         </Show>
+        <SaveIndicator state={props.state} onOpenProjects={props.onOpenProjects} />
         <button
           class="btn"
           onClick={props.onOpenLogs}
@@ -304,5 +425,63 @@ function Notices(props: { notices: readonly { kind: keyof typeof NOTICE_BORDER; 
         )}
       </For>
     </div>
+  )
+}
+
+/**
+ * What is open, and whether it is safe.
+ *
+ * Small on purpose. You cannot ship autosave without saying whether it ran — a
+ * silent autosave is the worst failure available for this feature, because the
+ * user believes their work is saved and finds out at reload that none of it was.
+ *
+ * The error state is the important one, and it is loud: when a save fails, the
+ * app says so and tells the user their work is still on screen.
+ */
+function SaveIndicator(props: { state: AppState; onOpenProjects: () => void }) {
+  const projects = () => props.state.projects
+  const text = (): string => {
+    switch (projects().saveState()) {
+      case 'dirty':
+        return 'unsaved'
+      case 'saving':
+        return 'saving…'
+      case 'error':
+        return 'NOT SAVED'
+      default:
+        return 'saved'
+    }
+  }
+  const hint = (): string => {
+    const p = projects()
+    if (p.saveState() === 'error') {
+      return `Saving failed: ${p.storageError() ?? 'unknown error'}. Your work is still on screen — export or copy it before reloading.`
+    }
+    if (p.storageError()) return p.storageError()!
+    const m = p.missing()
+    if (m.length > 0) return `${m.length} file(s) have no stored media — the clips are intact, re-import to see them`
+    if (p.saveState() === 'saved') return `Autosaved to this browser · ${projects().name()}`
+    return 'Autosaves a moment after you stop editing'
+  }
+
+  return (
+    <button
+      class="flex items-center gap-1.5 rounded px-1.5 py-0.5 text-[11px] text-muted transition-colors hover:bg-raised hover:text-fg"
+      onClick={props.onOpenProjects}
+      title={`${hint()} — click for the project list (⌘O)`}
+      data-save-state={projects().saveState()}
+      data-project-name={projects().name()}
+    >
+      <span
+        class="size-1.5 rounded-full"
+        classList={{
+          'bg-ok': projects().saveState() === 'saved',
+          'bg-warn': projects().saveState() === 'dirty' || projects().saveState() === 'saving',
+          'bg-danger': projects().saveState() === 'error',
+        }}
+      />
+      <span class="max-w-[18ch] truncate">{projects().name()}</span>
+      <span class="text-[10px] uppercase tracking-wide">{text()}</span>
+    </button>
   )
 }

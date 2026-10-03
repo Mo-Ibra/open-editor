@@ -31,6 +31,8 @@ description honest.
 | [media.md](media.md) | How does a dropped file become decodable frames? |
 | [export.md](export.md) | How does a timeline become a playable file? |
 | [development.md](development.md) | How do I run, test, and add a test? |
+| [traces/](traces/) | What actually happens when I press a key? |
+| [reading-order.md](reading-order.md) | I'm new. What do I read, in what order, and what can I skip? |
 | [reading-order.md](reading-order.md) | I want to understand this codebase. What do I read, in what order, and what can I skip? |
 | [traces/](traces/) | What actually happens when I press a key? |
 | [decisions/](decisions/) | Why is it built this way? |
