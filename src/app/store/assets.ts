@@ -30,7 +30,7 @@ import {
   type Lane,
   type Project,
 } from '../../model/project.js'
-import { collectTargets, nearestTarget, thresholdInSeconds } from '../../model/snapping.js'
+import { collectTargets, nearestTarget, targetLanes, thresholdInSeconds } from '../../model/snapping.js'
 import type { Selection } from './selection.js'
 import type { History } from './history.js'
 
@@ -57,8 +57,8 @@ export interface AssetSlice {
   addAssetToTimeline: (assetId: AssetId) => void
   /** Add to a lane at a chosen position — used by drag-and-drop. */
   addAssetAt: (assetId: AssetId, lane: Lane, start: number, mode?: DropMode) => void
-  /** Where a drop would land once snapped, for the indicator. */
-  dropTimeFor: (raw: number) => number
+  /** Where a drop aimed at `lane` would land once snapped, for the indicator. */
+  dropTimeFor: (raw: number, lane: Lane) => number
   /** Whether a file can go on a lane — drives the drop highlight. */
   laneAccepts: (assetId: AssetId, lane: Lane) => boolean
   addClip: (assetId: AssetId) => void
@@ -100,6 +100,13 @@ export interface AssetDeps {
   snapping: () => boolean
   /** Timeline pixels per second, so the snap threshold is a fixed *screen* distance. */
   pixelsPerSecond: () => number
+  /**
+   * The two independent snap toggles, so a drop can honour them the same way a
+   * drag does. Without these `dropTimeFor` asked only "is either on?" and
+   * collected from both lanes regardless.
+   */
+  clipSnap: Accessor<boolean>
+  laneSnap: Accessor<boolean>
 }
 
 export function createAssets(deps: AssetDeps): AssetSlice {
@@ -115,6 +122,19 @@ export function createAssets(deps: AssetDeps): AssetSlice {
   /** Peaks per asset, computed once and reused. The waveform redraws on every
    *  playhead move, so recomputing would make scrubbing unusable. */
   const [peaksBy, setPeaksBy] = createStore<Record<string, Peak[]>>({})
+  /**
+   * Peak computations in flight, keyed by asset.
+   *
+   * `peaksBy[assetId]` is only set once the first pass *finishes*, so without
+   * this every caller arriving during a decode started its own — and
+   * `computePeaks` walks the entire decoded buffer. The waveform effect asks for
+   * every audio-bearing clip, so one slow decode used to turn into a burst of
+   * full-buffer passes.
+   *
+   * Same shape as `AudioEngine.#bufferFor`, and for the same reason: the promise
+   * is the cache, because the work is already in flight.
+   */
+  const peaksPending = new Map<string, Promise<Peak[] | undefined>>()
 
   /**
    * Import files, returning the ids that came out usable.
@@ -274,12 +294,23 @@ export function createAssets(deps: AssetDeps): AssetSlice {
     )
   }
 
-  /** Where a drop of `assetId` on `lane` would land, snapped. */
-  function dropTimeFor(raw: number): number {
+  /**
+   * Where a drop of `assetId` on `lane` would land, snapped.
+   *
+   * `lane` is not decoration. The two snap toggles mean "align to clips in this
+   * row" and "align to clips in the other row", so which lanes are eligible
+   * targets depends on which lane the drop is aimed at — and this used to collect
+   * from **both**, unconditionally. With clip snap switched off in the toolbar, a
+   * dropped file still snapped to same-lane clip edges: a toggle that was a lie
+   * for drops. The policy is `targetLanes`, shared with the drag controller,
+   * because the two answers have to be the same answer.
+   */
+  function dropTimeFor(raw: number, lane: Lane): number {
     if (!snapping()) return Math.max(0, raw)
     const targets = collectTargets(unwrap(project), {
       playhead: playhead(),
       includePlayhead: true,
+      lanes: targetLanes(lane, deps.clipSnap(), deps.laneSnap()),
     })
     const threshold = thresholdInSeconds(14, pixelsPerSecond())
     const hit = nearestTarget(raw, targets, threshold)
@@ -308,19 +339,38 @@ export function createAssets(deps: AssetDeps): AssetSlice {
    * one pass over samples and nothing more.
    */
   async function peaksFor(assetId: AssetId): Promise<Peak[] | undefined> {
-    if (peaksBy[assetId]) return peaksBy[assetId]
+    const done = peaksBy[assetId]
+    if (done) return done
+
+    // Shared while in flight, so N callers cost one pass rather than N.
+    const running = peaksPending.get(assetId)
+    if (running) return running
+
     const entry = library.get(assetId)
     if (!entry?.audioTrack) return undefined
+
+    const promise = (async () => {
+      try {
+        const buffer = await audio.decodedAudio(assetId)
+        if (!buffer) return undefined
+        const peaks = computePeaks(buffer)
+        setPeaksBy(assetId, peaks)
+        log.debug(`peaks: ${peaks.length} buckets for ${entry.asset.name}`)
+        return peaks
+      } catch (err) {
+        log.warn(`peaks failed for ${entry.asset.name}`, String(err))
+        return undefined
+      }
+    })()
+
+    peaksPending.set(assetId, promise)
+    // Cleared either way. Left set on success it would be a second cache with a
+    // worse lifetime — and a failed pass must not be cached forever, which is the
+    // same rule `AudioEngine.#bufferFor` follows.
     try {
-      const buffer = await audio.decodedAudio(assetId)
-      if (!buffer) return undefined
-      const peaks = computePeaks(buffer)
-      setPeaksBy(assetId, peaks)
-      log.debug(`peaks: ${peaks.length} buckets for ${entry.asset.name}`)
-      return peaks
-    } catch (err) {
-      log.warn(`peaks failed for ${entry.asset.name}`, String(err))
-      return undefined
+      return await promise
+    } finally {
+      peaksPending.delete(assetId)
     }
   }
 

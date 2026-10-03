@@ -23,7 +23,7 @@
  *     own edge and refuses to move at all.
  */
 
-import { clipDuration, clipStart, laneOf, type Clip, type Lane, type Project } from './project.js'
+import { clipDuration, clipStarts, laneOf, type Clip, type Lane, type Project } from './project.js'
 import type { SilenceRegion } from '../media/peaks.js'
 
 export type SnapKind = 'clip-start' | 'clip-end' | 'playhead' | 'timeline-start' | 'silence'
@@ -68,11 +68,14 @@ export function collectTargets(project: Project, options: CollectOptions): SnapT
 
   for (const lane of options.lanes ?? (['video', 'audio'] as const)) {
     const clips = laneOf(project, lane)
+    // One pass per lane. This is called on every trim `pointermove`, and it used
+    // to ask `clipStart` per clip, so it was the hottest quadratic in the app.
+    const starts = clipStarts(clips)
     for (let i = 0; i < clips.length; i++) {
-      const clip = clips[i]!
-      const start = clipStart(clips, i)
-      targets.push({ time: start, kind: 'clip-start', lane, clipId: clip.id })
-      targets.push({ time: start + clipDuration(clip), kind: 'clip-end', lane, clipId: clip.id })
+      const start = starts[i]!
+      const clipId = clips[i]!.id
+      targets.push({ time: start, kind: 'clip-start', lane, clipId })
+      targets.push({ time: start + clipDuration(clips[i]!), kind: 'clip-end', lane, clipId })
     }
   }
 
@@ -172,6 +175,24 @@ export interface MoveSnap {
  * nearer to a target. The clip's own edges are excluded, so it cannot latch onto
  * itself and stick.
  *
+ * **There is deliberately no end-only target list.** There used to be one: the
+ * next clip's start, so a clip could "butt forward" against it. It was dead code,
+ * and dead in a way worth recording:
+ *
+ * - the next clip is *pushed* by the move, so it travels with the drag — and
+ *   ADR-11's own rule is that a target which travels with the drag is the thing
+ *   that makes snapping vibrate. `movingInLane` excludes those clips from
+ *   `targets` for exactly this reason, and this list was the one place they came
+ *   back in;
+ * - the list was built once at pointerdown, alongside `targets`, so its *time* was
+ *   frozen at the drag's start while the clip it named moved away. Measured: after
+ *   about 0.12s of drag — one snap radius at 80px/s — it was permanently out of
+ *   range and could never fire again;
+ * - and "butt forward" has no meaning in this model anyway. Position is derived,
+ *   so a clip dragged right *pushes* its successor along rather than running into
+ *   it: the successor is always exactly one clip-length away. There is no collision
+ *   to butt against, so there was nothing for the target to pull towards.
+ *
  * This is the counterpart to `snapTrimEdge`; together they are the whole
  * snapping surface. Moving snaps now (see ADR-11), where it once did not.
  */
@@ -182,13 +203,6 @@ export function snapMove(
   threshold: number,
   exclude?: { clipId?: string | null; lane?: Lane | null },
   locked?: SnapTarget | null,
-  /**
-   * Targets only the **end** edge may pull to — the next clip's start, so a
-   * clip can still butt forward. Kept separate because that clip is pushed by
-   * the move: allowing its start as a target for the *start* edge would let the
-   * moving clip overlap it, and its end is meaningless.
-   */
-  endTargets: SnapTarget[] = [],
 ): MoveSnap | null {
   const edges: { edge: 'start' | 'end'; time: number }[] = [
     { edge: 'start', time: proposedStart },
@@ -209,11 +223,7 @@ export function snapMove(
   let best: MoveSnap | null = null
   let bestDistance = Infinity
   for (const e of edges) {
-    let target = nearestTarget(e.time, targets, threshold, exclude, null)
-    if (e.edge === 'end' && endTargets.length > 0) {
-      const extra = nearestTarget(e.time, endTargets, threshold, exclude, null)
-      if (extra && (!target || Math.abs(extra.time - e.time) < Math.abs(target.time - e.time))) target = extra
-    }
+    const target = nearestTarget(e.time, targets, threshold, exclude, null)
     if (!target) continue
     const distance = Math.abs(target.time - e.time)
     if (distance < bestDistance) {
@@ -253,6 +263,24 @@ export function snapPlayhead(
 /** Convert a pixel tolerance into seconds at the current zoom. */
 export function thresholdInSeconds(pixels: number, pixelsPerSecond: number): number {
   return pixelsPerSecond > 0 ? Math.abs(pixels) / pixelsPerSecond : 0
+}
+
+/**
+ * Which lanes contribute clip edges as snap targets for a drag in `lane`.
+ *
+ * `clipSnap` contributes the dragged clip's own lane (align within a row);
+ * `laneSnap` contributes the other one (align picture to sound). The two are
+ * independent toggles, so either, both, or neither can be on.
+ *
+ * **Shared, because two callers need it and they must agree.** A drag and a drop.
+ * When they disagreed, the drop cue snapped to same-lane clip edges with clip
+ * snap visibly switched off in the toolbar — a toggle that was a lie for drops.
+ */
+export function targetLanes(lane: Lane, clipSnap: boolean, laneSnap: boolean): Lane[] {
+  const out: Lane[] = []
+  if (clipSnap) out.push(lane)
+  if (laneSnap) out.push(lane === 'video' ? 'audio' : 'video')
+  return out
 }
 
 /** Human-readable label for the guide line. */

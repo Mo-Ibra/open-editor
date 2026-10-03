@@ -388,6 +388,167 @@ console.log('ref-binding assertions passed')
 }
 
 /**
+ * A move drag must **clamp**, not reorder.
+ *
+ * `test/timeline.test.ts` pins the arithmetic — that `placeClip` stops a
+ * leftward drag at its predecessor and pushes successors on a rightward one.
+ * That test calls the model directly, so it proves the arithmetic is *possible*
+ * and not that the handler *does* it. This closes that gap: the move branch must
+ * place the dragged clip in its own slot and must **not** call `reorder`, which
+ * is what threw the left-hand neighbour to the far side of the lane.
+ *
+ * Checked from the source, because the alternative is a browser.
+ */
+{
+  const drag = readFileSync(new URL('../src/app/view/timeline/use-timeline-drag.ts', import.meta.url), 'utf8')
+  const branch = drag.match(/case 'move':[\s\S]*?case 'trim-in':/)?.[0] ?? ''
+  assert.ok(branch, "the move branch of onPointerMove should exist")
+
+  assert.match(
+    branch,
+    /state\.place\(drag\.lane, drag\.index, start\)/,
+    'the move branch must place the dragged clip and let placeClip clamp it',
+  )
+  assert.doesNotMatch(
+    branch,
+    /state\.reorder\(/,
+    'a move must never reorder — crossing a neighbour made the left clip jump away',
+  )
+  console.log('  a move places and clamps, and never reorders')
+}
+
+/**
+ * A trim handle must move the playhead with it.
+ *
+ * The preview followed a trim-*in* by accident — `sourceTimeAt` reads `clip.in`,
+ * so dragging that handle changed the source time being decoded. `out` is not in
+ * that expression, so a trim-*out* froze the picture for the whole gesture, and
+ * once the new out-point passed the playhead the clip ended before the playhead
+ * did and the preview showed whatever came next.
+ *
+ * Asserted from the source: the handler needs a live `PointerEvent` and a canvas,
+ * and neither exists here.
+ */
+{
+  const drag = readFileSync(new URL('../src/app/view/timeline/use-timeline-drag.ts', import.meta.url), 'utf8')
+  const trim = drag.match(/case 'trim-in':[\s\S]*?\n {6}\}/)?.[0] ?? ''
+  assert.ok(trim, "the trim branch of onPointerMove should exist")
+
+  assert.match(
+    trim,
+    /state\.seek\(/,
+    'a trim must move the playhead, or the preview shows a frame that is no longer being cut',
+  )
+  // One frame inside for a trim-out, because the handle sits *at* the clip's end
+  // and `clipAtLane` is half-open: seeking there lands outside the clip.
+  assert.match(
+    trim,
+    /drag\.kind === 'trim-out' \? Math\.max\(laneStartTime, sourceT - frame\)/,
+    'a trim-out must hold the playhead inside the clip, or it lands on the next one',
+  )
+  assert.match(trim, /const frame = 1 \/ state\.outputFps\(\)/, 'and one output frame is the right distance')
+
+  // The move branch deliberately does NOT seek: dragging a clip must not move the
+  // playhead, which is what every editor does and what makes the playhead a
+  // measurement rather than a follower.
+  const move = drag.match(/case 'move':[\s\S]*?case 'trim-in':/)?.[0] ?? ''
+  assert.doesNotMatch(
+    move,
+    /state\.seek\(/,
+    'dragging a clip must not drag the playhead with it — that is a different gesture',
+  )
+  console.log('  a trim moves the playhead; a move does not')
+}
+
+/**
+ * There is no end-only snap target, and there must not be one again.
+ *
+ * `snapMove` used to take a second list of targets that only the *end* edge could
+ * pull to — the next clip's start, so a clip could butt forward against it. It was
+ * dead code three times over:
+ *
+ *  - the clip it named is *pushed* by the move, so it travels with the drag, and
+ *    ADR-11's rule is that a target which travels with the drag is the vibration;
+ *  - the list was captured once at pointerdown, so its time froze while its clip
+ *    walked away — out of range after about a tenth of a second of drag;
+ *  - and a derived position means a clip dragged right *pushes* its successor
+ *    rather than colliding with it, so there is nothing to butt against.
+ *
+ * Removing a parameter is not something a behavioural test notices, so this is
+ * here to keep it removed.
+ */
+{
+  const model = readFileSync(new URL('../src/model/snapping.ts', import.meta.url), 'utf8')
+  const drag = readFileSync(new URL('../src/app/view/timeline/use-timeline-drag.ts', import.meta.url), 'utf8')
+
+  const snapMove = model.match(/export function snapMove\([\s\S]*?\): MoveSnap \| null/)?.[0] ?? ''
+  assert.ok(snapMove, 'snapMove should exist')
+  assert.doesNotMatch(
+    snapMove,
+    /endTargets/,
+    'snapMove must not take an end-only target list — its clip travels with the drag',
+  )
+  assert.doesNotMatch(drag, /endSnapTargets/, 'and the drag controller must not build one')
+  assert.doesNotMatch(drag, /kind === 'clip-start' && t\.clipId === next\.id/, 'nor filter one out of the target list')
+
+  // And the reason it was removed should stay written down, or it will look like
+  // an oversight rather than a decision.
+  assert.match(
+    model,
+    /no end-only target list/,
+    'the reason snapMove has no end-only targets belongs in the file, next to it',
+  )
+  console.log('  there is no end-only snap target, and the reason why is recorded')
+}
+
+/**
+ * Waveform previews must be warmed by *asset*, not by clip.
+ *
+ * The effect in `Timeline.tsx` that asks for peaks used to iterate the audio lane.
+ * Keyed on the lane it re-ran on every `pointermove` of an audio-lane drag —
+ * because a drag rewrites the lane — and `peaksFor` only short-circuits once the
+ * first pass has *finished*. Sixty entries in a one-second drag, each walking the
+ * whole decoded buffer.
+ *
+ * Peaks belong to a file. A clip's trim says nothing about its waveform, so the
+ * work has to be keyed on something a trim cannot move.
+ */
+{
+  const timeline = readFileSync(new URL('../src/app/view/Timeline.tsx', import.meta.url), 'utf8')
+  const warm = timeline.match(/createEffect\(\(\) => \{[\s\S]*?\n {2}\}\)/)?.[0] ?? ''
+  assert.ok(warm, 'the peaks-warming effect should exist')
+
+  assert.match(
+    warm,
+    /state\.assetIds\(\)/,
+    'the effect must be keyed on the asset list, or an audio-lane drag re-enters it per frame',
+  )
+  assert.doesNotMatch(
+    warm,
+    /project\.audio/,
+    'iterating the audio lane is the bug: a drag rewrites the lane 60 times a second',
+  )
+  assert.match(warm, /peaksFor/, 'and it must still ask for the peaks')
+
+  // The other half: while a pass is in flight, further callers join it rather
+  // than starting their own. Asserted structurally as well as behaviourally,
+  // because the map is the whole mechanism.
+  const assets = readFileSync(new URL('../src/app/store/assets.ts', import.meta.url), 'utf8')
+  assert.match(assets, /peaksPending/, 'the in-flight map should exist')
+  assert.match(
+    assets,
+    /const running = peaksPending\.get\(assetId\)\n\s*if \(running\) return running/,
+    'a caller arriving during a decode must join the run already in flight',
+  )
+  assert.match(
+    assets,
+    /finally \{\s*\n\s*peaksPending\.delete\(assetId\)/,
+    'and the entry must be cleared afterwards, so a failed pass is not cached forever',
+  )
+  console.log('  waveform peaks are warmed per asset, and shared while in flight')
+}
+
+/**
  * Ctrl+wheel must be handled natively, and non-passively.
  *
  * Two failure modes, neither visible to a type checker:
@@ -817,15 +978,58 @@ function repoRootFor(): string {
   const shortcuts = read('src/app/commands/shortcuts.ts')
   const exporter = read('src/output/exporter.ts')
 
-  // --- hiding a clip must beat a frame that is already decoding -----------
+  // --- a frame that is already decoding must not outlive its clip ----------
   // Intermittent by nature: it depended on whether the decode outlasted the
   // keystroke, so it passed one run and failed the next. Hiding does not move
-  // the playhead, so the existing staleness check could not see it.
+  // the playhead, so the staleness check cannot see it — and neither can it see a
+  // *delete*, which is the same fault by another route.
+  //
+  // This used to assert a re-check for `hidden` only, which left the other two
+  // ways a clip stops being drawable free to paint over the black. It now
+  // requires the re-check to go through the one function that owns the decision,
+  // so widening the decision widens the guard with it.
   assert.match(
     preview,
-    /const current = clipAtLane\(state\.project\.video, forTime\)[\s\S]{0,200}current\?\.clip\.hidden/,
-    'a decoded frame must re-check whether its clip was hidden while it was in flight',
+    /const current = paintIntentAt\(state\.project\.video, forTime, unavailable\)/,
+    'a decoded frame must re-check what to paint, through the function that decides it',
   )
+  assert.match(
+    preview,
+    /paintIntentAt\(state\.project\.video, forTime, unavailable\)[\s\S]{0,400}current\.kind === 'blank'/,
+    'and it must paint the blank rather than let the decoded frame through',
+  )
+  assert.doesNotMatch(
+    preview,
+    /current\?\.clip\.hidden/,
+    'a hidden-only re-check is not enough: a deleted clip leaves a gap, which is blank too',
+  )
+
+  // --- every blank path must paint, and only a fault may be reported -------
+  // A gap used to `explain` and return, which left the previous clip's last frame
+  // frozen on the canvas — while the exporter wrote black for the same gap. This
+  // is the ADR-1 drift the single render function exists to prevent, and it is
+  // only visible in a browser, so it is guarded from the source.
+  {
+    const intent = read('src/app/view/preview/paint-intent.ts')
+    assert.match(
+      preview,
+      /function paintBlank\(fault: string \| null, at: number\)/,
+      'the preview should have one place that paints black',
+    )
+    const paintBlank = preview.match(/function paintBlank[\s\S]*?\n {4}\}/)?.[0] ?? ''
+    assert.match(paintBlank, /renderBlank\(/, 'and it must actually paint, not just set a flag')
+    assert.match(paintBlank, /if \(fault\)/, 'a fault explains itself; a deliberate blank stays silent')
+    assert.match(
+      intent,
+      /if \(!loc\) return \{ kind: 'blank', fault: null \}/,
+      'a gap is an edit, not a fault — so it is black and silent',
+    )
+    assert.match(
+      intent,
+      /if \(loc\.clip\.hidden\) return \{ kind: 'blank', fault: null \}/,
+      'and so is a hidden clip',
+    )
+  }
 
   // --- fullscreen must be registered from a ref, not onMount --------------
   // `onMount` runs once per component; the stage lives in a `<Show>` that

@@ -34,7 +34,15 @@ export function ticks(duration: number, zoom: number): number[] {
 
 export function formatTick(t: number): string {
   if (t < 1) return `${t.toFixed(t < 0.25 ? 2 : 1)}s`
-  const m = Math.floor(t / 60)
-  const s = Math.round(t % 60)
+  // Round the *total*, then derive both parts. Rounding `t % 60` on its own can
+  // reach 60 and never carries: 119.5 gave `m = 1, s = 60`, so the ruler printed
+  // `1:60`, which is not a timecode.
+  //
+  // Reachable rather than theoretical — `tickInterval(400)` is 0.5, so zooming in
+  // puts half-second ticks under the minute labels on any timeline over two
+  // minutes, and `ticks(130, 400)` contains exactly one `1:60`.
+  const total = Math.round(t)
+  const m = Math.floor(total / 60)
+  const s = total % 60
   return m > 0 ? `${m}:${String(s).padStart(2, '0')}` : `${s}s`
 }

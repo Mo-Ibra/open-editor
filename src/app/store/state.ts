@@ -23,8 +23,7 @@ import { createStore, produce, reconcile } from 'solid-js/store'
 
 import { applyLanes, type Lanes } from '../../model/project-store.js'
 import {
-  clipDuration,
-  clipStart,
+  clipStarts,
   emptyProject,
   laneDuration,
   laneOf,
@@ -126,16 +125,28 @@ export function createAppState() {
   /**
    * The only way the project changes.
    *
-   * Wrapping the store setter is deliberate: a selection outliving the clip it
-   * names is a live hazard, because every batch action resolves its targets
-   * through it. One deleted clip would otherwise stay selected and silently
-   * swallow the next Delete. Pruning here means no caller can forget.
+   * Wrapping the store setter is deliberate, and it is doing two jobs rather
+   * than one. Both are the same job: **nothing the project owns is allowed to
+   * outlive it.**
+   *
+   * A selection outliving the clip it names is a live hazard, because every
+   * batch action resolves its targets through it. One deleted clip would
+   * otherwise stay selected and silently swallow the next Delete. Pruning here
+   * means no caller can forget.
+   *
+   * So is a playhead outliving the timeline. The lanes can shrink under a
+   * stationary playhead — a delete, clearing a lane, dropping a file whose clips
+   * were the tail — and `seek`/`advanceClock` both clamp, yet neither of them
+   * runs when the *lanes* change. Left alone, the playhead sat at 20s on a
+   * timeline of nothing, drawn at x=1600 inside a 600px track: clipped out of
+   * sight and unreachable by dragging.
    */
   function setProject(lanes: Lanes): void
   function setProject(lane: Lane, clips: Clip[]): void
   function setProject(key: 'assets', assetId: string, asset: Asset): void
   function setProject(a: unknown, b?: unknown, c?: unknown): void {
-    // Asset writes cannot orphan a clip selection, so they skip the prune.
+    // Asset writes cannot orphan a clip selection, or move a clip, so they skip
+    // both — there is nothing for either to do.
     if (a === 'assets') applyProject(a as 'assets', b as string, c as Asset)
     else if (typeof a === 'string') applyProject(a as Lane, b as Clip[])
     // A plain two-key set, never `reconcile` — see model/project-store.ts for
@@ -145,6 +156,10 @@ export function createAppState() {
     // a save is due. A caller that forgets to mark itself dirty is exactly how a
     // feature like this silently stops working.
     projects.markDirty()
+    // And the only place that has to know the timeline just changed length.
+    // Deferred like `projects`: `transport` is built last, and a closure reading
+    // it is only ever called once construction has finished.
+    transport.clampPlayhead()
   }
 
   const setLanes = (video: Clip[], audioClips: Clip[]): void =>
@@ -200,6 +215,11 @@ export function createAppState() {
     // The merge above did not change the reference, so anything iterating the map
     // has to be told. See the note on the signal.
     setAssetsRevision((n) => n + 1)
+    // Opening a project is the *other* way the timeline can change length under a
+    // stationary playhead, and this function deliberately bypasses `setProject`
+    // key by key — so it has to say so itself. Opening a shorter project with the
+    // playhead where the old one ended is the ordinary way to land out of range.
+    transport.clampPlayhead()
   }
 
   const history = createHistory(
@@ -282,6 +302,8 @@ export function createAppState() {
     // other at construction time — the same trick the transport slice uses.
     playhead: () => transport.playhead(),
     snapping,
+    clipSnap,
+    laneSnap,
     pixelsPerSecond: zoom,
     assetsRevision,
     rememberMedia: (assetId, file) => void projects.rememberMedia(assetId, file),
@@ -313,13 +335,32 @@ export function createAppState() {
   // --- timeline geometry --------------------------------------------------
   // The only view maths that is neither editing nor transport.
 
-  function clipRect(lane: Lane, index: number): { left: number; width: number } {
-    const clips = laneOf(project, lane)
-    return {
-      left: clipStart(clips, index) * zoom(),
-      width: clipDuration(clips[index]!) * zoom(),
-    }
-  }
+  /**
+   * Every clip's timeline start in a lane, in one pass.
+   *
+   * This used to be a `clipRect(lane, index)` that each `Clip` called for
+   * itself, so a repaint asked for every clip's `clipStart` and each one summed
+   * the lane from zero. `<For>` renders N clips, so the cost was quadratic *per
+   * frame*.
+   *
+   * **A plain function, not a memo — the caller owns the memo.** The first
+   * version of this optimisation declared a `createMemo` lazily and cached it in
+   * a closure here. That is a Solid trap: the memo is owned by the `Lane` whose
+   * render created it, so when `Lane` unmounts — a panel toggle, a layout
+   * change, HMR — Solid disposes it, but the closure still hands out the dead
+   * reference and a disposed memo returns its last value forever. After one
+   * remount the timeline was frozen: split a clip in two and the right half was
+   * drawn wherever the *old* layout put that index, leaving a real gap that no
+   * amount of re-splitting cleared. A reload fixed it until the next remount,
+   * which is exactly the intermittent shape it was reported with.
+   *
+   * So the pass lives here and the *memo* lives in `Lane`, whose lifetime the
+   * position shares. Still one pass per lane change, still derived and stored
+   * nowhere, but owned by a component that cannot outlive its own dependency.
+   * `test/components/lane-split.test.tsx` remounts the lane and then splits, so
+   * this cannot come back.
+   */
+  const clipStartsFor = (lane: Lane): number[] => clipStarts(laneOf(project, lane))
 
   const timeToX = (time: number) => time * zoom()
   const xToTime = (x: number) => x / zoom()
@@ -432,7 +473,9 @@ export function createAppState() {
     notify,
 
     // --- geometry ---
-    clipRect,
+    // `clipRect` was replaced by `clipStartsFor`: one memoised pass per lane
+    // instead of one lane-wide sum per clip per frame. See the note above.
+    clipStartsFor,
     laneOf,
     laneLength,
     timeToX,

@@ -8,7 +8,7 @@
  * pairs edit together by default; breaking the link is one click.
  */
 
-import { For } from 'solid-js'
+import { createMemo, For } from 'solid-js'
 import { laneOf, type Lane } from '../../../model/project.js'
 import { DND_ASSET, draggedAssetId } from '../AssetBin.js'
 import type { AppState } from '../../store/state.js'
@@ -43,6 +43,15 @@ export interface LaneProps {
 export function Lane(props: LaneProps) {
   const state = props.state
   const clips = () => laneOf(state.project, props.lane)
+  /**
+   * Every clip's timeline start, once per lane change.
+   *
+   * The alternative was each `Clip` asking for its own position, and every one of
+   * those summing the lane from zero — quadratic on every repaint, and a repaint
+   * happens on every `pointermove` of a drag. This memo recomputes only when the
+   * lane actually changes.
+   */
+  const starts = createMemo(() => state.clipStartsFor(props.lane))
   const preview = (): DropPreview | null => {
     const at = props.dropAt()
     return at?.lane === props.lane ? at : null
@@ -84,7 +93,7 @@ export function Lane(props: LaneProps) {
     event.dataTransfer.dropEffect = mode === 'insert' ? 'copy' : 'move'
     props.setDropAt({
       lane: props.lane,
-      time: state.dropTimeFor(raw),
+      time: state.dropTimeFor(raw, props.lane),
       duration: asset?.duration ?? 0,
       assetId,
       mode,
@@ -103,7 +112,7 @@ export function Lane(props: LaneProps) {
     const mode = event.shiftKey ? 'insert' : 'overwrite'
     // Snapped here as well as in the preview, so what was drawn is what happens
     // even if the pointer moved a pixel between the last dragover and the drop.
-    const time = state.dropTimeFor(timeAtClientX(event.clientX))
+    const time = state.dropTimeFor(timeAtClientX(event.clientX), props.lane)
     props.setDropAt(null)
     state.addAssetAt(assetId, props.lane, time, mode)
   }
@@ -141,7 +150,14 @@ export function Lane(props: LaneProps) {
       <DropCue preview={preview} lane={props.lane} state={state} />
       <For each={clips()}>
         {(clip, index) => (
-          <Clip clip={clip} index={index()} state={state} lane={props.lane} height={props.height - 12} />
+          <Clip
+            clip={clip}
+            index={index()}
+            start={starts()[index()] ?? 0}
+            state={state}
+            lane={props.lane}
+            height={props.height - 12}
+          />
         )}
       </For>
     </div>

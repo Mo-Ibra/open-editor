@@ -24,9 +24,20 @@ export function Clip(props: {
   state: AppState
   lane: Lane
   height: number
+  /**
+   * This clip's timeline start, in seconds.
+   *
+   * Passed in rather than asked for. `Clip` used to call
+   * `state.clipRect(lane, index)` for itself, and each of those summed the lane
+   * from zero — so a repaint cost O(n²) and ran on every drag frame. The lane
+   * passes one memoised array to all of its clips instead (see `Lane.tsx`).
+   */
+  start: number
 }) {
   const state = props.state
-  const rect = () => state.clipRect(props.lane, props.index)
+  // Only the zoom is per-clip; the position came down with the lane.
+  const left = () => props.start * state.zoom()
+  const width = () => Math.max(0, props.clip.out - props.clip.in) * state.zoom()
   const asset = () => state.getAsset(props.clip.assetId)
   const isSelected = () => state.isSelected(props.clip.id)
   const isPrimary = () => state.primary() === props.clip.id
@@ -57,8 +68,8 @@ export function Clip(props: {
       data-clip-index={props.index}
       data-clip-id={props.clip.id}
       style={{
-        left: `${rect().left}px`,
-        width: `${Math.max(2, rect().width)}px`,
+        left: `${left()}px`,
+        width: `${Math.max(2, width())}px`,
         height: `${props.height}px`,
         // Tint is a low-chroma wash; the waveform and the picture carry the colour.
         // A switched-off clip is desaturated as well as badged. The badge is the

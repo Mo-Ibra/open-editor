@@ -21,6 +21,7 @@ import {
   laneDuration,
   linkedPartner,
   moveClip,
+  moveSelectionTo,
   parseProject,
   placeClip,
   projectDuration,
@@ -143,10 +144,45 @@ const withAsset = (a = asset()): Project => ({ ...emptyProject(), assets: { [a.i
   assert.equal(laneDuration(split.video), 20, 'total duration is conserved')
   assert.equal(laneDuration(split.audio), 20, 'audio duration is conserved')
 
-  // The link survives the split, so further edits still pair up.
-  assert.equal(v[0]!.linkId, v[1]!.linkId)
-  assert.equal(a[0]!.linkId, v[0]!.linkId, 'all four still share the link')
+  // Each side stays a *pair*, not one group of four. The left halves keep the
+  // original id; the right halves get a fresh one shared between them. Letting
+  // all four share one id is what broke the second split: `linkedPartner` could
+  // no longer tell video-right's audio partner from video-left, returned the
+  // same-lane left half, and the audio was never cut again.
+  assert.equal(v[0]!.linkId, a[0]!.linkId, 'the left halves are still linked to each other')
+  assert.equal(v[1]!.linkId, a[1]!.linkId, 'the right halves are linked to each other')
+  assert.ok(v[1]!.linkId, 'the right half is linked')
+  assert.notEqual(v[1]!.linkId, v[0]!.linkId, 'the two pairs are separate link groups')
   assert.notEqual(v[0]!.id, v[1]!.id, 'the halves are distinct clips')
+
+  // And the defining property, stated the way the UI needs it: the partner of
+  // the right video half is the right audio half, not the left video half.
+  assert.equal(linkedPartner(split, v[1]!)?.id, a[1]!.id, 'the right video half pairs with the right audio half')
+  assert.equal(linkedPartner(split, v[0]!)?.id, a[0]!.id, 'and the left with the left')
+}
+
+// --- a linked pair survives being split more than once --------------------
+{
+  // The user's bug, in one sentence: "cut once, cut again, and the sound stops
+  // following." Every split must leave two well-formed pairs, and the partner of
+  // each right half must be its own lane's right half.
+  let p = appendAsset(withAsset(), 'a', asset({ duration: 20 }))
+  p = splitLinked(p, 'video', 0, 7.5)
+  // Split the right pair at t=12, which is 4.5s into it.
+  p = splitLinked(p, 'video', 1, 12)
+
+  assert.equal(p.video.length, 3, 'video split twice')
+  assert.equal(p.audio.length, 3, 'audio split twice too, which is the whole bug')
+
+  for (let i = 0; i < p.video.length; i++) {
+    const v = p.video[i]!
+    const a = p.audio[i]!
+    assert.equal(v.linkId, a.linkId, `pair ${i} shares one link`)
+    assert.equal(linkedPartner(p, v)?.id, a.id, `video ${i} pairs with audio ${i}`)
+    assert.equal(linkedPartner(p, a)?.id, v.id, `and it is symmetric`)
+  }
+  // The three pairs are three distinct groups, not one id smeared across six.
+  assert.equal(new Set(p.video.map((c) => c.linkId)).size, 3, 'three distinct link groups')
 }
 
 // --- splitting an UNLINKED clip leaves its partner alone -----------------
@@ -243,8 +279,48 @@ const withAsset = (a = asset()): Project => ({ ...emptyProject(), assets: { [a.i
   // at the export boundary, on integers.
   const trimmed = trimClip(project, 'video', 0, 0.2, 0.8)
   assert.ok(Math.abs(clipDuration(trimmed.video[0]!) - 0.6) < 1e-12)
-  assert.equal(trimClip(project, 'video', 0, 5, 1).video[0]!.out, 5, 'out is never before in')
+
+  // Asking for out < in used to be silently "clamped" to out === in, which is a
+  // zero-length clip — the state `survivorsInRange` calls corrupt. It is now
+  // refused outright, so the lane is handed back untouched.
+  assert.equal(
+    trimClip(project, 'video', 0, 5, 1),
+    project,
+    'a trim that would leave no clip at all is refused, not clamped into one',
+  )
   assert.equal(trimClip(project, 'video', 0, -10, 1e6).video[0]!.in, 0, 'clamped to the asset')
+}
+
+// --- a trim cannot produce a clip too short to split ----------------------
+{
+  // The invariant: every write path refuses to create a clip shorter than
+  // MIN_CLIP. `splitOne`, `splitLinked` and `survivorsInRange` each enforced it;
+  // `trimClip` did not, so dragging a handle past the far edge produced a clip
+  // that `clipAtLane` can never return — invisible, unselectable by playhead,
+  // unsplittable, and still shifting everything after it in the array.
+  const project: Project = { ...withAsset(), video: [clip('a', 2, 12)] } // in 2 → out 12
+
+  const crossed = trimClip(project, 'video', 0, 2, 0.5)
+  assert.equal(crossed, project, 'the out handle cannot pass the in point')
+  assert.equal(clipDuration(crossed.video[0]!), 10, 'and the clip is exactly as it was')
+
+  const crossedBack = trimClip(project, 'video', 0, 20, 12)
+  assert.equal(crossedBack, project, 'nor the in handle the out point')
+
+  // One frame either side of the limit still works, so the guard is a floor and
+  // not a "trims below 40ms do nothing" cliff.
+  const legal = trimClip(project, 'video', 0, 2, 2.05)
+  assert.notEqual(legal, project, 'a legal trim is applied')
+  assert.ok(Math.abs(clipDuration(legal.video[0]!) - 0.05) < 1e-12)
+
+  // Growing a sliver is still allowed. An overwrite can leave a clip shorter than
+  // MIN_CLIP (`survivorsInRange` cuts at the drop edges), and such a clip must
+  // not be frozen — only shrinking it further is refused.
+  const sliver: Project = { ...withAsset(), video: [{ ...clip('s', 0, 1), in: 0, out: 0.01 }] }
+  const grown = trimClip(sliver, 'video', 0, 0, 5)
+  assert.notEqual(grown, sliver, 'a sliver can be lengthened')
+  assert.equal(clipDuration(grown.video[0]!), 5)
+  assert.equal(trimClip(sliver, 'video', 0, 0, 0.005), sliver, 'but not shortened further')
 }
 
 // --- findClip searches both lanes ---------------------------------------
@@ -281,7 +357,7 @@ check('a gap shifts everything to its right, and position stays derived', () => 
   assert.equal(placed.video[0]!.offset, undefined, 'nothing to its left gained an offset')
 })
 
-check('a clip may not overlap its predecessor', () => {
+check('a clip that may not overlap its predecessor', () => {
   const p = { ...withAsset(), video: [clip('a', 0, 5), clip('b', 0, 5)] }
   // b currently starts at 5. Asking for 3 must clamp, not overlap.
   const squeezed = placeClip(p, 'video', 1, 3)
@@ -291,6 +367,69 @@ check('a clip may not overlap its predecessor', () => {
   // The first clip cannot go before zero either.
   const first = placeClip(p, 'video', 0, -10)
   assert.equal(clipStart(first.video, 0), 0)
+})
+
+// --- placing a clip repeatedly is what a drag does ------------------------
+// A drag is not one `placeClip` call. It is one call per pointermove, each with
+// a fresh absolute target, and the gesture is only smooth if the clip lands
+// exactly on the target every time. The first assertion in every other
+// `placeClip` test above passes either way — from a zero offset, and
+// `clipStart` happens to equal `clipEnd(prev)` — which is exactly why the bug
+// below survived a green suite.
+check('repeated placement tracks the pointer exactly', () => {
+  const base: Project = { ...withAsset(), video: [clip('a', 0, 4), clip('b', 0, 4)] }
+  let p = base
+
+  // The gesture, as the drag controller issues it: absolute targets, 50ms apart.
+  for (const target of [4.05, 4.1, 4.15, 4.2, 4.3, 5, 6, 8]) {
+    p = { ...p, video: placeClip(p, 'video', 1, target).video }
+    assert.ok(
+      Math.abs(clipStart(p.video, 1) - target) < 1e-9,
+      `asked for ${target}s, the clip is at ${clipStart(p.video, 1)}s`,
+    )
+  }
+
+  // The signature of the bug: the clip never arrives. Subtract the target from
+  // the position and you get half the distance asked for, again and again.
+  assert.equal(clipStart(p.video, 1), 8, 'the last target, reached exactly')
+})
+
+check('a clip that already has a gap can still be moved', () => {
+  // b sits behind a 2s gap, so it starts at 6. With the offset subtracted twice
+  // it could not be moved at all: every call recomputed the same increment, so
+  // the clip stayed exactly where it was.
+  const gapped: Project = { ...withAsset(), video: [clip('a', 0, 4), clip('b', 0, 4, { offset: 2 })] }
+  assert.equal(clipStart(gapped.video, 1), 6)
+
+  const moved = placeClip(gapped, 'video', 1, 8)
+  assert.equal(clipStart(moved.video, 1), 8, 'it moved')
+  assert.equal(moved.video[1]!.offset, 4, 'and the offset is now the whole gap')
+
+  // And back toward its predecessor, which is the other direction a drag goes.
+  const back = placeClip(moved, 'video', 1, 4.5)
+  assert.equal(clipStart(back.video, 1), 4.5, 'the gap closed to a half second')
+})
+
+check('one clip and a group of clips land in the same place', () => {
+  // The two drag paths are separate functions. For a clip with nothing after it
+  // they must agree exactly — a single drag and a one-clip group are the same
+  // gesture and the user must not be able to tell them apart by feel. (A clip
+  // with a successor deliberately differs now: a single move is local and pins
+  // the successor, while a group shift ripples.)
+  const targets = [4.05, 4.1, 4.2, 5, 7, 9]
+  const base = (): Project => ({ ...withAsset(), video: [clip('a', 0, 4), clip('b', 0, 4), clip('c', 0, 4)] })
+
+  let single = base()
+  for (const target of targets) single = { ...single, video: placeClip(single, 'video', 2, target).video }
+
+  let group = base()
+  const sel = new Set(['c'])
+  for (const target of targets) {
+    group = { ...group, video: moveSelectionTo(group, 'video', 2, target, sel).video }
+  }
+
+  assert.equal(clipStart(single.video, 2), targets.at(-1), 'the single drag reached the last target')
+  assert.equal(clipStart(group.video, 2), clipStart(single.video, 2), 'and so did the group drag, identically')
 })
 
 check('moving a clip by reorder lands it flush', () => {
@@ -321,12 +460,14 @@ check('a gap between clips is real silence, not a shortened timeline', () => {
 
 check('removing a clip takes its gap with it', () => {
   let p = { ...withAsset(), video: [clip('a', 0, 5), clip('b', 0, 5), clip('c', 0, 5)] }
-  p = placeClip(p, 'video', 1, 8)
-  assert.equal(projectDuration(p), 18)
-  const removed = removeClip(p, 'video', 1)
+  // Move the last clip right — the only clip a move can shove freely now. The
+  // gap before c belongs to c.
+  p = placeClip(p, 'video', 2, 12)
+  assert.equal(projectDuration(p), 17)
+  const removed = removeClip(p, 'video', 2)
   assert.equal(removed.video.length, 2)
   assert.equal(projectDuration(removed), 10, 'the gap went with the clip that owned it')
-  assert.equal(clipStart(removed.video, 1), 5, 'and c is now flush after a')
+  assert.equal(clipStart(removed.video, 1), 5, 'and b is still flush after a')
 })
 
 check('splitting leaves the right half flush with the left', () => {
@@ -649,4 +790,61 @@ check('a drop at zero is not negative', () => {
   const out = insertClipAt(p, 'video', -5, vid('n', 0, 1))
   assert.equal(startsOf(out)[0], 0, 'a clip can never start before the timeline')
   assert.equal(out.video[0]!.offset, 0)
+})
+
+// --- a drop lands where it was aimed ----------------------------------------
+
+check('an insert drop lands where it was aimed, not at the far end of the clip', () => {
+  // The bug: a drop within MIN_CLIP of a clip's edge cannot be split, so the clip
+  // was inserted *after* the one it landed on. Aim at 0.01s, get 10s, with nothing
+  // on screen to explain it.
+  const base = (o: number): Project => ({ ...withAsset(), video: [clip('a', 0, o)] })
+  const landedAt = (p: Project): number => {
+    const i = p.video.findIndex((c) => c.id === 'n')
+    return i < 0 ? NaN : clipStart(p.video, i)
+  }
+
+  // Inside, well clear of both ends: exact.
+  assert.ok(Math.abs(landedAt(insertClipAt(base(10), 'video', 2, clip('n', 0, 1))) - 2) < 1e-9)
+
+  // Within MIN_CLIP of the start: in front of the clip, flush. The old answer put
+  // it at the clip's *end*.
+  assert.ok(Math.abs(landedAt(insertClipAt(base(10), 'video', 0.01, clip('n', 0, 1))) - 0) <= 0.04,
+    'a hair inside the start goes in front, not to the far end')
+  assert.equal(landedAt(insertClipAt(base(10), 'video', 0, clip('n', 0, 1))), 0, 'and exactly at the start')
+
+  // Within MIN_CLIP of the end: also flush, and it must not leave a stub.
+  assert.ok(Math.abs(landedAt(insertClipAt(base(10), 'video', 9.99, clip('n', 0, 1))) - 9.99) <= 0.04,
+    'a hair inside the end stays near the end')
+
+  // In a gap, and past the end: unchanged behaviour.
+  assert.equal(landedAt(insertClipAt(base(10), 'video', 12, clip('n', 0, 1))), 12, 'past the end')
+})
+
+check('no drop can leave a clip shorter than MIN_CLIP', () => {
+  // The invariant the whole branch exists to protect. Swept across a 10s clip at
+  // 5ms resolution, so it covers the neighbourhood of both edges where the answer
+  // used to change discontinuously.
+  const p0: Project = { ...withAsset(), video: [clip('a', 0, 10)] }
+  let worst = Infinity
+  let worstAt = 0
+  for (let k = 0; k <= 2000; k++) {
+    const t = (k / 2000) * 10
+    for (const c of insertClipAt(p0, 'video', t, clip('n', 0, 1)).video) {
+      const d = clipDuration(c)
+      if (d < worst) { worst = d; worstAt = t }
+    }
+  }
+  // Within float noise: the shortfall is ~1e-15, one part in 10^16.
+  assert.ok(worst >= 0.04 - 1e-9, `a drop at ${worstAt}s left a ${worst}s fragment`)
+})
+
+check('a drop at a clip boundary does not split it', () => {
+  // Already covered for the start; this is the boundary *between* two clips,
+  // where the old code refused the split and appended after the second one.
+  const p: Project = { ...withAsset(), video: [clip('a', 0, 5), clip('b', 0, 2)] }
+  const out = insertClipAt(p, 'video', 5, clip('n', 0, 1))
+  assert.equal(out.video.length, 3, 'three clips, not four: nothing was split')
+  assert.deepEqual(out.video.map((c) => c.id), ['a', 'n', 'b'], 'and it went between them')
+  assert.equal(clipStart(out.video, 1), 5, 'at the boundary, not after b')
 })

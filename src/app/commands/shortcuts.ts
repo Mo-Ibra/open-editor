@@ -68,12 +68,9 @@ export function createShortcuts({
       hint: 'S',
       label: 'split',
       enabled: hasClips,
-      // Several clips selected means split all of them; one (or none) keeps the
-      // older behaviour of splitting whatever is under the playhead.
-      run: () =>
-        state.selectionCount() > 1
-          ? state.splitSelectionAtPlayhead()
-          : state.splitAt(state.playhead()),
+      // The selection names the lanes to cut: video only, audio only, or both
+      // (also both when nothing is selected). The playhead is the cut point.
+      run: () => state.splitAt(state.playhead()),
     },
 
     {

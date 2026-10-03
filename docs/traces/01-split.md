@@ -141,12 +141,13 @@ accept a hand-edited call while the store has to answer a keystroke.
 
 ## 6. One write path, and a prune
 
-Back in `src/app/store/state.ts:121`, every edit goes through `setProject`, which
+Back in `src/app/store/state.ts:147`, every edit goes through `setProject`, which
 is deliberately overloaded to distinguish the three kinds of write:
 
 ```ts
 function setProject(a: unknown, b?: unknown, c?: unknown): void {
-  // Asset writes cannot orphan a clip selection, so they skip the prune.
+  // Asset writes cannot orphan a clip selection, or move a clip, so they skip
+  // both — there is nothing for either to do.
   if (a === 'assets') applyProject(a as 'assets', b as string, c as Asset)
   else if (typeof a === 'string') applyProject(a as Lane, b as Clip[])
   // A plain two-key set, never `reconcile` — see model/project-store.ts for

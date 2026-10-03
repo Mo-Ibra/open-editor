@@ -13,6 +13,7 @@ import {
   snapMove,
   snapPlayhead,
   snapTrimEdge,
+  targetLanes,
   thresholdInSeconds,
   type SnapTarget,
 } from '../src/model/snapping.ts'
@@ -210,15 +211,33 @@ check('a drag moves the selected clips and everything after them', () => {
   assert.deepEqual([...movingInLane(clips, new Set())], [], 'nothing selected, nothing moves')
 })
 
-check('a move butts its end onto the next clip without chasing a pushed one', () => {
-  // End-only target at 8: the next clip's start.
-  const endOnly = [target(8, 'next', 'clip-start')]
-  const byEnd = snapMove(4.95, 3, [], 0.1, undefined, null, endOnly)
-  assert.equal(byEnd?.edge, 'end', 'the end edge takes the butt')
+check('a move snaps either edge, and neither can overlap what it snapped to', () => {
+  // This replaced a test for an "end-only target" list — the next clip's start, so
+  // a clip could butt forward against it. That list was removed: the clip it named
+  // is *pushed* by the move and therefore travels with the drag, which is the one
+  // thing ADR-11 says a snap target must not do; it was captured once at
+  // pointerdown, so its time was frozen while its clip walked away; and "butt
+  // forward" has no meaning here, because a derived position means a clip dragged
+  // right *pushes* its successor rather than running into it.
+  //
+  // What remains is the invariant that list was trying to serve: a clip never
+  // ends up overlapping the clip it aligned to. Both edges align exactly, and
+  // `exclude` keeps a clip off its own edges.
+  const targets = [target(8, 'a', 'clip-end'), target(2, 'b', 'clip-start')]
+
+  // Its start to a start: butt directly.
+  const byStart = snapMove(2.05, 3, targets, 0.1)
+  assert.equal(byStart?.edge, 'start')
+  assert.equal(byStart?.start, 2, 'flush against the neighbour')
+
+  // Its end to an end: butt on the far side, one duration back.
+  const byEnd = snapMove(5.05, 3, targets, 0.1)
+  assert.equal(byEnd?.edge, 'end')
   assert.equal(byEnd?.start, 5, 'landing its start one duration back')
 
-  // The start edge must ignore an end-only target, or it would overlap the clip.
-  assert.equal(snapMove(7.95, 3, [], 0.1, undefined, null, endOnly), null, 'the start edge does not use it')
+  // A clip cannot snap to itself.
+  const self = [target(5, 'me', 'clip-start')]
+  assert.equal(snapMove(5.05, 3, self, 0.1, { clipId: 'me' }), null, 'its own edges are excluded')
 })
 
 check('playhead snap lands exactly on a timeline edge', () => {
@@ -439,3 +458,47 @@ check('a clip that is not at timeline zero snaps correctly too', () => {
 })
 
 console.log('\nsnapping assertions passed')
+
+// --- which lanes are eligible targets --------------------------------------
+
+check('the two snap toggles are independent, and say which lanes they mean', () => {
+  // `G` is "this row", `⇧G` is "the other row". Getting this wrong is not a
+  // subtle feel difference: a drop collected from both lanes regardless, so with
+  // clip snap visibly off a dropped file still snapped to same-lane edges.
+  assert.deepEqual(targetLanes('video', true, true), ['video', 'audio'], 'both on means both rows')
+  assert.deepEqual(targetLanes('video', true, false), ['video'], 'clip snap alone is this row')
+  assert.deepEqual(targetLanes('video', false, true), ['audio'], 'lane snap alone is the other row')
+  assert.deepEqual(targetLanes('video', false, false), [], 'neither means nothing')
+
+  // And it is the dragged row that decides which is "this".
+  assert.deepEqual(targetLanes('audio', true, false), ['audio'])
+  assert.deepEqual(targetLanes('audio', false, true), ['video'])
+})
+
+check('a drop and a drag resolve the same lanes, because they call the same function', () => {
+  // The reason this lives in snapping.ts rather than in the drag controller: two
+  // callers needed it, and they had drifted apart. The guard that keeps them
+  // together is that there is only one of it.
+  const read = (f: string): string => readFileSync(new URL(f, import.meta.url), 'utf8')
+  for (const file of ['../src/app/store/assets.ts', '../src/app/view/timeline/use-timeline-drag.ts']) {
+    const code = read(file)
+    assert.match(code, /targetLanes\(/, `${file} must ask targetLanes, not answer the question itself`)
+    assert.doesNotMatch(
+      code,
+      /state\.clipSnap\(\)\)\s*out\.push|out\.push\(lane === 'video' \? 'audio' : 'video'\)/,
+      `${file} must not re-implement the lane policy`,
+    )
+  }
+})
+
+check('collectTargets honours the lane list it is given', () => {
+  const project: Project = { ...emptyProject(), video: [clip('v', 0, 5)], audio: [clip('a', 0, 5)] }
+  const both = collectTargets(project, { playhead: 0, includePlayhead: false })
+  const videoOnly = collectTargets(project, { playhead: 0, includePlayhead: false, lanes: ['video'] })
+  const none = collectTargets(project, { playhead: 0, includePlayhead: false, lanes: [] })
+
+  assert.ok(both.some((t) => t.lane === 'audio'), 'both lanes by default')
+  assert.ok(!videoOnly.some((t) => t.lane === 'audio'), 'and only what was asked for')
+  // The timeline start is not a lane, so it survives even with no lanes at all.
+  assert.deepEqual(none.map((t) => t.kind), ['timeline-start'], 'the origin is not a lane')
+})

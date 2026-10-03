@@ -29,6 +29,7 @@ import {
   setClipGain as applyGain,
   setTransform as applyTransform,
   sourceTimeAt,
+  splitClip,
   splitLinked,
   toggleMute as applyMute,
   toggleHidden as applyHidden,
@@ -41,14 +42,6 @@ import {
 import type { Lanes } from '../../model/project-store.js'
 import type { History } from './history.js'
 import type { Selection } from './selection.js'
-
-/**
- * The shortest clip a split will leave behind, in seconds.
- *
- * A split exactly on an edge would create a zero-length clip, which breaks
- * every downstream assumption about a clip having duration.
- */
-const MIN_SPLIT = 0.01
 
 export interface EditDeps {
   project: Project
@@ -96,78 +89,90 @@ export function createEdits(deps: EditDeps): EditSlice {
   const replace = (next: Project): Lanes => ({ video: next.video, audio: next.audio })
   const setProject = (lanes: Lanes): void => setLanes(lanes.video, lanes.audio)
 
-function splitAt(time: number, lane?: Lane): void {
-  history.commit()
+/**
+ * Split the clip under the playhead.
+ *
+ * **Which lanes are cut is the user's choice, expressed by the selection.**
+ * A selection names the lanes it wants touched:
+ *
+ * - nothing selected → both lanes;
+ * - only video selected → the picture, and the sound is left whole;
+ * - only audio selected → the sound, and the picture is left whole;
+ * - both lanes selected → both.
+ *
+ * Within a chosen lane the clip under the playhead is cut. That is also why `S`
+ * used to "sometimes not work": it was tied to the *selected clip* rather than
+ * the selected lane, so a playhead parked over a different clip in the same lane
+ * found nothing to cut. The playhead is the cut point; the selection only says
+ * which lanes care.
+ *
+ * A pair selected together (or the no-selection case) is cut with
+ * `splitLinked`, so the two right halves stay linked. A single lane is cut with
+ * `splitClip`, which leaves the other lane's clip untouched. Both model
+ * functions return the very same project when the cut is refused, so identity is
+ * the honest no-op test — the one `duplicateClips` relies on.
+ */
+function splitCore(time: number, lane?: Lane): { next: Project; split: number } {
+  const before = unwrap(project)
+  let next = before
+  let split = 0
 
-  if (lane) {
-    const loc = clipAtLane(laneOf(project, lane), time)
+  /** Cut only `l`'s clip, leaving the other lane — and any link — alone. */
+  const cutOnly = (l: Lane): void => {
+    const loc = clipAtLane(next[l], time)
     if (!loc) return
-    setProject(replace(splitLinked(unwrap(project), lane, loc.index, time)))
-    return
+    const after = splitClip(next, l, loc.index, time)
+    if (after === next) return
+    next = after
+    split += 1
   }
 
-  const anchor = sel.primary()
-  if (anchor) {
-    const found = findClip(project, anchor)
-    if (found) {
-      setProject(replace(splitLinked(unwrap(project), found.lane, found.index, time)))
-      return
+  /** Cut `l`'s clip and its linked partner, so a pair stays a pair. */
+  const cutPair = (l: Lane): void => {
+    const loc = clipAtLane(next[l], time)
+    if (!loc) return
+    const after = splitLinked(next, l, loc.index, time)
+    if (after === next) return
+    next = after
+    split += 1
+  }
+
+  if (lane) {
+    cutOnly(lane)
+  } else {
+    const selected = sel.clips()
+    const lanes = new Set(selected.map((c) => c.lane))
+    if (lanes.size === 1) {
+      // Exactly one lane is selected: that lane alone is cut.
+      cutOnly(selected[0]!.lane)
+    } else {
+      // Nothing selected, both lanes selected, or a stale selection: cut both.
+      cutPair('video')
+      cutPair('audio')
     }
   }
 
-  // Nothing selected: split each lane independently at the playhead.
-  let next = unwrap(project)
-  for (const l of ['video', 'audio'] as const) {
-    const loc = clipAtLane(next[l], time)
-    if (loc) next = splitLinked(next, l, loc.index, time)
+  return { next, split }
+}
+
+function splitAt(time: number, lane?: Lane): void {
+  const { next, split } = splitCore(time, lane)
+  if (split === 0) {
+    // Say so rather than doing nothing silently. A playhead that snapped onto a
+    // clip edge, or into a gap, makes `S` look broken; naming the reason is what
+    // separates "the app is ignoring me" from "there is no cut there".
+    notify('info', 'Nothing to split — put the playhead inside a clip.')
+    return
   }
+  history.commit()
   setProject(replace(next))
 }
 
-/**
- * Split every selected clip at the playhead.
- *
- * Two details make this more than a loop over `splitAt`:
- *
- * - A linked pair is split by `splitLinked`, which cuts *both* halves. So a
- *   selected pair must be counted once, or the second call would try to split
- *   a clip that no longer exists there.
- * - A clip whose edge is already at the playhead is skipped. Splitting there
- *   produces a zero-length clip, which is a corrupt clip, not an edit.
- *
- * Back-to-front per lane, because each split inserts a clip and shifts every
- * later index down.
- */
+/** The same cut, with a word to the user about whether it happened. */
 function splitSelectionAtPlayhead(): void {
-  const t = playhead()
-  const clips = sel.clips()
-  if (clips.length === 0) return
-
-  // One entry per link group, so a selected pair splits once.
-  const seen = new Set<string>()
-  const targets = clips
-    .filter((c) => {
-      const key = c.linkId ?? c.id
-      if (seen.has(key)) return false
-      seen.add(key)
-      return true
-    })
-    .map((c) => findClip(project, c.id)!)
-    .filter(Boolean)
-    .sort((a, b) => b.lane.localeCompare(a.lane) || b.index - a.index)
-
-  let next = unwrap(project)
-  let split = 0
-  for (const { lane, index } of targets) {
-    const laneClips = next[lane]
-    const start = clipStart(laneClips, index)
-    const end = clipEnd(laneClips, index)
-    if (t <= start + MIN_SPLIT || t >= end - MIN_SPLIT) continue
-    next = splitLinked(next, lane, index, t)
-    split += 1
-  }
+  const { next, split } = splitCore(playhead())
   if (split === 0) {
-    notify('info', 'Nothing to split — put the playhead inside a selected clip.')
+    notify('info', 'Nothing to split — put the playhead inside a clip.')
     return
   }
   history.commit()
@@ -175,20 +180,22 @@ function splitSelectionAtPlayhead(): void {
   notify('info', `Split ${split} clip${split === 1 ? '' : 's'}.`)
 }
 
-/** Trim each selected clip's nearest edge to the playhead. */
+/**
+ * Trim each selected clip's nearest edge to the playhead.
+ *
+ * **No link dedupe here, and that is the fix.** `splitSelectionAtPlayhead`
+ * dedupes by `linkId` because `splitLinked` cuts both halves of a pair, so
+ * counting both would cut the second one twice. `trim` does *not* touch the
+ * partner, so copying the dedupe over silently dropped the audio half: selecting
+ * a linked pair and trimming trimmed only the picture. Each selected clip takes
+ * its own nearest edge, which is what the sentence above has always claimed.
+ */
 function trimSelectionToPlayhead(): void {
   const t = playhead()
   const clips = sel.clips()
   if (clips.length === 0) return
 
-  const seen = new Set<string>()
   const targets = clips
-    .filter((c) => {
-      const key = c.linkId ?? c.id
-      if (seen.has(key)) return false
-      seen.add(key)
-      return true
-    })
     .map((c) => findClip(project, c.id)!)
     .filter(Boolean)
 

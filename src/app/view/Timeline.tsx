@@ -66,12 +66,18 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
   const anyClips = (): boolean =>
     state.project.video.length > 0 || state.project.audio.length > 0
 
-  // Kick off peak computation for every audio-bearing clip, so the waveform is
+  // Kick off peak computation for every audio-bearing asset, so the waveform is
   // there by the time anyone looks at it.
+  //
+  // **Keyed on the asset list, not on the audio lane.** Keyed on the lane, this
+  // effect re-ran on every `pointermove` of an audio-lane drag, because a drag
+  // rewrites the lane — and `peaksFor` only short-circuits once the first decode
+  // has resolved. So a one-second drag entered it sixty times, each call walking
+  // the entire decoded buffer. `assetIds()` is backed by the asset revision
+  // counter, which is exactly the granularity the work has: peaks belong to a
+  // file, not to a clip, and a clip's trim says nothing about them.
   createEffect(() => {
-    for (const clip of state.project.audio) {
-      void state.peaksFor(clip.assetId)
-    }
+    for (const assetId of state.assetIds()) void state.peaksFor(assetId)
   })
 
   const trackLeft = (): number => trackEl?.getBoundingClientRect().left ?? 0
@@ -124,24 +130,30 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
 
     const mode = modeFor(event)
     dt.dropEffect = mode === 'insert' ? 'copy' : 'move'
-    const time = state.dropTimeFor(timeAtClientX(event.clientX))
 
     if (internal) {
       // `getData` is empty during `dragover` where protected mode is enforced,
       // so fall back to the id captured at `dragstart`.
       const assetId = dt.getData(DND_ASSET) || draggedAssetId()
       if (!assetId) return
+      // Snapped for the lane the file would actually land on, not for the lane
+      // nearest the pointer: which lanes are eligible snap targets depends on the
+      // lane, because `G` and `⇧G` mean "this row" and "the other row".
+      const lane = targetLane(assetId, event.clientY)
       setDropAt({
-        lane: targetLane(assetId, event.clientY),
-        time,
+        lane,
+        time: state.dropTimeFor(timeAtClientX(event.clientX), lane),
         duration: state.getAsset(assetId)?.duration ?? 0,
         assetId,
         mode,
       })
     } else {
+      // A file from the desktop: not decoded, so its duration is unknown, but it
+      // still gets a landing position snapped for the lane it would go on.
+      const lane = laneAtClientY(event.clientY)
       setDropAt({
-        lane: laneAtClientY(event.clientY),
-        time,
+        lane,
+        time: state.dropTimeFor(timeAtClientX(event.clientX), lane),
         duration: 0,
         assetId: '',
         mode,
@@ -154,16 +166,17 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
     const dt = event.dataTransfer
     if (!dt) return
     const mode = modeFor(event)
-    const time = state.dropTimeFor(timeAtClientX(event.clientX))
     setDropAt(null)
 
     const assetId = dt.getData(DND_ASSET) || draggedAssetId()
     if (assetId) {
       event.preventDefault()
+      const lane = targetLane(assetId, event.clientY)
+      const time = state.dropTimeFor(timeAtClientX(event.clientX), lane)
       // Handled here, so it must not also reach the app shell's own drop
       // listener — that would import and place the same asset twice.
       event.stopPropagation()
-      state.addAssetAt(assetId, targetLane(assetId, event.clientY), time, mode)
+      state.addAssetAt(assetId, lane, time, mode)
       return
     }
 
@@ -171,10 +184,12 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
     if (files.length > 0) {
       event.preventDefault()
       event.stopPropagation()
+      const lane = laneAtClientY(event.clientY)
+      const time = state.dropTimeFor(timeAtClientX(event.clientX), lane)
       // Import *and* place, in one gesture. Importing alone left the file
       // sitting in the bin, which is not what dropping a file on a timeline
       // means anywhere else.
-      void state.dropFiles(files, laneAtClientY(event.clientY), time, mode)
+      void state.dropFiles(files, lane, time, mode)
     }
   }
 

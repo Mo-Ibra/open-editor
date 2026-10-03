@@ -7,7 +7,7 @@
  */
 
 import { createEffect, createSignal, onCleanup, onMount, Show } from 'solid-js'
-import { clipAtLane, sourceTimeAt } from '../../model/project.js'
+import type { Clip } from '../../model/project.js'
 import { renderBlank, renderFrame, type SourceImage } from '../../render/render.js'
 import type { AppState } from '../store/state.js'
 import type { ContextMenuState } from './ContextMenu.js'
@@ -16,6 +16,7 @@ import type { Fullscreen } from './fullscreen.js'
 import { log } from '../../dev/debug.js'
 import { createDiagnostics, HEALTH_INTERVAL_MS } from '../../dev/preview-diagnostics.js'
 import { Transport } from './preview/Transport.js'
+import { paintIntentAt } from './preview/paint-intent.js'
 import { usePlaybackClock } from './preview/use-playback-clock.js'
 
 export function Preview(props: {
@@ -105,6 +106,22 @@ export function Preview(props: {
   const [showDiag, setShowDiag] = createSignal(false)
 
   /**
+   * Why a clip cannot be decoded here, if it cannot.
+   *
+   * The two cases read differently on purpose. Media dropped from the library is
+   * about this session — the asset was removed while a clip still points at it —
+   * and a decoder that will not open is about the file. Both are faults, because
+   * neither is something the user asked for, and both therefore get said out
+   * loud. Everything the user *did* ask for stays silent.
+   */
+  const unavailable = (clip: Clip): string | null => {
+    const entry = state.library.get(clip.assetId)
+    if (!entry) return `media for clip ${clip.id} was dropped from the library`
+    if (!entry.videoSink) return entry.error ?? 'no decoder for this clip'
+    return null
+  }
+
+  /**
    * Every way this can end up blank goes through here, and every one of them
    * reports.
    *
@@ -170,35 +187,36 @@ export function Preview(props: {
       return
     }
 
-    const loc = clipAtLane(state.project.video, t)
-    if (!loc) {
-      explain(`playhead ${t.toFixed(2)}s is past the end of the timeline (${state.duration().toFixed(2)}s)`)
-      return
-    }
-
-    // A hidden clip is black, and *cheaply* black: no decode, no cache entry,
-    // nothing drawn but a fill. The preview and the exporter must agree, or the
-    // file would not match what the user approved while looking at it
-    // (docs/decisions/0001-one-render-function.md).
-    if (loc.clip.hidden) {
+    // What belongs on the canvas at `t` is decided in one place — `paintIntentAt`
+    // — because it used to be decided inline in three places here and the three
+    // disagreed. A hidden clip painted black; a gap and a missing decoder both
+    // reported a problem and painted *nothing*, which left the previous clip's
+    // last frame frozen on the canvas.
+    //
+    // Every blank path paints. A gap is silence the user cut, and the exporter
+    // fills it with black (`emitBlankUntil`), so showing a frozen frame instead
+    // was showing something the exported file does not contain (ADR-1).
+    //
+    // A fault explains itself on screen, because "I can see nothing here" with no
+    // reason is what costs hours. A deliberate blank says nothing at all — see
+    // `paint-intent.ts` on why that distinction is the point.
+    function paintBlank(fault: string | null, at: number): void {
       renderBlank(context(), options())
-      paintedAt = t
       lastError = null
-      if (showDiag()) drawDiagnostic()
+      paintedAt = at
+      if (fault) explain(fault)
+      else if (showDiag()) drawDiagnostic()
+    }
+
+    const intent = paintIntentAt(state.project.video, t, unavailable)
+    if (intent.kind === 'blank') {
+      paintBlank(intent.fault, t)
       return
     }
 
-    const entry = state.library.get(loc.clip.assetId)
-    if (!entry) {
-      explain(`media for clip ${loc.index} was dropped from the library`)
-      return
-    }
-    if (!entry.videoSink) {
-      explain(entry.error ?? 'no decoder for this clip')
-      return
-    }
-
-    const sourceTime = sourceTimeAt(loc, t)
+    const loc = intent.loc
+    const entry = state.library.get(loc.clip.assetId)!
+    const sourceTime = intent.sourceTime
     const now = performance.now()
     if (now - lastTraceAt > 400) {
       lastTraceAt = now
@@ -227,7 +245,13 @@ export function Preview(props: {
     const forTime = t
 
     const started = performance.now()
-    void entry.videoSink
+    // Non-null asserted, and this is the reason the decision was extracted rather
+    // than re-checked here: `paintIntentAt` was handed `unavailable` as its
+    // predicate and returns `decode` only when that predicate passes, so the
+    // sink exists. A second `if (!sink)` would be a second answer to a question
+    // that now has one owner — and a branch that can never run is a branch
+    // nobody keeps true.
+    void entry.videoSink!
       .getCanvas(sourceTime)
       .then((wrapped) => {
         if (wrapped) {
@@ -267,21 +291,25 @@ export function Preview(props: {
           canvas: wrapped.canvas,
         })
 
-        // A clip can be hidden *while its frame is decoding*, and the staleness
-        // check below cannot see it: hiding does not move the playhead, so
-        // `requestedAt` is unchanged and the frame sails through and paints
-        // straight over the black. Intermittent by nature — it depends on
-        // whether the decode outlasts the keystroke.
+        // The clip under `forTime` can have changed while this frame was decoding,
+        // and the staleness check below cannot see it: hiding or deleting does not
+        // move the playhead, so `requestedAt` is unchanged and the frame sails
+        // through and paints straight over the black. Intermittent by nature — it
+        // depends on whether the decode outlasted the keystroke.
         //
-        // So the clip is asked again, here, where the answer is about to matter.
-        const current = clipAtLane(state.project.video, forTime)
-        if (current?.clip.hidden) {
-          renderBlank(context(), options())
-          lastError = null
-          paintedAt = forTime
-          if (showDiag()) drawDiagnostic()
+        // So the decision is asked again here, where the answer is about to matter,
+        // and asked with the *same* function the draw path uses. It used to check
+        // only for `hidden`, which left the other two ways a clip can stop being
+        // drawable — deleted (so `forTime` is a gap now) or stripped of its
+        // decoder — free to paint over the black.
+        const current = paintIntentAt(state.project.video, forTime, unavailable)
+        if (current.kind === 'blank') {
+          paintBlank(current.fault, forTime)
           return
         }
+        // The lane was reordered under us and `forTime` now belongs to a different
+        // clip. This frame is the old clip's; the `finally` block re-draws.
+        if (current.loc.clip.id !== loc.clip.id) return
 
         // A frame from the past is still right for that moment; it is just no
         // longer what the playhead is pointing at. The finally block re-draws.

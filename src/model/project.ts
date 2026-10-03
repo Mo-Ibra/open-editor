@@ -155,10 +155,41 @@ export function clipOffset(clip: Clip): number {
  * effect on where the clip lands.
  */
 export function clipStart(clips: Clip[], index: number): number {
+  if (index <= 0) return clips[0] ? clipOffset(clips[0]) : 0
   let t = 0
   for (let i = 0; i < index; i++) t += clipOffset(clips[i]!) + clipDuration(clips[i]!)
   const self = clips[index]
   return self ? t + clipOffset(self) : t
+}
+
+/**
+ * Every clip's timeline start, in one pass.
+ *
+ * `clipStart` sums the lane from zero, which is free for a single lookup and
+ * quadratic inside a loop — and the loops are everywhere. `clipAtLane` asked per
+ * index on every preview frame, `collectTargets` per index on every trim
+ * `pointermove`, `survivorsInRange` and `duplicateClips` per index on every drop
+ * and every ⌘D, and the lane's `<For>` asked per clip on every repaint. Measured
+ * at 1.2 ms per `clipAtLane` call on a 1600-clip lane, which is 72 ms of every
+ * second of playback spent re-adding the same numbers.
+ *
+ * **The invariant is untouched.** Position is still derived from array order and
+ * still stored nowhere; this is the same arithmetic with the running total hoisted
+ * out of the inner loop. `shiftLane` already did it this way for exactly this
+ * reason, and said so.
+ *
+ * Prefer this whenever the answer is needed for more than one clip. For a single
+ * index, `clipStart` is clearer and costs one pass either way.
+ */
+export function clipStarts(clips: Clip[]): number[] {
+  const starts = new Array<number>(clips.length)
+  let t = 0
+  for (let i = 0; i < clips.length; i++) {
+    const clip = clips[i]!
+    starts[i] = t + clipOffset(clip)
+    t = starts[i]! + clipDuration(clip)
+  }
+  return starts
 }
 
 export function clipEnd(clips: Clip[], index: number): number {
@@ -207,12 +238,25 @@ export interface ClipLocation {
  * position inside a gap correctly returns null. Accumulating here would claim
  * the previous clip covers the silence, and preview would show a frame where
  * the timeline is empty.
+ *
+ * **One pass, accumulating as it goes** — not `clipStart(clips, i)` per index.
+ * Both compute the same thing, but this one sums the lane prefix once instead of
+ * once per clip, which is the difference between 0.03 ms and 1.2 ms on a
+ * 1600-clip lane. The preview calls this on every frame, so that is 72 ms per
+ * second of playback or zero.
  */
 export function clipAtLane(clips: Clip[], t: number): ClipLocation | null {
+  let start = 0
   for (let i = 0; i < clips.length; i++) {
     const clip = clips[i]!
-    const start = clipStart(clips, i)
+    start += clipOffset(clip)
+    // **Both** bounds. Dropping the lower one was a real bug introduced by this
+    // rewrite: with only `t < start + duration`, a position inside a gap matched
+    // the clip *after* it, so silence decoded whatever followed it. Which is bug
+    // #4 wearing a different hat — and the equivalence sweep in
+    // test/positions.test.ts is what caught it, not a timing test.
     if (t >= start && t < start + clipDuration(clip)) return { clip, index: i, start }
+    start += clipDuration(clip)
   }
   return null
 }
@@ -262,13 +306,25 @@ export function findClip(project: Project, clipId: ClipId): { clip: Clip; lane: 
   return null
 }
 
-/** The other half of a linked pair, or null when the clip is unlinked. */
+/**
+ * The other half of a linked pair, or null when the clip is unlinked.
+ *
+ * **The partner lives in the other lane, always.** The link exists to pair
+ * picture with sound, so the answer can only be the clip of the same `linkId`
+ * in the opposite lane. Searching both lanes and returning the first match was
+ * what made a split linked pair resolve its partner to its own same-lane left
+ * half once the right halves kept the original id — the fault behind "the second
+ * cut does not cut the audio" and "trim selection only trims the video".
+ *
+ * Requiring the other lane also makes this robust to a project written by an
+ * older build: even if two clips in one lane still share an id, neither can be
+ * mistaken for the other's partner.
+ */
 export function linkedPartner(project: Project, clip: Clip): Clip | null {
   if (!clip.linkId) return null
-  for (const lane of ['video', 'audio'] as const) {
-    for (const other of laneOf(project, lane)) {
-      if (other.id !== clip.id && other.linkId === clip.linkId) return other
-    }
+  const otherLane: Lane = clip.lane === 'video' ? 'audio' : 'video'
+  for (const other of laneOf(project, otherLane)) {
+    if (other.linkId === clip.linkId) return other
   }
   return null
 }
@@ -351,23 +407,50 @@ export function moveClip(project: Project, lane: Lane, from: number, to: number)
 }
 
 /**
- * Move a clip so it *starts* at `start`, leaving a gap if it moves right.
+ * Move a clip so it *starts* at `start`.
  *
- * Only the moved clip's own offset changes, so nothing to its left shifts and
- * nothing to its right needs updating — position stays derived. Moving left is
- * clamped: a clip may not overlap its predecessor, and a negative offset would
- * push the whole lane before zero.
+ * **A move is local: this clip moves and nothing else does.** It is placed where
+ * the pointer asks, clamped so it overlaps neither neighbour:
+ *
+ * - not before its predecessor (`prefix`);
+ * - not past its successor, so it cannot overlap the clip in front of it.
+ *
+ * And the successor's own position is **pinned** by re-deriving its offset, so
+ * moving this clip does not drag the one after it along. That pin is the whole
+ * fix for the cut-piece complaint: positions are derived, so without it the clip
+ * after the moved one slid with it — dragging the left half of a cut pulled the
+ * right half, while dragging the right half (which has no successor) moved
+ * alone.
+ *
+ * A negative offset would push the lane before zero, and the target is the
+ * clip's absolute start, so the prefix is subtracted once here — **not** its own
+ * `clipStart`, which already includes the offset now and would turn the absolute
+ * target into a half-speed increment.
  */
 export function placeClip(project: Project, lane: Lane, index: number, start: number): Project {
   const clips = laneOf(project, lane)
   const clip = clips[index]
   if (!clip) return project
 
-  const floor = index === 0 ? 0 : clipEnd(clips, index - 1)
-  const target = Math.max(floor, start)
+  const prefix = index === 0 ? 0 : clipEnd(clips, index - 1)
+  const successor = clips[index + 1]
+  // Where the clip after this one must stay. `clipStart(clips, index + 1)` is
+  // its *current* absolute position; the moved clip may not reach past it.
+  const successorStart = successor ? clipStart(clips, index + 1) : Number.POSITIVE_INFINITY
+  const upper = successor ? successorStart - clipDuration(clip) : Number.POSITIVE_INFINITY
+  // `Math.max(prefix, …)` on the upper bound too: a clip longer than the space
+  // between its neighbours has no legal interior, and pinning the predecessor
+  // beats a negative offset.
+  const target = Math.min(Math.max(prefix, start), Math.max(prefix, upper))
 
   const next = clips.slice()
-  next[index] = { ...clip, offset: target - clipStart(clips, index) }
+  next[index] = { ...clip, offset: target - prefix }
+  if (successor) {
+    // Hold the successor exactly where it is. Deriving its offset from the new
+    // end of the moved clip is what keeps it still while this one travels.
+    const gap = Math.max(0, successorStart - (target + clipDuration(clip)))
+    next[index + 1] = { ...successor, offset: gap }
+  }
   return { ...project, [lane]: next } as Project
 }
 
@@ -377,14 +460,26 @@ export function placeClip(project: Project, lane: Lane, index: number, start: nu
  * Group drag is a **rigid shift**, not a reorder: the selected clips keep their
  * order and their spacing, and each lane is repacked around them. A selected
  * clip dragged left butts against its unselected predecessor rather than
- * crossing it; dragged right, it pushes the unselected clips after it along —
- * exactly what moving a single clip already does. Swapping past a neighbour is
- * a single-clip gesture, because with several clips there is no unambiguous
- * order to swap into.
+ * crossing it; dragged right, it pushes the unselected clips after it along.
+ *
+ * **A group ripples; a single clip does not.** `placeClip` moves one clip
+ * locally and pins the clip after it, so a single drag never drags a neighbour
+ * along. A group is a different gesture — several clips moving as a block *do*
+ * repack the lane, because keeping the block together is the whole point.
+ * Swapping past a neighbour is not offered at all any more.
  *
  * `anchorStart` is the desired timeline start of the clip under the pointer.
- * The delta is derived from that clip and applied to all of them, so the grabbed
- * clip always lands where the pointer is.
+ * The delta is derived from that clip and then **clamped once, for the whole
+ * selection**, before any lane is repacked.
+ *
+ * The clamp is the part that makes the shift rigid rather than merely intended.
+ * A leftward drag is limited, per lane, by where that lane's first selected clip
+ * can but against its predecessor; those limits are different whenever one lane
+ * sits behind a gap. Clamping each lane independently let the picture stop at
+ * zero while its sound kept travelling — one gesture, two outcomes, and a linked
+ * pair left permanently out of sync with no undo entry that says so. Taking the
+ * *most constrained* lane's limit and applying it to both keeps the block rigid:
+ * it may stop short of the pointer, which is the honest cost of the promise.
  */
 export function moveSelectionTo(
   project: Project,
@@ -395,8 +490,25 @@ export function moveSelectionTo(
 ): Project {
   const anchorClips = laneOf(project, anchorLane)
   if (!anchorClips[anchorIndex]) return project
-  const delta = anchorStart - clipStart(anchorClips, anchorIndex)
-  if (delta === 0) return project
+  const desired = anchorStart - clipStart(anchorClips, anchorIndex)
+  if (desired === 0) return project
+
+  let delta = desired
+  if (desired < 0) {
+    // Leftward only: rightward has no wall to hit. For each lane the binding
+    // clip is the first selected one — everything before it is fixed, and the
+    // selected clips after it keep their spacing. `floor - start` is how far
+    // left that clip may go, so it is a lower bound on the delta.
+    for (const lane of ['video', 'audio'] as const) {
+      const clips = project[lane]
+      const first = clips.findIndex((clip) => selected.has(clip.id))
+      if (first < 0) continue
+      const floor = first === 0 ? 0 : clipEnd(clips, first - 1)
+      const limit = floor - clipStart(clips, first)
+      if (limit > delta) delta = limit
+    }
+  }
+
   return {
     ...project,
     video: shiftLane(project.video, selected, delta),
@@ -471,16 +583,21 @@ export type DropMode = 'overwrite' | 'insert'
 
 /** Index of the first clip starting at or after `time`, or the end of the lane. */
 function firstIndexAtOrAfter(clips: Clip[], time: number): number {
-  for (let i = 0; i < clips.length; i++) {
-    if (clipStart(clips, i) >= time - 1e-9) return i
+  // `clipStarts` once, rather than `clipStart` per index. This runs on every drop,
+  // over a lane that can be thousands of clips long.
+  const starts = clipStarts(clips)
+  for (let i = 0; i < starts.length; i++) {
+    if (starts[i]! >= time - 1e-9) return i
   }
   return clips.length
 }
 
 /** Index of the clip covering `time`, or -1. */
 function indexCovering(clips: Clip[], time: number): number {
-  for (let i = 0; i < clips.length; i++) {
-    if (time >= clipStart(clips, i) - 1e-9 && time < clipEnd(clips, i) - 1e-9) return i
+  const starts = clipStarts(clips)
+  for (let i = 0; i < starts.length; i++) {
+    const end = starts[i]! + clipDuration(clips[i]!)
+    if (time >= starts[i]! - 1e-9 && time < end - 1e-9) return i
   }
   return -1
 }
@@ -502,6 +619,26 @@ function splitOne(clips: Clip[], index: number, time: number): Clip[] | null {
 }
 
 /**
+ * The nearest position to `time` where a cut can actually exist.
+ *
+ * A split is refused within `MIN_CLIP` of either end — `splitOne` refuses, and a
+ * zero-length clip is what this file calls corrupt. The old answer to a drop that
+ * landed there was to insert the clip *after* the one it landed on, which put it
+ * at the far end of that clip: aim at 0.01s, get 10s, with nothing on screen to
+ * explain it.
+ *
+ * Nudging the drop forward to the nearest legal cut is 40ms of movement, which is
+ * invisible, and it is the edit the gesture actually meant. A clip shorter than
+ * `2 × MIN_CLIP` has no legal interior at all, and `hi` collapses onto `lo` — the
+ * split then fails as before and the caller falls back to inserting after.
+ */
+function nearestCuttable(clips: Clip[], index: number, time: number): number {
+  const lo = clipStart(clips, index) + MIN_CLIP
+  const hi = clipEnd(clips, index) - MIN_CLIP
+  return Math.min(Math.max(time, lo), Math.max(lo, hi))
+}
+
+/**
  * Put `clip` on `lane` starting at `time`, pushing later clips along.
  *
  * Works whether `time` is in a gap, inside a clip, or past the end — which is
@@ -517,18 +654,44 @@ export function insertClipAt(project: Project, lane: Lane, time: number, clip: C
   let clips = laneOf(project, lane)
   const covering = indexCovering(clips, time)
 
-  if (covering >= 0) {
-    const split = splitOne(clips, covering, time)
-    // A null split means the cut is unusable, so the clip is inserted after the
-    // one it landed on rather than destroying it.
-    if (split) clips = split
+  // Two ways a drop can land, and both used to end up in the same wrong place —
+  // the far end of the clip it was dropped on, with nothing on screen to explain
+  // it. Aiming at 0.01s and getting 10s.
+  //
+  // **At a clip's start**, within MIN_CLIP. The user aimed *before* it, not a hair
+  // inside it, and cutting there would split off a 40ms fragment of somebody's
+  // footage — worse than useless. Treated as the boundary it is: the clip goes in
+  // front, flush.
+  //
+  // **Mid-clip.** The cut still has to clear both ends, so it is nudged to the
+  // nearest legal one: 40ms of movement, invisible, and the edit that was meant.
+  let at: number
+  let offset: number
+
+  if (covering < 0) {
+    at = firstIndexAtOrAfter(clips, time)
+    offset = Math.max(0, time - (at === 0 ? 0 : clipEnd(clips, at - 1)))
+  } else if (time - clipStart(clips, covering) < MIN_CLIP) {
+    at = covering
+    const floor = at === 0 ? 0 : clipEnd(clips, at - 1)
+    offset = Math.max(floor, clipStart(clips, covering)) - floor
+  } else {
+    const cut = nearestCuttable(clips, covering, time)
+    const halves = splitOne(clips, covering, cut)
+    if (halves) {
+      clips = halves
+      at = covering + 1
+      offset = Math.max(0, cut - clipEnd(clips, at - 1))
+    } else {
+      // A clip shorter than `2 × MIN_CLIP` has no legal interior at all, so there
+      // is nothing to cut. In front of it still beats the far end of it.
+      at = covering
+      const floor = at === 0 ? 0 : clipEnd(clips, at - 1)
+      offset = Math.max(floor, clipStart(clips, covering)) - floor
+    }
   }
 
-  const at = covering >= 0 ? covering + 1 : firstIndexAtOrAfter(clips, time)
-  const floor = at === 0 ? 0 : clipEnd(clips, at - 1)
-  const placed: Clip = { ...clip, offset: Math.max(0, time - floor) }
-
-  const next = [...clips.slice(0, at), placed, ...clips.slice(at)]
+  const next = [...clips.slice(0, at), { ...clip, offset }, ...clips.slice(at)]
   return { ...project, [lane]: next } as Project
 }
 
@@ -544,9 +707,10 @@ export function insertClipAt(project: Project, lane: Lane, time: number, clip: C
 function survivorsInRange(clips: Clip[], start: number, end: number): { clip: Clip; from: number }[] {
   const EPS = 1e-6
   const survivors: { clip: Clip; from: number }[] = []
+  const starts = clipStarts(clips)
   for (let i = 0; i < clips.length; i++) {
     const clip = clips[i]!
-    const s = clipStart(clips, i)
+    const s = starts[i]!
     const e = s + clipDuration(clip)
 
     // Six cases, and all six are needed. Treating "fully inside" as "straddles
@@ -678,6 +842,9 @@ export function duplicateClips(project: Project, clipIds: Iterable<ClipId>): Pro
   for (const lane of ['video', 'audio'] as const) {
     const source = project[lane]
     const next: Clip[] = []
+    // One pass for the whole lane. This asked `clipStart` *and* `clipEnd` per
+    // index, so duplicating on a long timeline was quadratic twice over.
+    const starts = clipStarts(source)
     for (let index = 0; index < source.length; index += 1) {
       const clip = source[index]!
       next.push(clip)
@@ -685,15 +852,17 @@ export function duplicateClips(project: Project, clipIds: Iterable<ClipId>): Pro
       if (!out) out = { ...project, video: project.video.slice(), audio: project.audio.slice() }
 
       // The copy starts where the original ends.
-      const start = clipStart(source, index) + clipDuration(clip)
+      const start = starts[index]! + clipDuration(clip)
       const copy: Clip = {
         ...clip,
         id: newId('clp'),
         linkId: clip.linkId ? nextCopyId(clip) : undefined,
       }
       // Offset is relative to the end of whatever precedes the *copy*, which is
-      // the original — so this is a plain duration, not a timeline lookup.
-      next.push({ ...copy, offset: start - clipEnd(source, index) })
+      // the original — and `start` was computed as the original's end, so the
+      // difference is zero. Spelled out rather than written as `0` because the
+      // subtraction is where the arithmetic is visible if that ever changes.
+      next.push({ ...copy, offset: start - (starts[index]! + clipDuration(clip)) })
       copied += 1
     }
     if (out) out[lane] = next
@@ -702,6 +871,16 @@ export function duplicateClips(project: Project, clipIds: Iterable<ClipId>): Pro
   return copied === 0 ? project : out!
 }
 
+/**
+ * Minimum clip length. Below this, a clip divides by zero somewhere.
+ *
+ * Declared here rather than next to `splitLinked`, because it is a rule about
+ * *every* write path, not about splitting: `splitOne`, `splitLinked` and
+ * `survivorsInRange` each refuse to create a shorter clip, and `trimClip` has to
+ * agree or a handle drag can produce what the rest of the file forbids.
+ */
+const MIN_CLIP = 0.04
+
 export function trimClip(project: Project, lane: Lane, index: number, inPoint: number, outPoint: number): Project {
   const clips = laneOf(project, lane)
   const clip = clips[index]
@@ -709,13 +888,54 @@ export function trimClip(project: Project, lane: Lane, index: number, inPoint: n
   const asset = project.assets[clip.assetId]
   const inClamped = asset ? clamp(inPoint, 0, asset.duration) : inPoint
   const outClamped = asset ? clamp(outPoint, inClamped, asset.duration) : Math.max(inClamped, outPoint)
+
+  // Never hand back a clip shorter than MIN_CLIP — not even the zero-length one
+  // that dragging a handle past the far edge asks for. This is the only write
+  // path that could produce one, and a zero-length clip is what
+  // `survivorsInRange`'s own comment calls corrupt: it is skipped by
+  // `clipAtLane`, so the playhead can never land on it and it cannot be split,
+  // yet it still sits in the array shifting everything after it.
+  //
+  // **Refused rather than clamped**, because which end the user is holding is
+  // not an argument, and clamping both ends would move the one they are keeping
+  // still. The visible result is identical anyway: every `pointermove` is its
+  // own call, so the last accepted one is where the handle comes to rest.
+  //
+  // A clip that arrived from somewhere else already shorter than MIN_CLIP (an
+  // overwrite can leave a sliver) can still be *grown* — only shrinking it
+  // further is refused.
+  if (outClamped - inClamped < MIN_CLIP) return project
+
   const next = clips.slice()
   next[index] = { ...clip, in: inClamped, out: outClamped }
   return { ...project, [lane]: next } as Project
 }
 
-/** Minimum clip length. Below this, a clip divides by zero somewhere. */
-const MIN_CLIP = 0.04
+/**
+ * Split **one clip in one lane**, leaving its link partner whole.
+ *
+ * This is the gesture "cut the picture and keep the sound" (or the reverse):
+ * the user selected one side of a linked pair, so only that side is cut. The
+ * left half keeps the original `linkId` because it still starts where the
+ * untouched partner starts; the right half is made **unlinked** (its own fresh
+ * id would be a group of one), so it cannot be mistaken for the partner of a
+ * clip the user never cut.
+ *
+ * `splitLinked` is the "cut both halves" version and is used when the pair is
+ * selected together, or when nothing is selected and both lanes are cut.
+ */
+export function splitClip(project: Project, lane: Lane, index: number, timelineT: number): Project {
+  const clips = laneOf(project, lane)
+  const clip = clips[index]
+  if (!clip) return project
+
+  const local = timelineT - clipStart(clips, index)
+  if (local < MIN_CLIP || local > clipDuration(clip) - MIN_CLIP) return project
+
+  const left: Clip = { ...clip, out: clip.in + local }
+  const right: Clip = { ...clip, id: newId('clp'), in: clip.in + local, offset: 0, linkId: undefined }
+  return { ...project, [lane]: [...clips.slice(0, index), left, right, ...clips.slice(index + 1)] } as Project
+}
 
 /**
  * Split a clip at a timeline position, and its linked partner along with it.
@@ -733,10 +953,20 @@ export function splitLinked(project: Project, lane: Lane, index: number, timelin
   const local = timelineT - clipStart(clips, index)
   if (local < MIN_CLIP || local > clipDuration(clip) - MIN_CLIP) return project
 
+  // The right halves become a new link group, so each side stays a pair.
+  //
+  // Keeping the original `linkId` on both halves made *four* clips share one id,
+  // and since `linkedPartner` then had no way to tell one pair from the other, a
+  // second split resolved the partner to its own same-lane left half. The result
+  // was that the audio half was never cut again, "Split selection" reported
+  // nothing to split, and "Trim selection" trimmed only the video. The left
+  // halves keep the original id, so they remain paired; the right halves get one
+  // fresh id between them, exactly as `duplicateClips` already does for a copy.
+  const rightLink = clip.linkId ? newId('lnk') : undefined
   const left: Clip = { ...clip, out: clip.in + local }
   // The right half starts where the left ends, so it carries no offset — its
   // position comes from being next in the array.
-  const right: Clip = { ...clip, id: newId('clp'), in: clip.in + local, offset: 0 }
+  const right: Clip = { ...clip, id: newId('clp'), in: clip.in + local, offset: 0, linkId: rightLink }
 
   let next = { ...project, [lane]: [...clips.slice(0, index), left, right, ...clips.slice(index + 1)] } as Project
 
@@ -752,7 +982,7 @@ export function splitLinked(project: Project, lane: Lane, index: number, timelin
       // video but produces a 10 ms audio clip is not a split anyone wanted.
       if (partnerLocal >= MIN_CLIP && partnerLocal <= clipDuration(p) - MIN_CLIP) {
         const pLeft: Clip = { ...p, out: p.in + partnerLocal }
-        const pRight: Clip = { ...p, id: newId('clp'), in: p.in + partnerLocal, offset: 0 }
+        const pRight: Clip = { ...p, id: newId('clp'), in: p.in + partnerLocal, offset: 0, linkId: rightLink }
         const other = [...otherClips.slice(0, partnerIndex), pLeft, pRight, ...otherClips.slice(partnerIndex + 1)]
         next = { ...next, [otherLane]: other } as Project
       }

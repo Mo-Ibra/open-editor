@@ -16,9 +16,7 @@
 import { createEffect, createSignal, onCleanup, onMount, type Accessor } from 'solid-js'
 
 import {
-  clipAtLane,
   clipDuration,
-  clipEnd,
   clipStart,
   laneOf,
   movingInLane,
@@ -30,6 +28,7 @@ import {
   snapMove,
   snapPlayhead,
   snapTrimEdge,
+  targetLanes,
   thresholdInSeconds,
   type SnapTarget,
 } from '../../../model/snapping.js'
@@ -50,16 +49,14 @@ const SNAP_PIXELS = 10
 type Drag =
   | { kind: 'playhead'; locked: SnapTarget | null }
   | {
-      kind: 'move'
-      lane: Lane
-      index: number
-      grabOffset: number
-      locked: SnapTarget | null
-      /** Captured at drag start; see the note where it is built. */
-      snapTargets: SnapTarget[]
-      /** End-edge-only targets (the next clip's start), also captured once. */
-      endSnapTargets: SnapTarget[]
-    }
+    kind: 'move'
+    lane: Lane
+    index: number
+    grabOffset: number
+    locked: SnapTarget | null
+    /** Captured at drag start; see the note where it is built. */
+    snapTargets: SnapTarget[]
+  }
   | { kind: 'trim-in'; lane: Lane; index: number; locked: SnapTarget | null }
   | { kind: 'trim-out'; lane: Lane; index: number; locked: SnapTarget | null }
 
@@ -136,16 +133,12 @@ export function useTimelineDrag(
   /**
    * The lanes whose edges are targets for a drag in `lane`.
    *
-   * `clipSnap` contributes the dragged clip's own lane (align within a row);
-   * `laneSnap` contributes the other one (align picture to sound). The two are
-   * independent toggles, so either, both, or neither can be on.
+   * The policy itself lives in `snapping.ts` as `targetLanes`, because a *drop*
+   * needs the same answer and the two used to disagree — the drop snapped to
+   * same-lane edges with clip snap switched off.
    */
-  const enabledLanes = (lane: Lane): Lane[] => {
-    const out: Lane[] = []
-    if (state.clipSnap()) out.push(lane)
-    if (state.laneSnap()) out.push(lane === 'video' ? 'audio' : 'video')
-    return out
-  }
+  const enabledLanes = (lane: Lane): Lane[] =>
+    targetLanes(lane, state.clipSnap(), state.laneSnap())
 
   const targets = (lane: Lane): SnapTarget[] =>
     collectTargets(state.project, {
@@ -169,12 +162,6 @@ export function useTimelineDrag(
 
   const laneStart = (lane: Lane, index: number): number =>
     clipStart(laneOf(state.project, lane), index)
-
-  /** Index in this lane whose span contains time `t`. */
-  function indexAtTime(t: number, lane: Lane): number {
-    const loc = clipAtLane(laneOf(state.project, lane), t)
-    return loc ? loc.index : 0
-  }
 
   function onPointerDown(event: PointerEvent): void {
     dragCommitted = false
@@ -210,25 +197,15 @@ export function useTimelineDrag(
       // chases — the vibration. Selected clips in the other lane move too, so
       // they are excluded as well.
       const moving = movingInLane(laneClips, selected)
-      const all = targets(lane)
-      let lastSelected = -1
-      for (let i = 0; i < laneClips.length; i++) if (selected.has(laneClips[i]!.id)) lastSelected = i
-      const next = lastSelected >= 0 ? laneClips[lastSelected + 1] : undefined
-      // The one useful downstream snap: the end edge butting the next clip's
-      // start. End-only, so the start edge cannot overlap it.
-      const butt = next
-        ? all.filter((t) => t.lane === lane && t.kind === 'clip-start' && t.clipId === next.id)
-        : []
       drag = {
         kind: 'move',
         lane,
         index,
         grabOffset: state.xToTime(x) - laneStart(lane, index),
         locked: null,
-        snapTargets: all.filter(
+        snapTargets: targets(lane).filter(
           (t) => !t.clipId || !(selected.has(t.clipId) || (t.lane === lane && moving.has(t.clipId))),
         ),
-        endSnapTargets: butt,
       }
       return
     }
@@ -288,15 +265,7 @@ export function useTimelineDrag(
         let start = raw
         if (state.snapping()) {
           const threshold = thresholdInSeconds(SNAP_PIXELS, state.zoom())
-          const snapped = snapMove(
-            raw,
-            clipDuration(clip),
-            drag.snapTargets,
-            threshold,
-            undefined,
-            drag.locked,
-            drag.endSnapTargets,
-          )
+          const snapped = snapMove(raw, clipDuration(clip), drag.snapTargets, threshold, undefined, drag.locked)
           if (snapped) {
             start = snapped.start
             drag.locked = snapped.target
@@ -318,24 +287,15 @@ export function useTimelineDrag(
           return
         }
 
-        const prevEnd = drag.index > 0 ? clipEnd(clips, drag.index - 1) : 0
-
-        if (start < prevEnd - 1e-6) {
-          // Moving left far enough to overlap the previous clip. Crossing a
-          // neighbour is a SWAP: the clip passes through rather than sticking on
-          // the boundary and refusing to go further.
-          const target = indexAtTime(start + clipDuration(clip) / 2, drag.lane)
-          if (target !== drag.index && target >= 0) {
-            state.reorder(drag.lane, drag.index, target)
-            drag = { ...drag, index: target }
-          }
-        } else {
-          // Fits after its predecessor, so it is positioned freely. `placeClip`
-          // clamps against overlap; that is a collision constraint, not a
-          // magnetic pull, and it never attracts toward a target.
-          state.place(drag.lane, drag.index, start)
-        }
-
+        // A move is a **clamp, never a reorder**. The clip follows the pointer,
+        // and `placeClip` stops it at the end of the clip in front of it:
+        // dragging right pushes the successors along (position is derived),
+        // while dragging left simply comes to rest against the predecessor.
+        //
+        // Crossing a neighbour used to swap the two, which threw the neighbour
+        // to the far side of the lane — the clip on the left visibly jumped
+        // away, which reads as being destroyed. A clip is a wall, not a door.
+        state.place(drag.lane, drag.index, start)
         return
       }
 
@@ -377,6 +337,21 @@ export function useTimelineDrag(
 
         if (drag.kind === 'trim-in') state.trim(drag.lane, drag.index, sourceT, clip.out)
         else state.trim(drag.lane, drag.index, clip.in, sourceT)
+
+        // The preview follows the handle.
+        //
+        // It used to follow a trim-*in* by accident: `sourceTimeAt` reads
+        // `clip.in`, so dragging that handle changed the source time the preview
+        // decodes and the picture tracked. `out` is not in that expression, so a
+        // trim-*out* froze the picture for the whole gesture — and once the new
+        // out-point passed the playhead, the clip ended before the playhead did and
+        // the preview showed whatever came next.
+        //
+        // For a trim-out the handle sits *at* the clip's end, which is not inside
+        // it — `clipAtLane` is half-open — so it is held one frame inside. Dragging
+        // a cut should show the clip being cut, not its consequences.
+        const frame = 1 / state.outputFps()
+        state.seek(drag.kind === 'trim-out' ? Math.max(laneStartTime, sourceT - frame) : sourceT)
 
         drag.locked = snapped?.target ?? null
         setGuide(snapped ? { time: snapped.time, label: describeTarget(snapped.target) } : null)

@@ -44,6 +44,38 @@ test('a linked pair moves in both lanes by the same delta', () => {
   assert.equal(clipStart(moved.audio, 0), 3, 'and so did its sound')
 })
 
+test('a linked pair dragged left stays rigid when one lane hits a wall', () => {
+  // The picture is at zero and cannot go left; the sound sits behind a gap at
+  // 10 and "could" move to 7. Clamping each lane independently let the sound
+  // travel while the picture stayed — the pair came apart between the lanes.
+  // The block is rigid, so the wall belongs to the whole selection: neither
+  // half moves. That is the honest cost of "the selected clips keep their
+  // spacing", and it is the opposite of a silent desync.
+  const p = project([clip('v1', 'video', 10)], [{ ...clip('a1', 'audio', 10), offset: 10 }])
+  assert.equal(clipStart(p.video, 0), 0)
+  assert.equal(clipStart(p.audio, 0), 10)
+
+  const moved = moveSelectionTo(p, 'video', 0, -3, new Set(['v1', 'a1']))
+  assert.equal(clipStart(moved.video, 0), 0, 'the picture is against the wall')
+  assert.equal(clipStart(moved.audio, 0), 10, 'and the sound did not detach to keep going')
+})
+
+test('a group drag left is limited by the more constrained of the two lanes', () => {
+  // Video's first selected clip is at 6 behind a predecessor ending at 6 (a
+  // wall); audio's is at 8 with a predecessor ending at 0, so it could travel
+  // to 0. The most constrained lane wins, and both move together.
+  const p = project(
+    [clip('v0', 'video', 6), clip('v1', 'video', 4)],
+    [{ ...clip('a0', 'audio', 4), offset: 8 }],
+  )
+  assert.equal(clipStart(p.video, 1), 6)
+  assert.equal(clipStart(p.audio, 0), 8)
+
+  const moved = moveSelectionTo(p, 'video', 1, 2, new Set(['v1', 'a0']))
+  assert.deepEqual(starts(moved.video), [0, 6], 'the video clip butts, it does not cross')
+  assert.equal(clipStart(moved.audio, 0), 8, 'and the sound moved by the same achieved delta')
+})
+
 test('unselected clips between selected ones are pushed, never overlapped', () => {
   const p = project([clip('a', 'video'), clip('b', 'video'), clip('c', 'video')])
   // Select a and c but not b. Both move by +2; b has nowhere to go but forward.

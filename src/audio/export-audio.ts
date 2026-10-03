@@ -13,7 +13,7 @@
  */
 
 import { mixTimeline, OUTPUT_CHANNELS, type MixSegment } from './audio.js'
-import { clipStart, type Project } from '../model/project.js'
+import { clipStarts, type Project } from '../model/project.js'
 import type { MediaLibrary } from '../media/library.js'
 import { log } from '../dev/debug.js'
 
@@ -42,6 +42,10 @@ export async function buildExportAudio(
   const clips = project.audio
   const segments: MixSegment[] = []
   let withAudio = 0
+  // One pass for every clip's timeline start. Asking `clipStart` per clip inside
+  // this loop made building the audio mix quadratic, and this runs once per export
+  // over the whole lane.
+  const starts = clipStarts(clips)
 
   for (let i = 0; i < clips.length; i++) {
     const clip = clips[i]!
@@ -65,7 +69,7 @@ export async function buildExportAudio(
 
     segments.push({
       buffer: sliceBuffer(decoded, from, to - from),
-      start: clipStart(clips, i),
+      start: starts[i]!,
       gain: clip.muted ? 0 : (clip.gain ?? 1),
     })
     withAudio++
