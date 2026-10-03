@@ -10,6 +10,7 @@ import { readFileSync } from 'node:fs'
 import {
   collectTargets,
   nearestTarget,
+  snapMove,
   snapTrimEdge,
   thresholdInSeconds,
   type SnapTarget,
@@ -162,6 +163,25 @@ check('an empty timeline still offers the origin', () => {
   assert.equal(snapTrimEdge(0.05, targets, 0.2)?.time, 0)
 })
 
+check('moving snaps whichever edge is nearer a target', () => {
+  const targets = [target(10, 'neighbour')]
+  // A 4s clip starting at 9.8: its start is 0.2 from the target, its end is far.
+  const byStart = snapMove(9.8, 4, targets, 0.25)
+  assert.equal(byStart?.edge, 'start', 'the start edge latched')
+  assert.equal(byStart?.start, 10, 'so the clip starts on the target')
+
+  // Starting at 5.9, its end (9.9) is the nearer edge, so the start is pulled to 6.
+  const byEnd = snapMove(5.9, 4, targets, 0.25)
+  assert.equal(byEnd?.edge, 'end', 'the end edge latched')
+  assert.equal(byEnd?.start, 6, 'and the start is placed one duration back')
+})
+
+check('a moving clip cannot snap to its own edges', () => {
+  const p = project([clip('v1', 0, 10)])
+  const targets = collectTargets(p, { playhead: 0, includePlayhead: false })
+  assert.equal(snapMove(9.9, 10, targets, 0.2, { clipId: 'v1' }), null, 'its own edges are excluded')
+})
+
 // ---------------------------------------------------------------------------
 // The acceptance criteria, as executable assertions.
 //
@@ -202,24 +222,18 @@ function dragCase(kind: 'move' | 'trim' | 'playhead'): string {
     .replace(/^\s*\/\/.*$/gm, '')
 }
 
-check('ACCEPTANCE 9 · a moved clip cannot reach the snapping system at all', () => {
+check('ACCEPTANCE 1, 2 · moving follows the pointer, then snaps to a nearby edge', () => {
   const move = dragCase('move')
-  for (const forbidden of ['nearestTarget', 'snapTrimEdge', 'snapClipMove', 'targets()', 'setGuide({']) {
-    assert.ok(!move.includes(forbidden), `the move path must not reference ${forbidden}`)
-  }
-})
-
-check('ACCEPTANCE 9 · a move shows no guide line', () => {
-  // A guide is the visible tell of a magnet, so its absence is the check.
-  assert.ok(/setGuide\(null\)/.test(dragCase('move')), 'the move path must clear the guide, never set one')
-})
-
-check('ACCEPTANCE 1, 2 · the move path is the pointer position, unmodified', () => {
-  const move = dragCase('move')
-  // The clip's start comes straight from the pointer, with nothing subtracted
-  // or nudged on the way.
-  assert.ok(/const start = t - drag\.grabOffset/.test(move), 'start is pointer time minus the grab offset')
-  assert.ok(!/snap/i.test(move), 'and the word "snap" appears nowhere in the move path')
+  assert.ok(/const raw = t - drag\.grabOffset/.test(move), 'the raw start is pointer time minus the grab offset')
+  assert.ok(move.includes('snapMove('), 'moving snaps its start or its end to a target')
+  assert.ok(move.includes('state.snapping()'), 'and only when snapping is on')
+  assert.ok(move.includes('drag.locked'), 'carrying the latched target through for stickiness')
+  assert.ok(/setGuide\(/.test(move), 'showing the guide line while aligned, and clearing it when not')
+  // A move pushes the clips after it, so a target rebuilt from the live project
+  // moves with the dragged clip and the snap oscillates. The targets are
+  // captured once, at drag start.
+  assert.ok(move.includes('drag.snapTargets'), 'the move snaps against a captured target list')
+  assert.ok(!move.includes('targets()'), 'and never rebuilds it mid-drag')
 })
 
 check('ACCEPTANCE 3, 4, 10 · trimming snaps, and both edges share it', () => {
@@ -264,15 +278,21 @@ check('ACCEPTANCE 5, 6, 7 · outside snaps, inside latches, far away releases', 
   assert.equal(snapTrimEdge(9.5, all, 0.2, { clipId: 'drag' }, cut), null, '0.5 away: released')
 })
 
-check('there is no snapping entry point for moving a clip', () => {
-  // The cleanest guard against the regression is that the helper is gone.
-  assert.ok(!/export function snapClipMove/.test(snappingSource), 'snapClipMove must not exist')
-  assert.ok(!/\bsnapClipMove\b/.test(timelineSource), 'and nothing may call it')
+check('the playhead drag is the one path that never snaps', () => {
+  const playhead = dragCase('playhead')
+  assert.ok(!/snap/i.test(playhead), 'the playhead must not reference snapping')
+  assert.ok(/state\.seek\(t\)/.test(playhead), 'it goes exactly where the pointer is')
+})
+
+check('snapping has exactly two entry points, one per gesture', () => {
+  // Moving used to be deliberately unsnappable (ADR-6). ADR-11 reversed that,
+  // so the surface is now trim + move and nothing else.
+  assert.ok(!/export function snapClipMove/.test(snappingSource), 'the old helper name is not resurrected')
   const exported = [...snappingSource.matchAll(/export (?:function|const|interface|type) (\w+)/g)].map((m) => m[1])
   assert.deepEqual(
-    exported.filter((n) => /^snap/.test(n!)),
-    ['snapTrimEdge'],
-    'the only exported snapping function is the trim one',
+    exported.filter((n) => /^snap/.test(n!)).sort(),
+    ['snapMove', 'snapTrimEdge'],
+    'trim and move are the whole snapping surface',
   )
 })
 

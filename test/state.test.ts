@@ -15,6 +15,7 @@
 
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
+import { clipStart } from '../src/model/project.ts'
 
 // --- the minimum browser surface the store touches at construction ---------
 const noop = (): void => undefined
@@ -172,6 +173,24 @@ test('removing an asset removes it from the project, not just its clips', () => 
   assert.deepEqual(state.assetIds(), [], 'the asset is gone from the bin')
   assert.equal(state.project.assets['ast_1'], undefined, 'and from the project map')
   assert.equal(state.project.video.length, 0, 'and its clips with it')
+})
+
+test('moving a multi-selection shifts every selected clip', () => {
+  // The store reads the live selection and hands it to the model, so this is
+  // the wiring between "I have several clips selected" and the rigid shift.
+  const state = createAppState()
+  state.project.video.push({ id: 'a', lane: 'video', assetId: 'x', in: 0, out: 5 })
+  state.project.video.push({ id: 'b', lane: 'video', assetId: 'x', in: 0, out: 5 })
+
+  state.selectClip('a')
+  state.selectClip('b', 'toggle')
+  state.moveSelection('video', 0, 7)
+
+  assert.deepEqual(
+    state.project.video.map((_, i) => clipStart(state.project.video, i)),
+    [7, 12],
+    'the whole selection moved together',
+  )
 })
 
 test('notices appear and are announced through the shared notify', () => {

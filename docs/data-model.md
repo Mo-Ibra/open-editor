@@ -126,26 +126,22 @@ projectDuration = max(laneDuration(video), laneDuration(audio))
 The **video** lane does not define output length. Audio that outlasts the picture
 is not something to pad the video with black for; the excess is simply not heard.
 
-## Snapping: trimming only
+## Snapping
 
 [`model/snapping.ts`](../src/model/snapping.ts). Toggle in the timeline toolbar or `G`.
 
-**Snapping is a property of cutting, not of moving.** A trim handle is placed by
-eye, so a small magnetic zone around each cut lets you return to a previous cut
-without pixel-hunting. Moving a whole clip must follow the pointer exactly: a
-clip that leaps sideways as it passes a boundary is not magnetic, it is broken,
-and it makes fine positioning impossible.
+**Both gestures snap.** A trim handle is placed by eye, so a small magnetic zone
+around each cut lets you return to a previous cut without pixel-hunting. A moved
+clip pulls its start or its end to a nearby edge the same way — see
+[ADR-11](decisions/0011-snapping-moves-too.md), which reversed the earlier
+trim-only rule.
 
-The separation is structural, not a convention:
+The surface is structural, not a convention:
 
-- `model/snapping.ts` exports **exactly one** snapping function, `snapTrimEdge`.
-  `snapClipMove` was **deleted** — the move path must not snap, so the helper has
-  no caller, and keeping it would be an invitation to re-wire it.
-- The `Drag` type carries `locked` on the **trim variants only**, so a move is
-  not physically capable of latching onto a target, and the compiler rejects one
-  that tries.
-- The move arm references no snapping symbol, builds no target list, and never
-  sets a guide line.
+- `model/snapping.ts` exports **exactly two** snapping functions: `snapMove` for
+  a clip drag and `snapTrimEdge` for a handle. Nothing else.
+- The `Drag` type carries `locked` on the move and trim variants, so both latch;
+  the playhead drag is the only one that cannot.
 - The **playhead is not a target**. Dragging it to check what is at 1:14 should
   give 1:14, not 1:14 snapped to a boundary. `collectTargets` still supports
   including it; the timeline opts out, and a test pins that refusal.

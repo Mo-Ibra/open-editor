@@ -380,6 +380,7 @@ export function createAppState() {
     duplicateSelected: edits.duplicateSelected,
     reorder: edits.reorder,
     place: edits.place,
+    moveSelection: edits.moveSelection,
     trim: edits.trim,
     setTransform: edits.setTransform,
     setClipGain: edits.setClipGain,

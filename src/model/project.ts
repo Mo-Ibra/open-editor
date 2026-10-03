@@ -372,6 +372,72 @@ export function placeClip(project: Project, lane: Lane, index: number, start: nu
 }
 
 /**
+ * Move every selected clip by the same time delta.
+ *
+ * Group drag is a **rigid shift**, not a reorder: the selected clips keep their
+ * order and their spacing, and each lane is repacked around them. A selected
+ * clip dragged left butts against its unselected predecessor rather than
+ * crossing it; dragged right, it pushes the unselected clips after it along —
+ * exactly what moving a single clip already does. Swapping past a neighbour is
+ * a single-clip gesture, because with several clips there is no unambiguous
+ * order to swap into.
+ *
+ * `anchorStart` is the desired timeline start of the clip under the pointer.
+ * The delta is derived from that clip and applied to all of them, so the grabbed
+ * clip always lands where the pointer is.
+ */
+export function moveSelectionTo(
+  project: Project,
+  anchorLane: Lane,
+  anchorIndex: number,
+  anchorStart: number,
+  selected: ReadonlySet<ClipId>,
+): Project {
+  const anchorClips = laneOf(project, anchorLane)
+  if (!anchorClips[anchorIndex]) return project
+  const delta = anchorStart - clipStart(anchorClips, anchorIndex)
+  if (delta === 0) return project
+  return {
+    ...project,
+    video: shiftLane(project.video, selected, delta),
+    audio: shiftLane(project.audio, selected, delta),
+  }
+}
+
+/**
+ * Repack one lane with the selected clips shifted by `delta`.
+ *
+ * Each clip's desired position is its current one, plus `delta` when selected.
+ * Walking left to right, a clip lands at its desired position or at the end of
+ * its predecessor, whichever is later — so a leftward move is clamped by the
+ * neighbour in front, and a rightward move pushes the one behind. `offset`
+ * (silence before the clip) is re-derived from that, never stored as a position.
+ */
+function shiftLane(clips: Clip[], selected: ReadonlySet<ClipId>, delta: number): Clip[] {
+  if (!clips.some((clip) => selected.has(clip.id))) return clips
+  const out: Clip[] = []
+  // Running ends, not `clipStart` per index: the latter sums the lane on every
+  // call, which is O(n²) across a group drag and shows up on a long timeline.
+  let originalEnd = 0
+  let cursor = 0
+  for (let i = 0; i < clips.length; i++) {
+    const clip = clips[i]!
+    const originalStart = originalEnd + clipOffset(clip)
+    const desired = originalStart + (selected.has(clip.id) ? delta : 0)
+    const target = Math.max(cursor, desired)
+    const offset = target - cursor
+    // Reuse the clip when its own offset did not change. `<For>` keys on the
+    // object reference, so handing it a fresh object for every clip remounts
+    // the whole lane — and each remount repaints that clip's filmstrip, which
+    // made dragging a group of two heavy on a timeline of many.
+    out.push(offset === clipOffset(clip) ? clip : { ...clip, offset })
+    originalEnd = originalStart + clipDuration(clip)
+    cursor = target + clipDuration(clip)
+  }
+  return out
+}
+
+/**
  * How a drop behaves against whatever is already there.
  *
  * Both modes exist in every professional editor, and they answer different

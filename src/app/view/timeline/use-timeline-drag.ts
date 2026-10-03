@@ -7,10 +7,10 @@
  * no identity of its own.
  *
  * **The one thing worth reading here is the `Drag` union.** `locked` — the
- * latched snap target — exists on the trim variants ONLY. That is the whole
- * architectural statement about snapping expressed in the type: moving a clip
- * is not physically capable of latching onto a target, so the compiler rejects a
- * move that tries. See docs/data-model.md.
+ * latched snap target — is carried by the move and trim variants alike, because
+ * both snap (ADR-11). It is absent only from the playhead drag, which must
+ * follow the pointer exactly: a playhead that jumps to the nearest edge stops
+ * being a measurement.
  */
 
 import { createEffect, createSignal, onCleanup, onMount, type Accessor } from 'solid-js'
@@ -19,6 +19,7 @@ import { clipAtLane, clipDuration, clipEnd, clipStart, laneOf, type Lane } from 
 import {
   collectTargets,
   describeTarget,
+  snapMove,
   snapTrimEdge,
   thresholdInSeconds,
   type SnapTarget,
@@ -39,7 +40,15 @@ const SNAP_PIXELS = 10
 
 type Drag =
   | { kind: 'playhead' }
-  | { kind: 'move'; lane: Lane; index: number; grabOffset: number }
+  | {
+      kind: 'move'
+      lane: Lane
+      index: number
+      grabOffset: number
+      locked: SnapTarget | null
+      /** Captured at drag start; see the note where it is built. */
+      snapTargets: SnapTarget[]
+    }
   | { kind: 'trim-in'; lane: Lane; index: number; locked: SnapTarget | null }
   | { kind: 'trim-out'; lane: Lane; index: number; locked: SnapTarget | null }
 
@@ -155,7 +164,20 @@ export function useTimelineDrag(
       const clip = laneOf(state.project, lane)[index]
       if (!clip) return
       state.selectClip(clip.id, selectModeOf(event))
-      drag = { kind: 'move', lane, index, grabOffset: state.xToTime(x) - laneStart(lane, index) }
+      const selected = new Set(state.selection())
+      drag = {
+        kind: 'move',
+        lane,
+        index,
+        grabOffset: state.xToTime(x) - laneStart(lane, index),
+        locked: null,
+        // Snapshotted once, not recomputed per frame. Moving pushes the clips
+        // after it, so their edges travel with the drag; snapping against their
+        // *live* positions made the clip chase a target that moved with it, and
+        // the result was a visible vibration. The dragging clips are excluded
+        // too — a group must not snap to its own edges.
+        snapTargets: targets().filter((t) => !t.clipId || !selected.has(t.clipId)),
+      }
       return
     }
 
@@ -181,22 +203,50 @@ export function useTimelineDrag(
 
       case 'move': {
         const clips = laneOf(state.project, drag.lane)
-        if (!clips[drag.index]) return
+        const clip = clips[drag.index]
+        if (!clip) return
         if (!dragCommitted) {
           state.commit()
           dragCommitted = true
         }
 
-        // FREE MOVEMENT. No snapping, no target list, no latch, no guide line.
-        // The clip goes exactly where the pointer says.
-        const start = t - drag.grabOffset
+        // The pointer position first, then a pull to a nearby edge. Both edges
+        // of the clip are candidates, so it can butt its start against a
+        // neighbour's end or its end against a neighbour's start. Snapping is
+        // gated on the toggle; moving without it is exact.
+        const raw = t - drag.grabOffset
+        let start = raw
+        if (state.snapping()) {
+          const threshold = thresholdInSeconds(SNAP_PIXELS, state.zoom())
+          const snapped = snapMove(raw, clipDuration(clip), drag.snapTargets, threshold, undefined, drag.locked)
+          if (snapped) {
+            start = snapped.start
+            drag.locked = snapped.target
+            setGuide({ time: snapped.target.time, label: describeTarget(snapped.target) })
+          } else {
+            drag.locked = null
+            setGuide(null)
+          }
+        } else {
+          drag.locked = null
+          setGuide(null)
+        }
+
+        // A multi-selection moves as one rigid block. It is a different gesture
+        // from a single clip: there is no unambiguous neighbour to swap with, so
+        // the group only shifts and repacks, it never reorders.
+        if (state.selectionCount() > 1) {
+          state.moveSelection(drag.lane, drag.index, start)
+          return
+        }
+
         const prevEnd = drag.index > 0 ? clipEnd(clips, drag.index - 1) : 0
 
         if (start < prevEnd - 1e-6) {
           // Moving left far enough to overlap the previous clip. Crossing a
-          // neighbour is a SWAP, not a magnet: the clip passes through rather
-          // than sticking on the boundary and refusing to go further.
-          const target = indexAtTime(start + clipDuration(clips[drag.index]!) / 2, drag.lane)
+          // neighbour is a SWAP: the clip passes through rather than sticking on
+          // the boundary and refusing to go further.
+          const target = indexAtTime(start + clipDuration(clip) / 2, drag.lane)
           if (target !== drag.index && target >= 0) {
             state.reorder(drag.lane, drag.index, target)
             drag = { ...drag, index: target }
@@ -208,7 +258,6 @@ export function useTimelineDrag(
           state.place(drag.lane, drag.index, start)
         }
 
-        setGuide(null)
         return
       }
 

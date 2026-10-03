@@ -61,7 +61,7 @@ export function Toolbar(props: { state: AppState; anyClips: () => boolean; layou
         classList={{ '!border-accent/50 !text-accent': state.snapping() }}
         disabled={!props.anyClips()}
         onClick={() => state.setSnapping(!state.snapping())}
-        title="Magnetic snapping: align clip edges, the playhead, and the timeline start (G)"
+        title="Magnetic snapping: a dragged clip or a trim handle pulls to clip edges and the timeline start (G)"
       >
         <Magnet size={14} />
         snap

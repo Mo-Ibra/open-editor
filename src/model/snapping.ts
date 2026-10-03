@@ -129,18 +129,11 @@ export function nearestTarget(
 const STICKY_FACTOR = 1.6
 
 /**
- * Snap a single edge. **This is the only snapping entry point, and it exists
- * for trimming.**
+ * Snap a single trim edge.
  *
- * Snapping is a property of *cutting*, not of *moving*. A trim handle is
- * placed by eye, so an invisible magnetic zone around each cut lets you return
- * to a previous cut without pixel-hunting. Moving a whole clip, by contrast,
- * must follow the pointer exactly: a clip that leaps sideways as it passes near
- * a boundary is not magnetic, it is broken, and it makes fine positioning
- * impossible.
- *
- * Hence there is no `snapClipMove`. If a future feature wants snapping while
- * moving, it has to be built deliberately rather than re-enabled by accident.
+ * A trim handle is placed by eye, so an invisible magnetic zone around each cut
+ * lets you return to a previous cut without pixel-hunting. `snapMove` does the
+ * same for a moving clip; together they are the whole snapping surface.
  *
  * `edge` is the value the drag is proposing for the edge in question.
  */
@@ -153,6 +146,63 @@ export function snapTrimEdge(
 ): { time: number; target: SnapTarget } | null {
   const target = nearestTarget(edge, targets, threshold, exclude, locked)
   return target ? { time: target.time, target } : null
+}
+
+export interface MoveSnap {
+  /** The clip start after snapping (its far edge may be the one that latched). */
+  start: number
+  target: SnapTarget
+  /** Which edge of the moving clip aligned. */
+  edge: 'start' | 'end'
+}
+
+/**
+ * Snap a clip while it is being moved.
+ *
+ * Both edges are candidates, so a clip can be pulled so its start meets a
+ * neighbour's end (butting) or its end meets a neighbour's start — whichever is
+ * nearer to a target. The clip's own edges are excluded, so it cannot latch onto
+ * itself and stick.
+ *
+ * This is the counterpart to `snapTrimEdge`; together they are the whole
+ * snapping surface. Moving snaps now (see ADR-11), where it once did not.
+ */
+export function snapMove(
+  proposedStart: number,
+  duration: number,
+  targets: SnapTarget[],
+  threshold: number,
+  exclude?: { clipId?: string | null; lane?: Lane | null },
+  locked?: SnapTarget | null,
+): MoveSnap | null {
+  const edges: { edge: 'start' | 'end'; time: number }[] = [
+    { edge: 'start', time: proposedStart },
+    { edge: 'end', time: proposedStart + duration },
+  ]
+  const align = (edge: 'start' | 'end', time: number): number => (edge === 'start' ? time : time - duration)
+
+  // Sticky: keep the edge latched to its target until the pointer drifts past
+  // the release distance, rather than flickering in and out of alignment.
+  if (locked) {
+    for (const e of edges) {
+      if (Math.abs(locked.time - e.time) <= threshold * STICKY_FACTOR) {
+        return { start: align(e.edge, locked.time), target: locked, edge: e.edge }
+      }
+    }
+  }
+
+  let best: MoveSnap | null = null
+  let bestDistance = Infinity
+  for (const e of edges) {
+    const target = nearestTarget(e.time, targets, threshold, exclude, null)
+    if (!target) continue
+    const distance = Math.abs(target.time - e.time)
+    if (distance < bestDistance) {
+      bestDistance = distance
+      best = { start: align(e.edge, target.time), target, edge: e.edge }
+    }
+  }
+  return best
 }
 
 /** Convert a pixel tolerance into seconds at the current zoom. */

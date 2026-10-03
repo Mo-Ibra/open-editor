@@ -23,6 +23,7 @@ import {
   findClip,
   laneOf,
   moveClip,
+  moveSelectionTo,
   placeClip,
   removeClip,
   setClipGain as applyGain,
@@ -70,6 +71,8 @@ export interface EditSlice {
   duplicateSelected: () => void
   reorder: (lane: Lane, from: number, to: number) => void
   place: (lane: Lane, index: number, start: number) => void
+  /** Move the whole selection as one block, anchored on `index`. */
+  moveSelection: (lane: Lane, index: number, start: number) => void
   trim: (lane: Lane, index: number, inPoint: number, outPoint: number) => void
   setTransform: (clipId: ClipId, transform: Clip['transform']) => void
   setClipGain: (clipId: ClipId, gain: number) => void
@@ -306,6 +309,19 @@ function place(lane: Lane, index: number, start: number): void {
   setProject(replace(placeClip(unwrap(project), lane, index, start)))
 }
 
+/**
+ * Drag a multi-selection as a rigid block.
+ *
+ * The anchor is the clip under the pointer; `start` is where it should land.
+ * Every selected clip follows by the same delta, in both lanes, so a linked
+ * pair stays together without a special case.
+ */
+function moveSelection(lane: Lane, index: number, start: number): void {
+  const ids = sel.ids()
+  if (ids.length < 2) return
+  setProject(replace(moveSelectionTo(unwrap(project), lane, index, start, new Set(ids))))
+}
+
 function trim(lane: Lane, index: number, inPoint: number, outPoint: number): void {
   setProject(replace(applyTrim(unwrap(project), lane, index, inPoint, outPoint)))
 }
@@ -447,6 +463,7 @@ const selectionHasLinks = (): boolean => sel.clips().some((c) => Boolean(c.linkI
     duplicateSelected,
     reorder,
     place,
+    moveSelection,
     trim,
     setTransform,
     setClipGain,

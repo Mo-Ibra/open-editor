@@ -10,22 +10,16 @@
 | **3** — Preview | Playhead scrubbing, waveform, approximate decode with a frame cache. |
 | **4** — Export | MP4/WebM with negotiation, A/V sync assertions, the output played back before download. |
 | **5** — UX | Resizable panels, custom context menus, media bin drag-and-drop, format picker. |
+| **6** — Group drag | A multi-selection moves as one rigid block. No reorder: with several clips there is no unambiguous neighbour to swap with. |
 
 ## Next, in rough order of value
 
-1. **Group drag for multi-selections.** Ctrl-click selects several clips, and
-   every action applies to all of them — except dragging, which still moves only
-   the clip under the pointer. Moving the whole selection is the obvious next
-   thing, and it changes drag semantics that the snapping acceptance tests pin
-   down, so it needs its own pass.
-2. **Re-measure encode speed on a real 30 fps CFR clip** ([R2](risks.md#r2--encode-speed)).
+1. **Re-measure encode speed on a real 30 fps CFR clip** ([R2](risks.md#r2--encode-speed)).
    Everything about the export architecture depends on whether 154 fps was real.
-3. **Spike Firefox and Safari export** ([R3](risks.md#r3--browser-fragmentation)).
-4. **Project persistence**, if the answer to the open question below is that
-   sessions need to survive.
-5. **Ripple delete** — close the gap when a clip is removed. Currently a delete
+2. **Spike Firefox and Safari export** ([R3](risks.md#r3--browser-fragmentation)).
+3. **Ripple delete** — close the gap when a clip is removed. Currently a delete
    leaves the gap, which is correct for a cutter but not what people expect.
-6. **Shade the dead air** using the `findSilence()` that already exists in
+4. **Shade the dead air** using the `findSilence()` that already exists in
    `peaks.ts`.
 
 ## Explicitly not planned

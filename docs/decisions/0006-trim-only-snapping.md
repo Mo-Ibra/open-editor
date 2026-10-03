@@ -1,6 +1,6 @@
 # ADR-6: Snapping applies to trims only
 
-**Status:** Accepted.
+**Status:** Superseded by [ADR-11](0011-snapping-moves-too.md).
 
 ## Context
 
