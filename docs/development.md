@@ -4,14 +4,20 @@
 
 ```bash
 npm run dev         # dev server, http://localhost:5173
-npm test            # 9 suites — no browser, no network
+npm test            # logic suites (Node) then component suites (Vitest + jsdom)
+npm run test:logic  # the pure-logic suites only
+npm run test:ui     # the .tsx component suites only
+npm run test:watch  # component suites in watch mode
 npm run typecheck   # tsc --noEmit
 npm run build       # typecheck + production build
 ```
 
-`npm test` is a chain of individual `node --experimental-strip-types` runs rather
-than a test-runner dependency. Each suite is a plain script with `node:assert`;
-suites are listed explicitly in `package.json` so a failure names the file.
+`npm test` runs two runners, on purpose. The **logic** suites are plain
+`node --experimental-strip-types` scripts with `node:assert`, so the pure model,
+geometry and export maths need no test-framework dependency and no browser. The
+**component** suites are `.tsx` and need a DOM, so they run under Vitest with
+jsdom. Keeping them separate means the fast suite stays fast and the DOM suite
+stays honest about what it needs.
 
 ## Logging
 
@@ -28,10 +34,19 @@ debugging loop.
 
 ## Running the tests
 
-`npm test` globs `test/*.test.ts`. It used to be a hand-written `&&` chain of 20
-commands, and two test files were added without being added to the chain — so the
-suite reported green while never running them. **Add a test file, do not edit the
-script.** A guard in `test/dom.test.ts` asserts the glob is still there.
+`npm run test:logic` globs `test/*.test.ts`. It used to be a hand-written `&&`
+chain of 20 commands, and two test files were added without being added to the
+chain — so the suite reported green while never running them. **Add a test file,
+do not edit the script.** A guard in `test/dom.test.ts` asserts the glob is still
+there.
+
+`npm run test:ui` globs `test/components/*.test.tsx` and runs them under Vitest.
+The Node runner strips types and cannot load `.tsx` at all, so before this the
+entire UI was untested by construction — which is how a fixed timeline height, a
+media row that survived deletion, and a scroller that never scrolled all shipped
+green. `test/setup.ts` supplies the jsdom shims the components actually call
+(`ResizeObserver`, `PointerEvent`, pointer capture, `matchMedia`, rAF); add to it
+when a new component needs another browser API.
 
 ## Layout of the tests
 
@@ -48,6 +63,7 @@ script.** A guard in `test/dom.test.ts` asserts the glob is still there.
 | `peaks.test.ts` | Waveform downsampling preserves extremes |
 | `frame-cache.test.ts` | Frame reuse and staleness |
 | `dom.test.ts` | Structural guards — see below |
+| `components/*.test.tsx` | Rendered UI, under Vitest + jsdom: modal focus, the resizer tab, the context menu, the scrubber, the media bin |
 
 ## Two kinds of test, and why both exist
 
