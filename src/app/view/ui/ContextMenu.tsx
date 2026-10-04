@@ -14,7 +14,7 @@
 
 import { createEffect, createSignal, For, Show, type JSX } from 'solid-js'
 import { computePosition, flip, offset, shift } from '@floating-ui/dom'
-import { log } from '../../dev/debug.js'
+import { log } from '../../../dev/debug.js'
 
 export interface MenuItem {
   label: string

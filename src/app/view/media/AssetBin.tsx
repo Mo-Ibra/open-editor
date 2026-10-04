@@ -17,11 +17,11 @@
 
 import { createEffect, createMemo, createSignal, For, Show } from 'solid-js'
 import { Plus, Search, Trash2 } from 'lucide-solid'
-import type { Asset } from '../../model/project.js'
-import type { AppState } from '../store/state.js'
-import type { ContextMenuState } from './ContextMenu.js'
-import type { LayoutState } from '../store/layout.js'
-import { PanelToggle } from './PanelToggle.js'
+import type { Asset } from '../../../model/project.js'
+import type { AppState } from '../../store/state.js'
+import type { ContextMenuState } from '../ui/ContextMenu.js'
+import type { LayoutState } from '../../store/layout.js'
+import { PanelToggle } from '../shell/PanelToggle.js'
 import { thumbnailFor } from './thumbnail.js'
 
 export function AssetBin(props: { state: AppState; menu: ContextMenuState; layout: LayoutState }) {

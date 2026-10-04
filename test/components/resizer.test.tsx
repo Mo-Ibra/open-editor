@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { fireEvent, render } from '@solidjs/testing-library'
-import { Resizer } from '../../src/app/view/Resizer.js'
+import { Resizer } from '../../src/app/view/shell/Resizer.js'
 
 describe('Resizer', () => {
   it('is a labelled, clickable tab when collapsed', () => {

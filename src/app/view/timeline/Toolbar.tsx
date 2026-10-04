@@ -12,7 +12,7 @@ import { Show } from 'solid-js'
 import { Copy, Crosshair, Magnet, Rows3, Scissors, Trash2, Unlink } from 'lucide-solid'
 import type { AppState } from '../../store/state.js'
 import type { LayoutState } from '../../store/layout.js'
-import { PanelToggle } from '../PanelToggle.js'
+import { PanelToggle } from '../shell/PanelToggle.js'
 
 export function Toolbar(props: { state: AppState; anyClips: () => boolean; layout: LayoutState }) {
   const state = props.state

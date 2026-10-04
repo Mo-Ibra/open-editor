@@ -14,8 +14,8 @@
 import type { AppState } from '../store/state.js'
 import type { Shortcut } from './keyboard.js'
 import type { LayoutState } from '../store/layout.js'
-import type { Fullscreen } from '../view/fullscreen.js'
-import { shouldSuppressNativeMenu } from '../view/ContextMenu.js'
+import type { Fullscreen } from '../view/shell/fullscreen.js'
+import { shouldSuppressNativeMenu } from '../view/ui/ContextMenu.js'
 
 export interface ShortcutContext {
   state: AppState

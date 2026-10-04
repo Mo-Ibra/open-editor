@@ -12,7 +12,7 @@
  */
 
 import { createSignal, onCleanup, type Accessor } from 'solid-js'
-import { log } from '../../dev/debug.js'
+import { log } from '../../../dev/debug.js'
 
 export interface Fullscreen {
   /** Whether the picture is actually full screen right now. */

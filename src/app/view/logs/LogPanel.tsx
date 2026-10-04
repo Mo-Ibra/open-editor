@@ -15,8 +15,8 @@
  */
 
 import { createMemo, createSignal, For, Show } from 'solid-js'
-import { clear, history, logRevision, type Level } from '../../dev/debug.js'
-import { Modal, PanelHeader } from './ui/Modal.js'
+import { clear, history, logRevision, type Level } from '../../../dev/debug.js'
+import { Modal, PanelHeader } from '../ui/Modal.js'
 
 const LEVELS: Level[] = ['debug', 'info', 'warn', 'error']
 

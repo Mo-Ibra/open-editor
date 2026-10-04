@@ -15,9 +15,9 @@
 
 import { createSignal, For, Show } from 'solid-js'
 import { Download, Image, Plus, Upload } from 'lucide-solid'
-import type { AppState } from '../store/state.js'
+import type { AppState } from '../../store/state.js'
 import { canPickSavePath } from './transfer.js'
-import { Modal, PanelHeader } from './ui/Modal.js'
+import { Modal, PanelHeader } from '../ui/Modal.js'
 
 const kb = (n: number): string => {
   if (n < 1024) return `${n} B`

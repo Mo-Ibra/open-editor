@@ -9,10 +9,10 @@
 import { describe, expect, it } from 'vitest'
 import { fireEvent, render } from '@solidjs/testing-library'
 import { createSignal } from 'solid-js'
-import { AssetBin } from '../../src/app/view/AssetBin.js'
+import { AssetBin } from '../../src/app/view/media/AssetBin.js'
 import type { Asset } from '../../src/model/project.js'
 import type { AppState } from '../../src/app/store/state.js'
-import type { ContextMenuState } from '../../src/app/view/ContextMenu.js'
+import type { ContextMenuState } from '../../src/app/view/ui/ContextMenu.js'
 import type { LayoutState } from '../../src/app/store/layout.js'
 
 const asset = (id: string, name: string): Asset => ({

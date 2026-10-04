@@ -16,7 +16,7 @@
  * `background-image`, neither of which costs anything to display.
  */
 
-import type { AppState } from '../store/state.js'
+import type { AppState } from '../../store/state.js'
 
 /** Target height of the generated thumbnail, in pixels. */
 const THUMB_HEIGHT = 96

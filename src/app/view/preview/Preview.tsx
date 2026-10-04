@@ -7,17 +7,17 @@
  */
 
 import { createEffect, createSignal, onCleanup, onMount, Show } from 'solid-js'
-import type { Clip } from '../../model/project.js'
-import { renderBlank, renderFrame, type SourceImage } from '../../render/render.js'
-import type { AppState } from '../store/state.js'
-import type { ContextMenuState } from './ContextMenu.js'
-import type { LayoutState } from '../store/layout.js'
-import type { Fullscreen } from './fullscreen.js'
-import { log } from '../../dev/debug.js'
-import { createDiagnostics, HEALTH_INTERVAL_MS } from '../../dev/preview-diagnostics.js'
-import { Transport } from './preview/Transport.js'
-import { paintIntentAt } from './preview/paint-intent.js'
-import { usePlaybackClock } from './preview/use-playback-clock.js'
+import type { Clip } from '../../../model/project.js'
+import { renderBlank, renderFrame, type SourceImage } from '../../../render/render.js'
+import type { AppState } from '../../store/state.js'
+import type { ContextMenuState } from '../ui/ContextMenu.js'
+import type { LayoutState } from '../../store/layout.js'
+import type { Fullscreen } from '../shell/fullscreen.js'
+import { log } from '../../../dev/debug.js'
+import { createDiagnostics, HEALTH_INTERVAL_MS } from '../../../dev/preview-diagnostics.js'
+import { Transport } from './Transport.js'
+import { paintIntentAt } from './paint-intent.js'
+import { usePlaybackClock } from './use-playback-clock.js'
 
 export function Preview(props: {
   state: AppState

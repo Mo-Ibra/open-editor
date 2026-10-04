@@ -186,7 +186,7 @@ explaining what caught it:
 | Add `snapClipMove` and snap a move | `test/dom.test.ts` — the guards are explicit about this. |
 | Let `toggleMute` accept a video clip | `test/model.test.ts` |
 | Replace the plain set in `applyLanes` with `reconcile` | The media library vanishes. The 48-line file warns you. |
-| Discard the frame when the playhead moved | The `test/frame-cache.test.ts` assertion, and the comment at `src/app/view/Preview.tsx:197`. |
+| Discard the frame when the playhead moved | The `test/frame-cache.test.ts` assertion, and the comment at `src/app/view/preview/Preview.tsx:197`. |
 | Add a second drawing path in `render.ts` | Nothing catches it. That is why [ADR-1](decisions/0001-one-render-function.md) exists — read it before you finish this tier. |
 | Hardcode `video: 'avc1'` in the exporter | `test/codecs.test.ts` |
 

@@ -14,7 +14,7 @@
 import { createEffect, createSignal, onCleanup, Show } from 'solid-js'
 import type { Clip } from '../../../model/project.js'
 import type { AppState } from '../../store/state.js'
-import { thumbnailFor } from '../thumbnail.js'
+import { thumbnailFor } from '../media/thumbnail.js'
 
 export function Filmstrip(props: { clip: Clip; state: AppState }) {
   const [thumb, setThumb] = createSignal<string | null>(null)

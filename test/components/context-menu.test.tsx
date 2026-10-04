@@ -8,7 +8,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render } from '@solidjs/testing-library'
-import { ContextMenu, type ContextMenuState } from '../../src/app/view/ContextMenu.js'
+import { ContextMenu, type ContextMenuState } from '../../src/app/view/ui/ContextMenu.js'
 
 describe('ContextMenu', () => {
   it('renders the open target’s items and runs the one clicked', () => {

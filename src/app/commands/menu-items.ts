@@ -15,8 +15,8 @@
 import { dump } from '../../dev/debug.js'
 import type { AppState } from '../store/state.js'
 import type { LayoutState } from '../store/layout.js'
-import type { ContextMenuState, MenuItem } from '../view/ContextMenu.js'
-import type { Fullscreen } from '../view/fullscreen.js'
+import type { ContextMenuState, MenuItem } from '../view/ui/ContextMenu.js'
+import type { Fullscreen } from '../view/shell/fullscreen.js'
 
 export function menuItems(
   state: AppState,

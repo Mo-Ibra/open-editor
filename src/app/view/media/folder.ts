@@ -16,7 +16,7 @@
  * ceiling rather than freezing the tab.
  */
 
-import { log } from '../../dev/debug.js'
+import { log } from '../../../dev/debug.js'
 
 /** Enough for any real shoot. Above this, someone dragged their home folder. */
 export const MAX_FOLDER_FILES = 5000

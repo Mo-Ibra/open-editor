@@ -10,7 +10,7 @@
 
 import { createMemo, For } from 'solid-js'
 import { laneOf, type Lane } from '../../../model/project.js'
-import { DND_ASSET, draggedAssetId } from '../AssetBin.js'
+import { DND_ASSET, draggedAssetId } from '../media/AssetBin.js'
 import type { AppState } from '../../store/state.js'
 import { Clip } from './Clip.js'
 import { DropCue } from './DropCue.js'

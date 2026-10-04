@@ -15,15 +15,15 @@
  */
 
 import { createEffect, createSignal, For, onCleanup, Show } from 'solid-js'
-import { Exporter, ExportCancelled, settingsFor, type ExportResult } from '../../output/exporter.js'
-import { buildExportAudio, verifyAudioTrack, type ExportAudioTrack } from '../../audio/export-audio.js'
-import { projectDuration } from '../../model/project.js'
-import { readMediaFacts, selfCheck, selfCheckLine } from '../../output/self-check.js'
-import { availablePlans, even, qualityBitrate, type ExportQuality, type PlanCandidate, type SourceFacts } from '../../output/codecs.js'
-import { log } from '../../dev/debug.js'
+import { Exporter, ExportCancelled, settingsFor, type ExportResult } from '../../../output/exporter.js'
+import { buildExportAudio, verifyAudioTrack, type ExportAudioTrack } from '../../../audio/export-audio.js'
+import { projectDuration } from '../../../model/project.js'
+import { readMediaFacts, selfCheck, selfCheckLine } from '../../../output/self-check.js'
+import { availablePlans, even, qualityBitrate, type ExportQuality, type PlanCandidate, type SourceFacts } from '../../../output/codecs.js'
+import { log } from '../../../dev/debug.js'
 import { X } from 'lucide-solid'
-import type { AppState } from '../store/state.js'
-import { Modal } from './ui/Modal.js'
+import type { AppState } from '../../store/state.js'
+import { Modal } from '../ui/Modal.js'
 
 const PRESETS = [
   { label: 'Match source', value: 'source' as const },

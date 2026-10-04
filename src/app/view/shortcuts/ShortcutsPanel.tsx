@@ -16,8 +16,8 @@
  */
 
 import { For } from 'solid-js'
-import type { Shortcut } from '../commands/keyboard.js'
-import { Modal, PanelHeader } from './ui/Modal.js'
+import type { Shortcut } from '../../commands/keyboard.js'
+import { Modal, PanelHeader } from '../ui/Modal.js'
 
 export function ShortcutsPanel(props: { shortcuts: Shortcut[]; onClose: () => void }) {
   // Grouped by the blank space between them in the source, so the panel's

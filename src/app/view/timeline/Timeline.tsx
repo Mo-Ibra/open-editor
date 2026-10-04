@@ -11,17 +11,17 @@
  */
 
 import { createEffect, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
-import type { Lane } from '../../model/project.js'
-import type { AppState } from '../store/state.js'
-import type { ContextMenuState } from './ContextMenu.js'
-import { DND_ASSET, draggedAssetId } from './AssetBin.js'
-import { Lane as LaneView, type DropPreview } from './timeline/Lane.js'
-import { Ruler } from './timeline/Ruler.js'
-import { ticks } from './timeline/ticks.js'
-import { TimelineScrollbar } from './timeline/TimelineScrollbar.js'
-import { Toolbar } from './timeline/Toolbar.js'
-import type { LayoutState } from '../store/layout.js'
-import { useTimelineDrag } from './timeline/use-timeline-drag.js'
+import type { Lane } from '../../../model/project.js'
+import type { AppState } from '../../store/state.js'
+import type { ContextMenuState } from '../ui/ContextMenu.js'
+import { DND_ASSET, draggedAssetId } from '../media/AssetBin.js'
+import { Lane as LaneView, type DropPreview } from './Lane.js'
+import { Ruler } from './Ruler.js'
+import { ticks } from './ticks.js'
+import { TimelineScrollbar } from './TimelineScrollbar.js'
+import { Toolbar } from './Toolbar.js'
+import type { LayoutState } from '../../store/layout.js'
+import { useTimelineDrag } from './use-timeline-drag.js'
 
 /** Lane row heights, in pixels. The drop target has to agree with what is drawn. */
 const LANE_HEIGHTS = [

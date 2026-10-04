@@ -15,7 +15,7 @@ import { Show } from 'solid-js'
 import type { Accessor } from 'solid-js'
 import { Eye, EyeOff, Maximize2, Minimize2, Pause, Play, SkipBack, SkipForward, Volume2, VolumeX } from 'lucide-solid'
 import type { AppState } from '../../store/state.js'
-import { formatTime } from '../format.js'
+import { formatTime } from '../ui/format.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { Scrubber } from './Scrubber.js'
 

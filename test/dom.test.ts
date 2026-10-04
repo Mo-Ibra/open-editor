@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { VIEW, readRepoFile, readView } from './view-paths.ts'
 
 const html = readFileSync(new URL('../phase0.html', import.meta.url), 'utf8')
 const ts = readFileSync(new URL('../src/phase0.ts', import.meta.url), 'utf8')
@@ -63,7 +64,7 @@ console.log('dom id assertions passed')
   assert.deepEqual(offenders, [], `components must not render lists from library.all(): ${offenders.join(', ')}`)
 
   // And the bin must derive its list from the store.
-  const bin = readFileSync(new URL('../src/app/view/AssetBin.tsx', import.meta.url), 'utf8')
+  const bin = readView('assetBin')
   assert.ok(bin.includes('state.assetIds()'), 'AssetBin should iterate reactive asset ids')
 }
 
@@ -174,7 +175,7 @@ console.log('ref-binding assertions passed')
  * props match. Only the count is wrong. So the count is the assertion.
  */
 {
-  const app = readFileSync(new URL('../src/app/view/App.tsx', import.meta.url), 'utf8')
+  const app = readView('app')
   // Only JSX usage: the import line and any local variable named e.g. `Timeline`
   // are not element instantiations.
   const singletons = ['AssetBin', 'Preview', 'Timeline', 'ExportDialog', 'ContextMenu']
@@ -200,10 +201,10 @@ console.log('ref-binding assertions passed')
  * The check is structural: a menu must not be opened from a pointerdown.
  */
 {
-  const files = ['../src/app/view/timeline/use-timeline-drag.ts', '../src/app/view/AssetBin.tsx', '../src/app/view/Preview.tsx']
+  const files = [VIEW.drag, VIEW.assetBin, VIEW.preview]
   const problems: string[] = []
   for (const rel of files) {
-    const code = readFileSync(new URL(rel, import.meta.url), 'utf8')
+    const code = readRepoFile(rel)
     // Find each onPointerDown body and look for a menu being opened inside it.
     const bodies = code.match(/onPointerDown=\{[^}]*\}[^>]*>|function onPointerDown[\s\S]*?\n  \}/g) ?? []
     for (const body of bodies) {
@@ -224,9 +225,8 @@ console.log('ref-binding assertions passed')
   // component, so neither file alone proves the right-click works. The binding
   // has to name the controller, or the split has silently disconnected it.
   {
-    const controller = readFileSync(
-      new URL('../src/app/view/timeline/use-timeline-drag.ts', import.meta.url), 'utf8')
-    const timeline = readFileSync(new URL('../src/app/view/Timeline.tsx', import.meta.url), 'utf8')
+    const controller = readView('drag')
+    const timeline = readView('timeline')
     assert.match(
       controller, /function onContextMenu/,
       'the drag controller should define the timeline\'s right-click handler')
@@ -359,7 +359,7 @@ console.log('ref-binding assertions passed')
  * Checked from the source, because the alternative is a browser.
  */
 {
-  const timeline = readFileSync(new URL('../src/app/view/timeline/use-timeline-drag.ts', import.meta.url), 'utf8')
+  const timeline = readView('drag')
 
   assert.match(
     timeline,
@@ -400,7 +400,7 @@ console.log('ref-binding assertions passed')
  * Checked from the source, because the alternative is a browser.
  */
 {
-  const drag = readFileSync(new URL('../src/app/view/timeline/use-timeline-drag.ts', import.meta.url), 'utf8')
+  const drag = readView('drag')
   const branch = drag.match(/case 'move':[\s\S]*?case 'trim-in':/)?.[0] ?? ''
   assert.ok(branch, "the move branch of onPointerMove should exist")
 
@@ -430,7 +430,7 @@ console.log('ref-binding assertions passed')
  * and neither exists here.
  */
 {
-  const drag = readFileSync(new URL('../src/app/view/timeline/use-timeline-drag.ts', import.meta.url), 'utf8')
+  const drag = readView('drag')
   const trim = drag.match(/case 'trim-in':[\s\S]*?\n {6}\}/)?.[0] ?? ''
   assert.ok(trim, "the trim branch of onPointerMove should exist")
 
@@ -481,7 +481,7 @@ console.log('ref-binding assertions passed')
  */
 {
   const model = readFileSync(new URL('../src/model/snapping.ts', import.meta.url), 'utf8')
-  const drag = readFileSync(new URL('../src/app/view/timeline/use-timeline-drag.ts', import.meta.url), 'utf8')
+  const drag = readView('drag')
 
   const snapMove = model.match(/export function snapMove\([\s\S]*?\): MoveSnap \| null/)?.[0] ?? ''
   assert.ok(snapMove, 'snapMove should exist')
@@ -516,7 +516,7 @@ console.log('ref-binding assertions passed')
  * work has to be keyed on something a trim cannot move.
  */
 {
-  const timeline = readFileSync(new URL('../src/app/view/Timeline.tsx', import.meta.url), 'utf8')
+  const timeline = readView('timeline')
   const warm = timeline.match(/createEffect\(\(\) => \{[\s\S]*?\n {2}\}\)/)?.[0] ?? ''
   assert.ok(warm, 'the peaks-warming effect should exist')
 
@@ -565,7 +565,7 @@ console.log('ref-binding assertions passed')
  * panning is a gesture people already have, and this is how it is honoured.
  */
 {
-  const timeline = readFileSync(new URL('../src/app/view/timeline/use-timeline-drag.ts', import.meta.url), 'utf8')
+  const timeline = readView('drag')
 
   assert.match(
     timeline,
@@ -635,13 +635,11 @@ console.log('ref-binding assertions passed')
  * So the two halves are checked against each other, from the source.
  */
 {
-  const read = readFileSync(
-    new URL('../src/app/view/timeline/use-timeline-drag.ts', import.meta.url), 'utf8')
-  const read2 = (rel: string): string => readFileSync(new URL(rel, import.meta.url), 'utf8')
+  const read = readView('drag')
   const written = [
-    read2('../src/app/view/timeline/Clip.tsx'),
-    read2('../src/app/view/timeline/Lane.tsx'),
-    read2('../src/app/view/Timeline.tsx'),
+    readView('clip'),
+    readView('lane'),
+    readView('timeline'),
   ].join('\n')
 
   // Every attribute the controller looks up, as it appears in the query.
@@ -809,16 +807,16 @@ console.log('ref-binding assertions passed')
  */
 {
   const read = (file: string): string => readFileSync(join(repoRootFor(), file), 'utf8')
-  const app = read('src/app/view/App.tsx')
-  const transport = read('src/app/view/preview/Transport.tsx')
+  const app = readView('app')
+  const transport = readView('transport')
   const layout = read('src/app/store/layout.ts')
 
   // The two collapse buttons exist and call the real actions.
   for (const [file, panel, action] of [
-    ['src/app/view/AssetBin.tsx', 'media', 'toggleSidebar'],
-    ['src/app/view/timeline/Toolbar.tsx', 'timeline', 'toggleTimeline'],
+    [VIEW.assetBin, 'media', 'toggleSidebar'],
+    [VIEW.toolbar, 'timeline', 'toggleTimeline'],
   ] as const) {
-    const source = read(file)
+    const source = readRepoFile(file)
     assert.match(source, new RegExp(`PanelToggle\\b`), `${file} must render a PanelToggle`)
     assert.match(source, new RegExp(`panel="${panel}"`), `${file} must name its panel`)
     assert.match(source, new RegExp(`layout\\.${action}\\(\\)`), `${file} must call ${action}`)
@@ -849,7 +847,7 @@ console.log('ref-binding assertions passed')
 
   // And the full-screen seam is the only place a request is made, so the menu
   // and the shortcut cannot drift from the button.
-  const fullscreen = read('src/app/view/fullscreen.ts')
+  const fullscreen = readView('fullscreen')
   assert.match(fullscreen, /requestFullscreen/, 'the seam must own the request')
   assert.equal(
     app.includes('requestFullscreen'),
@@ -882,7 +880,7 @@ function repoRootFor(): string {
  * unmount to reproduce, and no unit test here has a DOM.
  */
 {
-  const preview = readFileSync(join(repoRootFor(), 'src/app/view/Preview.tsx'), 'utf8')
+  const preview = readView('preview')
 
   assert.match(
     preview,
@@ -934,8 +932,8 @@ function repoRootFor(): string {
  * browser probe described in each comment above.
  */
 {
-  const resizer = readFileSync(join(repoRootFor(), 'src/app/view/Resizer.tsx'), 'utf8')
-  const app = readFileSync(join(repoRootFor(), 'src/app/view/App.tsx'), 'utf8')
+  const resizer = readView('resizer')
+  const app = readView('app')
 
   // A visible tab whenever a panel is collapsed.
   assert.match(resizer, /data-panel-tab=/, 'a collapsed panel must expose a hit-testable tab')
@@ -974,8 +972,8 @@ function repoRootFor(): string {
  */
 {
   const read = (f: string): string => readFileSync(join(repoRootFor(), f), 'utf8')
-  const preview = read('src/app/view/Preview.tsx')
-  const app = read('src/app/view/App.tsx')
+  const preview = readView('preview')
+  const app = readView('app')
   const state = read('src/app/store/state.ts')
   const shortcuts = read('src/app/commands/shortcuts.ts')
   const exporter = read('src/output/exporter.ts')
@@ -1012,7 +1010,7 @@ function repoRootFor(): string {
   // is the ADR-1 drift the single render function exists to prevent, and it is
   // only visible in a browser, so it is guarded from the source.
   {
-    const intent = read('src/app/view/preview/paint-intent.ts')
+    const intent = readView('paintIntent')
     assert.match(
       preview,
       /function paintBlank\(fault: string \| null, at: number\)/,
@@ -1091,9 +1089,9 @@ function repoRootFor(): string {
   const read = (f: string): string => readFileSync(join(repoRootFor(), f), 'utf8')
   const probe = read('src/media/probe.ts')
   const model = read('src/model/project.ts')
-  const timeline = read('src/app/view/Timeline.tsx')
-  const lane = read('src/app/view/timeline/Lane.tsx')
-  const cue = read('src/app/view/timeline/DropCue.tsx')
+  const timeline = readView('timeline')
+  const lane = readView('lane')
+  const cue = readView('dropCue')
   const assets = read('src/app/store/assets.ts')
 
   // --- audio-only files are first-class ---------------------------------
@@ -1118,7 +1116,7 @@ function repoRootFor(): string {
   assert.match(timeline, /onDrop=\{onDropTrack\}/, '')
   assert.match(timeline, /function laneAtClientY/, 'and a drop between lanes picks the nearest one')
   assert.match(timeline, /state\.dropFiles\(files/, 'a file from the desktop is imported *and* placed')
-  const ruler = read('src/app/view/timeline/Ruler.tsx')
+  const ruler = readView('ruler')
   assert.match(ruler, /onDragOver=\{props\.onDragOver\}/, 'the ruler accepts a drop too')
   assert.match(ruler, /onDrop=\{props\.onDrop\}/, '')
   assert.match(lane, /event\.shiftKey \? 'insert' : 'overwrite'/, 'shift is insert, otherwise overwrite')
@@ -1206,12 +1204,12 @@ function repoRootFor(): string {
  */
 {
   const read = (f: string): string => readFileSync(join(repoRootFor(), f), 'utf8')
-  const app = read('src/app/view/App.tsx')
+  const app = readView('app')
   const shortcuts = read('src/app/commands/shortcuts.ts')
-  const panel = read('src/app/view/ProjectPanel.tsx')
+  const panel = readView('projectPanel')
   const store = read('src/app/store/project-store.ts')
-  const media = read('src/app/view/MediaPanel.tsx')
-  const transfer = read('src/app/view/transfer.ts')
+  const media = readView('mediaPanel')
+  const transfer = readView('transfer')
 
   // --- the prompt, and the gate -----------------------------------------
   assert.match(app, /addEventListener\('beforeunload'/, 'the prompt exists')
@@ -1236,7 +1234,7 @@ function repoRootFor(): string {
   assert.match(shortcuts, /keys: \['s'\],\s*\n\s*hint: 'S',\s*\n\s*label: 'split'/, 'plain s is still split')
 
   // --- stage 3: the folder walk, and the cost of it -----------------------
-  const folder = read('src/app/view/folder.ts')
+  const folder = readView('folder')
 
   // The chain this replaced was hand-maintained, and two test files were added
   // without being added to it — so the suite reported green while never running
@@ -1390,9 +1388,9 @@ function repoRootFor(): string {
   const read = (f: string): string => readFileSync(join(repoRootFor(), f), 'utf8')
   const file = read('src/app/store/project-file.ts')
   const prints = read('src/app/store/fingerprint.ts')
-  const app = read('src/app/view/App.tsx')
+  const app = readView('app')
   const shortcuts = read('src/app/commands/shortcuts.ts')
-  const transfer = read('src/app/view/transfer.ts')
+  const transfer = readView('transfer')
 
   // --- the format is plain, versioned, and has no paths in it ------------
   assert.match(file, /export const EXPORT_FORMAT = 'open-editor\.project'/, 'the format is named')

@@ -35,7 +35,7 @@ import {
 import { log } from '../../../dev/debug.js'
 import { notchesFromDelta, scrollLeftAfterZoom, zoomAfterNotches } from '../../store/zoom.js'
 import type { AppState, SelectMode } from '../../store/state.js'
-import type { ContextMenuState } from '../ContextMenu.js'
+import type { ContextMenuState } from '../ui/ContextMenu.js'
 
 /** Trim-handle width, in pixels. Also the hit area. */
 export const HANDLE = 8

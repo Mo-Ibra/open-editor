@@ -19,10 +19,10 @@
  */
 
 import { createSignal, For, Show } from 'solid-js'
-import type { AppState } from '../store/state.js'
-import type { BatchItem, MediaState } from '../store/media-status.js'
+import type { AppState } from '../../store/state.js'
+import type { BatchItem, MediaState } from '../../store/media-status.js'
 import { chooseFolder, filesFromDrop, type FolderFile } from './folder.js'
-import { Modal, PanelHeader } from './ui/Modal.js'
+import { Modal, PanelHeader } from '../ui/Modal.js'
 
 const mb = (bytes: number): string => {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`

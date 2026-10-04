@@ -19,7 +19,7 @@
  * call rejects. So: ask where to save, then work, then write.
  */
 
-import { log } from '../../dev/debug.js'
+import { log } from '../../../dev/debug.js'
 
 /** True when the browser can write to a path the user picks. */
 export function canPickSavePath(): boolean {

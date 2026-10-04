@@ -16,7 +16,7 @@ import {
   MAX_FOLDER_FILES,
   filesFromDrop,
   type FolderFile,
-} from '../src/app/view/folder.ts'
+} from '../src/app/view/media/folder.ts'
 
 // --- fakes ------------------------------------------------------------------
 
