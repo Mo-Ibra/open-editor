@@ -17,13 +17,13 @@
  */
 
 import { Show } from 'solid-js'
-import type { Lane } from '../../../model/project.js'
+import type { TrackId } from '../../../model/project.js'
 import type { AppState } from '../../store/state.js'
 import type { DropPreview } from './Lane.js'
 
 export function DropCue(props: {
   preview: () => DropPreview | null
-  lane: Lane
+  trackId: TrackId
   state: AppState
 }) {
   const left = (): number => props.state.timeToX(props.preview()?.time ?? 0)

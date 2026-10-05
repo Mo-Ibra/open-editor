@@ -29,7 +29,7 @@ export interface Luma {
 
 // A type-only import, erased by the compiler — see the note at the top.
 import type { AppState } from '../app/store/state.js'
-import { clipAtLane, sourceTimeAt } from '../model/project.js'
+import { clipAtTrack, sourceTimeAt, type ClipLocation } from '../model/project.js'
 
 /** The handful of things only the preview component knows. */
 export interface PreviewRuntime {
@@ -210,7 +210,18 @@ export function createDiagnostics(state: AppState, rt: PreviewRuntime) {
 
   function facts(): PreviewFacts {
     const t = state.playhead()
-    const loc = clipAtLane(state.project.video, t)
+    // The clip that decides the picture: top-down over the video tracks, the
+    // same walk `paintIntentAt` does — but reported even when hidden or
+    // undecodable, because this readout exists to explain those states.
+    const topmost = (): ClipLocation | null => {
+      const tracks = state.videoTracks()
+      for (let i = tracks.length - 1; i >= 0; i--) {
+        const loc = clipAtTrack(tracks[i]!, t)
+        if (loc) return loc
+      }
+      return null
+    }
+    const loc = topmost()
     const clip = loc?.clip
     const asset = clip ? state.getAsset(clip.assetId) : undefined
     const entry = clip ? state.library.get(clip.assetId) : undefined
@@ -225,8 +236,8 @@ export function createDiagnostics(state: AppState, rt: PreviewRuntime) {
     return {
       timeline: {
         playhead: t,
-        videoCount: state.project.video.length,
-        audioCount: state.project.audio.length,
+        videoCount: state.videoClipCount(),
+        audioCount: state.audioClipCount(),
         duration: state.duration(),
         cachedFrames: state.frameCache.size,
       },

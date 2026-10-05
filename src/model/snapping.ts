@@ -23,7 +23,7 @@
  *     own edge and refuses to move at all.
  */
 
-import { clipDuration, clipStarts, laneOf, type Clip, type Lane, type Project } from './project.js'
+import { clipDuration, clipStarts, trackById, type Clip, type TrackId, type Project } from './project.js'
 import type { SilenceRegion } from '../media/peaks.js'
 
 export type SnapKind = 'clip-start' | 'clip-end' | 'playhead' | 'timeline-start' | 'silence'
@@ -31,8 +31,8 @@ export type SnapKind = 'clip-start' | 'clip-end' | 'playhead' | 'timeline-start'
 export interface SnapTarget {
   time: number
   kind: SnapKind
-  /** The lane that produced it, or null for global targets. */
-  lane: Lane | null
+  /** The track that produced it, or null for global targets. */
+  trackId: TrackId | null
   /** The clip that produced it, so a drag of that clip can ignore it. */
   clipId: string | null
 }
@@ -42,40 +42,41 @@ export interface CollectOptions {
   includePlayhead: boolean
   /** Per-asset silence regions, keyed by assetId, mapped to timeline time by
    *  the caller because only the caller knows the clip layout. */
-  silence?: { clipId: string; lane: Lane; regions: SilenceRegion[]; start: number }[]
+  silence?: { clipId: string; trackId: TrackId; regions: SilenceRegion[]; start: number }[]
   /**
-   * Which lanes contribute clip edges. Defaults to both.
+   * Which tracks contribute clip edges. Defaults to all.
    *
-   * The timeline passes one lane for "clip snap" (align within a lane) and the
-   * other for "lane snap" (align picture to sound), so the two toggles are
+   * The timeline passes one track for "clip snap" (align within a track) and
+   * the others for "lane snap" (align picture to sound), so the two toggles are
    * independent.
    */
-  lanes?: readonly Lane[]
+  tracks?: readonly TrackId[]
 }
 
 /**
  * Every alignment worth offering.
  *
- * Clip edges from **both** lanes, so a video edge lines up with an audio edge
+ * Clip edges from **all** tracks, so a video edge lines up with an audio edge
  * and vice versa — which is the case people actually want when trimming speech.
  */
 export function collectTargets(project: Project, options: CollectOptions): SnapTarget[] {
-  const targets: SnapTarget[] = [{ time: 0, kind: 'timeline-start', lane: null, clipId: null }]
+  const targets: SnapTarget[] = [{ time: 0, kind: 'timeline-start', trackId: null, clipId: null }]
 
   if (options.includePlayhead) {
-    targets.push({ time: options.playhead, kind: 'playhead', lane: null, clipId: null })
+    targets.push({ time: options.playhead, kind: 'playhead', trackId: null, clipId: null })
   }
 
-  for (const lane of options.lanes ?? (['video', 'audio'] as const)) {
-    const clips = laneOf(project, lane)
-    // One pass per lane. This is called on every trim `pointermove`, and it used
+  const trackIds = options.tracks ?? project.tracks.map((t) => t.id)
+  for (const trackId of trackIds) {
+    const clips = trackById(project, trackId)
+    // One pass per track. This is called on every trim `pointermove`, and it used
     // to ask `clipStart` per clip, so it was the hottest quadratic in the app.
     const starts = clipStarts(clips)
     for (let i = 0; i < clips.length; i++) {
       const start = starts[i]!
       const clipId = clips[i]!.id
-      targets.push({ time: start, kind: 'clip-start', lane, clipId })
-      targets.push({ time: start + clipDuration(clips[i]!), kind: 'clip-end', lane, clipId })
+      targets.push({ time: start, kind: 'clip-start', trackId, clipId })
+      targets.push({ time: start + clipDuration(clips[i]!), kind: 'clip-end', trackId, clipId })
     }
   }
 
@@ -87,13 +88,13 @@ export function collectTargets(project: Project, options: CollectOptions): SnapT
       targets.push({
         time: entry.start + region.start,
         kind: 'silence',
-        lane: entry.lane,
+        trackId: entry.trackId,
         clipId: entry.clipId,
       })
       targets.push({
         time: entry.start + region.end,
         kind: 'silence',
-        lane: entry.lane,
+        trackId: entry.trackId,
         clipId: entry.clipId,
       })
     }
@@ -107,7 +108,7 @@ export function nearestTarget(
   time: number,
   targets: SnapTarget[],
   threshold: number,
-  exclude?: { clipId?: string | null; lane?: Lane | null },
+  exclude?: { clipId?: string | null; trackId?: TrackId | null },
   locked?: SnapTarget | null,
 ): SnapTarget | null {
   // Sticky: a latched drag keeps its target until it drifts too far, rather
@@ -152,7 +153,7 @@ export function snapTrimEdge(
   edge: number,
   targets: SnapTarget[],
   threshold: number,
-  exclude?: { clipId?: string | null; lane?: Lane | null },
+  exclude?: { clipId?: string | null; trackId?: TrackId | null },
   locked?: SnapTarget | null,
 ): { time: number; target: SnapTarget } | null {
   const target = nearestTarget(edge, targets, threshold, exclude, locked)
@@ -181,7 +182,7 @@ export interface MoveSnap {
  *
  * - the next clip is *pushed* by the move, so it travels with the drag — and
  *   ADR-11's own rule is that a target which travels with the drag is the thing
- *   that makes snapping vibrate. `movingInLane` excludes those clips from
+ *   that makes snapping vibrate. `movingInTrack` excludes those clips from
  *   `targets` for exactly this reason, and this list was the one place they came
  *   back in;
  * - the list was built once at pointerdown, alongside `targets`, so its *time* was
@@ -201,7 +202,7 @@ export function snapMove(
   duration: number,
   targets: SnapTarget[],
   threshold: number,
-  exclude?: { clipId?: string | null; lane?: Lane | null },
+  exclude?: { clipId?: string | null; trackId?: TrackId | null },
   locked?: SnapTarget | null,
 ): MoveSnap | null {
   const edges: { edge: 'start' | 'end'; time: number }[] = [
@@ -242,9 +243,9 @@ export interface PlayheadSnap {
 /**
  * Snap the playhead to a nearby edge.
  *
- * The playhead has no lane and no duration, so unlike a move or a trim it just
+ * The playhead has no track and no duration, so unlike a move or a trim it just
  * pulls to the nearest target within the threshold. The targets are every clip
- * start and end (both lanes) plus the timeline start, so the playhead lands on
+ * start and end (all tracks) plus the timeline start, so the playhead lands on
  * a real edit point rather than near it.
  *
  * This is its own mode. It does not consult the clip- or lane-snap toggles, and
@@ -266,20 +267,24 @@ export function thresholdInSeconds(pixels: number, pixelsPerSecond: number): num
 }
 
 /**
- * Which lanes contribute clip edges as snap targets for a drag in `lane`.
+ * Which tracks contribute clip edges as snap targets for a drag in `trackId`.
  *
- * `clipSnap` contributes the dragged clip's own lane (align within a row);
- * `laneSnap` contributes the other one (align picture to sound). The two are
+ * `clipSnap` contributes the dragged clip's own track (align within a row);
+ * `laneSnap` contributes all other tracks (align picture to sound). The two are
  * independent toggles, so either, both, or neither can be on.
  *
  * **Shared, because two callers need it and they must agree.** A drag and a drop.
- * When they disagreed, the drop cue snapped to same-lane clip edges with clip
+ * When they disagreed, the drop cue snapped to same-track clip edges with clip
  * snap visibly switched off in the toolbar — a toggle that was a lie for drops.
  */
-export function targetLanes(lane: Lane, clipSnap: boolean, laneSnap: boolean): Lane[] {
-  const out: Lane[] = []
-  if (clipSnap) out.push(lane)
-  if (laneSnap) out.push(lane === 'video' ? 'audio' : 'video')
+export function targetTracks(trackId: TrackId, allTrackIds: readonly TrackId[], clipSnap: boolean, laneSnap: boolean): TrackId[] {
+  const out: TrackId[] = []
+  if (clipSnap) out.push(trackId)
+  if (laneSnap) {
+    for (const id of allTrackIds) {
+      if (id !== trackId) out.push(id)
+    }
+  }
   return out
 }
 

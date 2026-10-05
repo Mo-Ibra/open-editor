@@ -13,12 +13,12 @@ import { test } from 'node:test'
 import { CURRENT_VERSION, MIGRATIONS, migrateProject, serialiseProject } from '../src/app/store/project-format.ts'
 import { emptyProject, type Clip, type Project } from '../src/model/project.ts'
 
-const clip = (id: string, lane: 'video' | 'audio', over: Partial<Clip> = {}): Clip => ({
-  id, lane, assetId: 'ast_1', in: 1.5, out: 4.25, ...over,
+const clip = (id: string, trackId: 'video' | 'audio', over: Partial<Clip> = {}): Clip => ({
+  id, trackId, assetId: 'ast_1', in: 1.5, out: 4.25, ...over,
 })
 
 const sample = (): Project => ({
-  version: 2,
+  version: 3,
   assets: {
     ast_1: {
       id: 'ast_1', name: 'clip.mp4', duration: 10, width: 1920, height: 1080,
@@ -27,8 +27,10 @@ const sample = (): Project => ({
       videoCodec: 'avc', audioCodec: 'aac', size: 1234,
     },
   },
-  video: [clip('a', 'video', { gain: 1.5, hidden: true, transform: { scale: 1.2, x: 0, y: 0 }, linkId: 'lnk_1' })],
-  audio: [clip('b', 'audio', { offset: 2, muted: true, linkId: 'lnk_1' })],
+  tracks: [
+    { id: 'video', type: 'video', clips: [clip('a', 'video', { gain: 1.5, hidden: true, transform: { scale: 1.2, x: 0, y: 0 }, linkId: 'lnk_1' })] },
+    { id: 'audio', type: 'audio', clips: [clip('b', 'audio', { offset: 2, muted: true, linkId: 'lnk_1' })] },
+  ],
 })
 
 test('a project survives a round trip with every field intact', () => {
@@ -43,7 +45,7 @@ test('a project survives a round trip with every field intact', () => {
 test('the written version comes from the build, not from the project', () => {
   // A stale version in a live project would be written and then refused on the
   // way back in, which is the worst possible round trip.
-  const stale = { ...sample(), version: 1 as unknown as 2 }
+  const stale = { ...sample(), version: 1 as unknown as 3 }
   const written = JSON.parse(serialiseProject(stale)) as { version: number }
   assert.equal(written.version, CURRENT_VERSION)
 })

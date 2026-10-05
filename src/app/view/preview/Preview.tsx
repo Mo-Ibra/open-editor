@@ -72,13 +72,16 @@ export function Preview(props: {
   }
 
   const aspect = () => {
-    const first = state.project.video[0]
+    const first = state.videoTracks().flat()[0]
     const asset = first ? state.getAsset(first.assetId) : undefined
     return asset ? asset.width / asset.height : 16 / 9
   }
 
-  function options() {
-    return { width: canvas.width, height: canvas.height }
+  function options(): { width: number; height: number } {
+    // The stage is unmounted while the picture is hidden, so the ref never ran
+    // and `canvas` is undefined. Callers that legitimately run without a canvas
+    // (the diagnostics) get a 0x0 viewport instead of a TypeError.
+    return canvas ? { width: canvas.width, height: canvas.height } : { width: 0, height: 0 }
   }
 
   /**
@@ -155,8 +158,8 @@ export function Preview(props: {
     explainCount = 1
     log.warn(`BLANK — ${reason}`, {
       playhead: +state.playhead().toFixed(3),
-      video: state.project.video.length,
-      audio: state.project.audio.length,
+      video: state.videoClipCount(),
+      audio: state.audioClipCount(),
       duration: +state.duration().toFixed(3),
     })
     drawDiagnostic()
@@ -171,12 +174,15 @@ export function Preview(props: {
     // would keep decoding frames and "painting" them into a dead element,
     // inflating the paint counter with work nobody can see. The health check
     // calls this state out rather than treating it as a fault.
-    if (props.layout.pictureHidden()) {
+    //
+    // `!canvas` covers the hidden-at-startup case: the `<Show>` never rendered
+    // the stage, so the ref never ran and `context()` would throw instead.
+    if (props.layout.pictureHidden() || !canvas) {
       paintedAt = t
       return
     }
 
-    if (state.project.video.length === 0) {
+    if (state.videoClipCount() === 0) {
       // Nothing to decode yet. Draw a plain black frame and let the DOM empty
       // state ("Drop a video file anywhere to begin.") speak — the canvas
       // diagnostic overlay is a developer readout, and putting it on top of the
@@ -208,7 +214,7 @@ export function Preview(props: {
       else if (showDiag()) drawDiagnostic()
     }
 
-    const intent = paintIntentAt(state.project.video, t, unavailable)
+    const intent = paintIntentAt(state.videoTracks(), t, unavailable)
     if (intent.kind === 'blank') {
       paintBlank(intent.fault, t)
       return
@@ -302,7 +308,7 @@ export function Preview(props: {
         // only for `hidden`, which left the other two ways a clip can stop being
         // drawable — deleted (so `forTime` is a gap now) or stripped of its
         // decoder — free to paint over the black.
-        const current = paintIntentAt(state.project.video, forTime, unavailable)
+        const current = paintIntentAt(state.videoTracks(), forTime, unavailable)
         if (current.kind === 'blank') {
           paintBlank(current.fault, forTime)
           return
@@ -391,6 +397,10 @@ export function Preview(props: {
   })
 
   function reportHealth(): void {
+    // There is no canvas to measure while the picture is hidden — the stage is
+    // unmounted and `facts()` would throw "canvas ref was never set" on every
+    // interval, which is what the console was showing once every five seconds.
+    if (props.layout.pictureHidden()) return
     const { info, errors } = diagnostics.health()
     for (const line of info) log.info(line)
     for (const line of errors) log.error(line)
@@ -410,15 +420,27 @@ export function Preview(props: {
 
   // Re-draw whenever the playhead, the clips, or the canvas size changes.
   createEffect(() => {
+    // A hidden picture has no canvas at all: the stage is unmounted, the ref
+    // never ran, and reading `canvas.width` threw
+    // "Cannot read properties of undefined (reading 'width')" on every commit.
+    // Tracking `pictureHidden` here means the effect re-runs and repaints when
+    // the picture comes back.
+    if (props.layout.pictureHidden()) return
     state.playhead()
-    state.project.video
-    state.project.audio
+    state.videoTracks()
     state.project.assets
     canvas.width
     draw()
     // Nothing rendered and no decode in flight means we are stuck. Say so on
     // the canvas rather than leaving a black rectangle.
     if (!inFlight && paintedAt !== state.playhead() && !lastError) drawDiagnostic()
+  })
+
+  // Hiding the picture removes the stage, so drop the fullscreen target with it.
+  // Solid does not reliably call the `ref` with `null` on teardown, and a stale
+  // target means the fullscreen button tries to promote a detached element.
+  createEffect(() => {
+    if (props.layout.pictureHidden()) props.fullscreen.register(null)
   })
 
   /**
@@ -499,7 +521,7 @@ export function Preview(props: {
           />
 
           {/* Empty state, rather than a black rectangle with no explanation. */}
-          <Show when={state.project.video.length === 0}>
+          <Show when={state.videoClipCount() === 0}>
             <div class="absolute inset-0 grid place-items-center">
               <div class="max-w-[38ch] text-center">
                 <p class="text-[13px] text-fg">
@@ -508,7 +530,7 @@ export function Preview(props: {
                       <span class="font-semibold">
                         {state.assetIds().length} file{state.assetIds().length === 1 ? '' : 's'} ready.
                       </span>{' '}
-                      Double-click one under <span class="text-accent">Media</span>, or drag it onto a lane.
+                      Double-click one under <span class="text-accent">Media</span>, or drag it onto a track.
                     </>
                   ) : (
                     'Drop a video file anywhere to begin.'

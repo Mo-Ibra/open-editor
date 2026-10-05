@@ -64,13 +64,13 @@ const fullscreen = {
   },
 } as never
 
-const clip = (id: string, lane: 'video' | 'audio', extra: Record<string, unknown> = {}) => ({
-  id, lane, assetId: 'a', in: 0, out: 10, ...extra,
+const clip = (id: string, trackId: 'video' | 'audio', extra: Record<string, unknown> = {}) => ({
+  id, trackId, assetId: 'a', in: 0, out: 10, ...extra,
 })
 
 function withClips(...clips: ReturnType<typeof clip>[]): State {
   const state = createAppState()
-  for (const c of clips) state.project[c.lane].push(c as never)
+  for (const c of clips) state.project.tracks.find((t) => t.id === c.trackId)?.clips.push(c as never)
   return state
 }
 
@@ -81,7 +81,7 @@ const clickable = (items: { label: string; disabled?: boolean; separator?: boole
 test('the clip menu has no dead rows', () => {
   const state = withClips(clip('a', 'video'))
   state.selectClip('a')
-  const items = menuItems(state, menu({ kind: 'clip', clipId: 'a', lane: 'video' }), layout, fullscreen)
+  const items = menuItems(state, menu({ kind: 'clip', clipId: 'a' }), layout, fullscreen)
 
   assert.ok(items.length > 0)
   for (const item of items) {
@@ -157,16 +157,16 @@ test('a linked clip offers to break the link', () => {
   assert.ok(found.includes('Break link'), `got ${found}`)
 })
 
-test('the lane menu reflects whether the lane has anything in it', () => {
+test('the track menu reflects whether the track has anything in it', () => {
   const empty = createAppState()
-  const onEmpty = menuItems(empty, menu({ kind: 'lane', lane: 'video' }), layout, fullscreen)
-  assert.ok(clickable(onEmpty).every((i) => i.label !== 'Clear video lane' || true))
-  const clearEmpty = onEmpty.find((i) => i.label === 'Clear video lane')
-  assert.equal(clearEmpty?.disabled, true, 'clearing an empty lane is not offered')
+  const onEmpty = menuItems(empty, menu({ kind: 'track', trackId: 'video' }), layout, fullscreen)
+  assert.ok(clickable(onEmpty).every((i) => i.label !== 'Clear video track' || true))
+  const clearEmpty = onEmpty.find((i) => i.label === 'Clear video track')
+  assert.equal(clearEmpty?.disabled, true, 'clearing an empty track is not offered')
 
   const filled = withClips(clip('a', 'video'))
-  const onFilled = menuItems(filled, menu({ kind: 'lane', lane: 'video' }), layout, fullscreen)
-  const clearFilled = onFilled.find((i) => i.label === 'Clear video lane')
+  const onFilled = menuItems(filled, menu({ kind: 'track', trackId: 'video' }), layout, fullscreen)
+  const clearFilled = onFilled.find((i) => i.label === 'Clear video track')
   assert.notEqual(clearFilled?.disabled, true, 'but is offered when there is something to clear')
 })
 

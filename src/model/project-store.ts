@@ -4,7 +4,7 @@
  * This exists because of a bug that cost a whole media library.
  *
  * `setProject(replace(next))` used to be a plain two-key set, which is exactly
- * right: an edit changes the lanes and nothing else. It was "improved" to
+ * right: an edit changes the tracks and nothing else. It was "improved" to
  * `setProject(reconcile(next))`, and `reconcile` has this behaviour:
  *
  * ```js
@@ -13,7 +13,7 @@
  * ```
  *
  * Any key the target does not mention is set to `undefined`. Since `replace`
- * returns only `{ video, audio }`, every single edit silently deleted
+ * returns only `{ tracks }`, every single edit silently deleted
  * `project.assets` and `project.version` — and the next `project.assets[id]`
  * threw `Cannot read properties of undefined`. The media library was not
  * deleted, only the reference to it.
@@ -22,27 +22,27 @@
  * `reconcile` for performance, the performance is not worth it.
  */
 
-import type { Clip, Project } from './project.js'
+import type { Project, Track } from './project.js'
 
-/** The lanes alone, which is what an edit is allowed to change. */
-export type Lanes = { video: Clip[]; audio: Clip[] }
+/** The tracks alone, which is what an edit is allowed to change. */
+export type Tracks = Track[]
 
-export function lanesOf(project: Project): Lanes {
-  return { video: project.video, audio: project.audio }
+export function tracksOf(project: Project): Tracks {
+  return project.tracks
 }
 
 /**
- * Write the lanes and nothing else.
+ * Write the tracks and nothing else.
  *
  * `setter` is Solid's store setter, called with a single object so that a
  * single update fires one notification.
  */
-export function applyLanes(
-  setter: (value: Lanes) => void,
-  lanes: Lanes,
+export function applyTracks(
+  setter: (value: Tracks) => void,
+  tracks: Tracks,
   onWritten: () => void,
 ): void {
-  setter({ video: lanes.video, audio: lanes.audio })
+  setter(tracks)
   // Run after the write: pruning reads the project, so it must see the new one.
   onWritten()
 }

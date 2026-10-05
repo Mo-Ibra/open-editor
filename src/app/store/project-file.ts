@@ -34,7 +34,8 @@
  * things needed to recognise a file elsewhere.
  */
 
-import { parseProject, type Project } from '../../model/project.js'
+import { migrateProject } from './project-format.js'
+import type { Project } from '../../model/project.js'
 import type { Fingerprint } from './fingerprint.js'
 
 export const EXPORT_FORMAT = 'open-editor.project'
@@ -136,9 +137,11 @@ export function parseProjectFile(text: string): ImportedProject {
     )
   }
 
-  // The model validates the edit. A file whose envelope is fine but whose
-  // timeline is damaged is refused here rather than loaded into a broken state.
-  const project = parseProject(JSON.stringify(file.project))
+  // The model validates the edit, migrating an older `project.version` first.
+  // An export written by a past build must open exactly like a saved project
+  // from that build does — the envelope version guards the envelope, and
+  // `project.version` is the format contract that has its own forward path.
+  const project = migrateProject(JSON.stringify(file.project))
 
   const media: Record<string, ExportedMedia> = {}
   const rawMedia = file.media

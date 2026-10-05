@@ -1,17 +1,13 @@
 /**
- * The timeline: a toolbar, a ruler, and two lanes.
+ * The timeline: a toolbar, a ruler, and N tracks.
  *
  * This file is layout and composition. Everything with a *decision* in it lives
  * next door: gestures in `use-timeline-drag`, and each region's markup in its
- * own module. What is left is worth being able to read in one screen, because
- * it is the only place that knows how the pieces stack.
- *
- * Clip x-positions come from the *derived* start, never a stored value, so a
- * clip cannot drift out of order however it was edited (docs/data-model.md).
+ * own module.
  */
 
 import { createEffect, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
-import type { Lane } from '../../../model/project.js'
+import type { TrackId } from '../../../model/project.js'
 import type { AppState } from '../../store/state.js'
 import type { ContextMenuState } from '../ui/ContextMenu.js'
 import { DND_ASSET, draggedAssetId } from '../media/AssetBin.js'
@@ -23,18 +19,11 @@ import { Toolbar } from './Toolbar.js'
 import type { LayoutState } from '../../store/layout.js'
 import { useTimelineDrag } from './use-timeline-drag.js'
 
-/** Lane row heights, in pixels. The drop target has to agree with what is drawn. */
-const LANE_HEIGHTS = [
-  ['video', 56],
-  ['audio', 62],
-] as const satisfies readonly (readonly [Lane, number])[]
-
 export function Timeline(props: { state: AppState; menu: ContextMenuState; layout: LayoutState }) {
   const state = props.state
   let trackEl: HTMLDivElement | undefined
   let scrollerEl: HTMLDivElement | undefined
 
-  /** Where a dragged file would land, while a drag is over the timeline. */
   const [dropAt, setDropAt] = createSignal<DropPreview | null>(null)
 
   const drag = useTimelineDrag(state, props.menu, {
@@ -42,13 +31,6 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
     scroller: () => scrollerEl,
   })
 
-  /**
-   * The scroller's own width, tracked so the track can fill it.
-   *
-   * Without this the track was a flat 600px (or the timeline's length), so an
-   * empty or short timeline showed lanes that stopped two thirds of the way
-   * across the window — the empty half read as a layout bug, because it was one.
-   */
   const [viewportWidth, setViewportWidth] = createSignal(0)
   onMount(() => {
     const el = scrollerEl
@@ -59,61 +41,49 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
     onCleanup(() => observer.disconnect())
   })
 
-  /** The track fills the viewport, and grows past it once the timeline is long. */
   const contentWidth = (): number =>
     Math.max(viewportWidth(), 600, state.timeToX(state.duration()) + 200)
 
   const anyClips = (): boolean =>
-    state.project.video.length > 0 || state.project.audio.length > 0
+    state.project.tracks.some((t) => t.clips.length > 0)
 
-  // Kick off peak computation for every audio-bearing asset, so the waveform is
-  // there by the time anyone looks at it.
-  //
-  // **Keyed on the asset list, not on the audio lane.** Keyed on the lane, this
-  // effect re-ran on every `pointermove` of an audio-lane drag, because a drag
-  // rewrites the lane — and `peaksFor` only short-circuits once the first decode
-  // has resolved. So a one-second drag entered it sixty times, each call walking
-  // the entire decoded buffer. `assetIds()` is backed by the asset revision
-  // counter, which is exactly the granularity the work has: peaks belong to a
-  // file, not to a clip, and a clip's trim says nothing about them.
+  // Video on top with the topmost layer first, then audio underneath — how a
+  // timeline reads. The model stores video bottom-to-top (the paint order
+  // `paintIntentAt` walks), so the display is the reverse of that group.
+  const displayTracks = () => {
+    const video = state.project.tracks.filter((t) => t.type === 'video')
+    const audio = state.project.tracks.filter((t) => t.type === 'audio')
+    return [...video].reverse().concat(audio)
+  }
+
   createEffect(() => {
     for (const assetId of state.assetIds()) void state.peaksFor(assetId)
   })
 
   const trackLeft = (): number => trackEl?.getBoundingClientRect().left ?? 0
 
-  /**
-   * Which lane is a drop at `clientY` aimed at?
-   *
-   * The lanes do not fill the timeline — there is ruler above and a strip below,
-   * and dropping on either used to do nothing at all. So the whole track is a
-   * target, and the lane is chosen by proximity: nearest above, otherwise
-   * nearest below. "Whatever is closest" is how every editor resolves a drop
-   * that lands between tracks, and it removes the need to aim at a 56px strip.
-   */
-  function laneAtClientY(clientY: number): Lane {
-    const lanes: { lane: Lane; mid: number }[] = LANE_HEIGHTS.map(([lane]) => {
-      const el = trackEl?.querySelector(`[data-lane="${lane}"]`)
+  function trackAtClientY(clientY: number): TrackId {
+    const tracks: { trackId: TrackId; mid: number }[] = state.project.tracks.map((t) => {
+      const el = trackEl?.querySelector(`[data-track="${t.id}"]`)
       const r = el?.getBoundingClientRect()
-      return { lane, mid: r ? r.top + r.height / 2 : 0 }
+      return { trackId: t.id, mid: r ? r.top + r.height / 2 : 0 }
     })
-    return lanes.reduce((best, cur) =>
+    return tracks.reduce((best, cur) =>
       Math.abs(cur.mid - clientY) < Math.abs(best.mid - clientY) ? cur : best,
-    ).lane
+    ).trackId
   }
 
   const timeAtClientX = (clientX: number): number => state.xToTime(clientX - trackLeft())
 
-  /** Which lane would take this file? The one it can go on, nearest the pointer. */
-  function targetLane(assetId: string, clientY: number): Lane {
-    const nearest = laneAtClientY(clientY)
-    if (state.laneAccepts(assetId, nearest)) return nearest
-    return nearest === 'video' ? 'audio' : 'video'
+  function targetTrack(assetId: string, clientY: number): TrackId {
+    const nearest = trackAtClientY(clientY)
+    if (state.trackAccepts(assetId, nearest)) return nearest
+    const fallback = state.project.tracks.find((t) => state.trackAccepts(assetId, t.id))
+    return fallback?.id ?? nearest
   }
 
   const modeFor = (event: DragEvent): 'overwrite' | 'insert' => (event.shiftKey ? 'insert' : 'overwrite')
 
-  /** Does this drag carry a file we could import, rather than a known asset? */
   const carriesFiles = (event: DragEvent): boolean =>
     Array.from(event.dataTransfer?.types ?? []).includes('Files')
 
@@ -122,9 +92,6 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
     if (!dt) return
     const internal = dt.types.includes(DND_ASSET)
 
-    // A file dragged in from the desktop is a legitimate drop, and the common
-    // one. It cannot be previewed before it is decoded, so the cue falls back to
-    // a fixed width and the real extent appears on landing.
     if (!internal && !carriesFiles(event)) return
     event.preventDefault()
 
@@ -132,28 +99,21 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
     dt.dropEffect = mode === 'insert' ? 'copy' : 'move'
 
     if (internal) {
-      // `getData` is empty during `dragover` where protected mode is enforced,
-      // so fall back to the id captured at `dragstart`.
       const assetId = dt.getData(DND_ASSET) || draggedAssetId()
       if (!assetId) return
-      // Snapped for the lane the file would actually land on, not for the lane
-      // nearest the pointer: which lanes are eligible snap targets depends on the
-      // lane, because `G` and `⇧G` mean "this row" and "the other row".
-      const lane = targetLane(assetId, event.clientY)
+      const trackId = targetTrack(assetId, event.clientY)
       setDropAt({
-        lane,
-        time: state.dropTimeFor(timeAtClientX(event.clientX), lane),
+        trackId,
+        time: state.dropTimeFor(timeAtClientX(event.clientX), trackId),
         duration: state.getAsset(assetId)?.duration ?? 0,
         assetId,
         mode,
       })
     } else {
-      // A file from the desktop: not decoded, so its duration is unknown, but it
-      // still gets a landing position snapped for the lane it would go on.
-      const lane = laneAtClientY(event.clientY)
+      const trackId = trackAtClientY(event.clientY)
       setDropAt({
-        lane,
-        time: state.dropTimeFor(timeAtClientX(event.clientX), lane),
+        trackId,
+        time: state.dropTimeFor(timeAtClientX(event.clientX), trackId),
         duration: 0,
         assetId: '',
         mode,
@@ -171,12 +131,10 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
     const assetId = dt.getData(DND_ASSET) || draggedAssetId()
     if (assetId) {
       event.preventDefault()
-      const lane = targetLane(assetId, event.clientY)
-      const time = state.dropTimeFor(timeAtClientX(event.clientX), lane)
-      // Handled here, so it must not also reach the app shell's own drop
-      // listener — that would import and place the same asset twice.
+      const trackId = targetTrack(assetId, event.clientY)
+      const time = state.dropTimeFor(timeAtClientX(event.clientX), trackId)
       event.stopPropagation()
-      state.addAssetAt(assetId, lane, time, mode)
+      state.addAssetAt(assetId, trackId, time, mode)
       return
     }
 
@@ -184,12 +142,9 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
     if (files.length > 0) {
       event.preventDefault()
       event.stopPropagation()
-      const lane = laneAtClientY(event.clientY)
-      const time = state.dropTimeFor(timeAtClientX(event.clientX), lane)
-      // Import *and* place, in one gesture. Importing alone left the file
-      // sitting in the bin, which is not what dropping a file on a timeline
-      // means anywhere else.
-      void state.dropFiles(files, lane, time, mode)
+      const trackId = trackAtClientY(event.clientY)
+      const time = state.dropTimeFor(timeAtClientX(event.clientX), trackId)
+      void state.dropFiles(files, trackId, time, mode)
     }
   }
 
@@ -197,18 +152,12 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
     <section class="flex min-h-0 min-w-0 flex-1 flex-col border-t border-line bg-panel">
       <Toolbar state={state} anyClips={anyClips} layout={props.layout} />
 
-      {/* ruler + lanes. Horizontal scrolling is driven by the scrollbar below,
-          so the native one is hidden to avoid two bars stacked together. */}
       <div ref={scrollerEl} class="min-h-0 w-full min-w-0 flex-1 overflow-y-auto overflow-x-hidden">
         <div
           ref={trackEl}
           id="timeline-track"
           class="relative min-h-full select-none touch-none"
           style={{ width: `${contentWidth()}px` }}
-          // The zoom, exactly. The preview's slider is `step="10"`, so it can
-          // only report multiples of ten and cannot be used to read a precise
-          // zoom level — which makes this the only exact readout, and the only
-          // way a test can verify the centre anchor.
           data-zoom={state.zoom()}
           onPointerDown={drag.onPointerDown}
           onContextMenu={drag.onContextMenu}
@@ -220,43 +169,35 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
         >
           <Ruler state={state} onDrop={onDropTrack} onDragOver={onDragOverTrack} />
 
-          {/* Vertical gridlines, aligned to the ruler's ticks. They give the
-              lanes something to be measured against, so a clip's start reads as
-              a time rather than a position. Behind everything, and only from
-              below the ruler down. */}
           <div class="pointer-events-none absolute inset-x-0 bottom-0 top-6 z-0">
             <For each={ticks(state.duration(), state.zoom())}>
               {(t) => <div class="absolute bottom-0 top-0 w-px bg-line-soft" style={{ left: `${state.timeToX(t)}px` }} />}
             </For>
           </div>
 
-          <LaneView
-            lane="video"
-            label="video"
-            state={state}
-            height={56}
-            dropAt={dropAt}
-            setDropAt={setDropAt}
-            trackLeft={trackLeft}
-          />
-          <LaneView
-            lane="audio"
-            label="audio"
-            state={state}
-            height={62}
-            dropAt={dropAt}
-            setDropAt={setDropAt}
-            trackLeft={trackLeft}
-          />
+          <For each={displayTracks()}>
+            {(track) => (
+              <LaneView
+                trackId={track.id}
+                type={track.type}
+                label={track.type}
+                state={state}
+                height={track.type === 'video' ? 56 : 62}
+                dropAt={dropAt}
+                setDropAt={setDropAt}
+                trackLeft={trackLeft}
+                canRemove={track.clips.length === 0 && state.project.tracks.length > 1}
+                onRemove={() => state.removeTrack(track.id)}
+              />
+            )}
+          </For>
 
           <Show when={!anyClips()}>
             <p class="pointer-events-none absolute inset-x-0 top-16 text-center text-mini text-muted">
-              Double-click a file in Media, or drag one onto a lane.
+              Double-click a file in Media, or drag one onto a track.
             </p>
           </Show>
 
-          {/* The guide makes the magnet legible. A snap you cannot see is a
-              snap the user cannot trust, so the reason is labelled. */}
           <Show when={drag.guide()}>
             {(g) => (
               <div

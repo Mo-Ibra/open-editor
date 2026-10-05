@@ -297,7 +297,7 @@ export function createProjectStore(deps: ProjectSliceDeps) {
     deps.write(project)
     for (const asset of probed.get(targetId) ?? []) deps.writeAsset(asset)
     await persistLastOpen(targetId)
-    log.info(`persistence: opened ${record.name} (${project.video.length + project.audio.length} clips)`)
+    log.info(`persistence: opened ${record.name} (${project.tracks.reduce((s, t) => s + t.clips.length, 0)} clips)`)
     return true
   }
 
@@ -312,7 +312,7 @@ export function createProjectStore(deps: ProjectSliceDeps) {
   async function startNew(projectName = 'Untitled', unlessBusy = false): Promise<string> {
     if (unlessBusy) {
       const live = deps.read()
-      if (live.video.length > 0 || live.audio.length > 0 || Object.keys(live.assets).length > 0) {
+      if (live.tracks.some((t) => t.clips.length > 0) || Object.keys(live.assets).length > 0) {
         // Something already exists. Keep it, and make sure it has a record.
         const projectId = ensureId()
         await createProject(projectId, name(), live)
@@ -323,7 +323,7 @@ export function createProjectStore(deps: ProjectSliceDeps) {
     }
     if (id()) await saveNow()
     const fresh = newId('prj')
-    const blank: Project = { version: 2, assets: {}, video: [], audio: [] }
+    const blank: Project = { version: 3, assets: {}, tracks: [] }
     // The old decoders go with the old project. Leaving them means the new
     // project's bin shows the previous project's files.
     deps.releaseLibrary()
@@ -783,7 +783,7 @@ export function createProjectStore(deps: ProjectSliceDeps) {
     }
     return {
       projectName: label,
-      clipCount: imported.project.video.length + imported.project.audio.length,
+      clipCount: imported.project.tracks.reduce((n, t) => n + t.clips.length, 0),
       attached,
       missing,
       rejected,

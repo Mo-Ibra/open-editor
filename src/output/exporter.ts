@@ -219,17 +219,116 @@ export function frameTimesForClip(clips: Clip[], index: number, budget: number, 
  * first frame at source 10s, not source 0s — conflating the two exports the
  * whole source from its beginning, which is what a 15s trim turned into a
  * 7-minute file.
+ *
+ * `from` is the frame offset inside the clip the run starts at, for a schedule
+ * segment that covers only part of a clip: an upper track's clip can occlude the
+ * head or tail of the clip below it.
  */
-export function sourceTimesForClip(clip: Clip, count: number, fps: number): number[] {
+export function sourceTimesForClip(clip: Clip, count: number, fps: number, from = 0): number[] {
   const times: number[] = []
   for (let i = 0; i < count; i++) {
-    times.push(Number((clip.in + i / fps).toFixed(6)))
+    times.push(Number((clip.in + (from + i) / fps).toFixed(6)))
   }
   return times
 }
 
 export function totalFramesFor(project: Project, fps: number): number {
   return Math.ceil(projectDuration(project) * fps)
+}
+
+/** One contiguous run of output frames, all painted the same way. */
+export interface VideoSegment {
+  /** First output frame, inclusive. */
+  startF: number
+  /** One past the last output frame. */
+  endF: number
+  /** Which clip paints the span, or null for black. */
+  clip: Clip | null
+  /** The clip's own first frame on the timeline, for source-time derivation. */
+  clipStartF: number
+  /** Set when the black came from hiding this clip rather than from a gap. */
+  hiddenClip: Clip | null
+}
+
+/**
+ * The compositing schedule: which clip owns every output frame.
+ *
+ * This is the export side of ADR-1. The preview decides what to paint with
+ * `paintIntentAt` — topmost video track first, a hidden clip stops the walk,
+ * a gap lets the track below show through — and this makes the exported file
+ * agree with it frame for frame, or preview and export drift the moment there
+ * is more than one video track.
+ *
+ * Frame space, not seconds: clip boundaries are rounded to whole frames exactly
+ * once (`round(t * fps)`), the same rule `frameTimesForClip` states, so
+ * neighbouring segments tile the timeline with no gap or overlap however the
+ * clips were laid out. Consecutive frames with the same winner are merged into
+ * one segment, which is what keeps decoding batched per clip — seeking per
+ * frame is 13x slower (docs/export.md).
+ */
+export function videoSchedule(
+  videoTracks: readonly Clip[][],
+  fps: number,
+  totalFrames: number,
+): VideoSegment[] {
+  interface Range {
+    startF: number
+    endF: number
+    clip: Clip
+    clipStartF: number
+  }
+
+  const bounds = new Set<number>([0, totalFrames])
+  const clamp = (f: number): number => Math.max(0, Math.min(totalFrames, f))
+  const ranges: Range[][] = videoTracks.map((clips) =>
+    clips.flatMap((clip, i) => {
+      const startF = Math.round(clipStart(clips, i) * fps)
+      const endF = Math.round((clipStart(clips, i) + clipDuration(clip)) * fps)
+      bounds.add(clamp(startF))
+      bounds.add(clamp(endF))
+      return endF > startF ? [{ startF, endF, clip, clipStartF: startF }] : []
+    }),
+  )
+
+  const segments: VideoSegment[] = []
+  const push = (startF: number, endF: number, clip: Clip | null, clipStartF: number, hiddenClip: Clip | null): void => {
+    if (endF <= startF) return
+    const last = segments.at(-1)
+    if (last && last.clip === clip && last.clipStartF === clipStartF && last.hiddenClip === hiddenClip) {
+      last.endF = endF
+      return
+    }
+    segments.push({ startF, endF, clip, clipStartF, hiddenClip })
+  }
+
+  const sorted = [...bounds].sort((a, b) => a - b)
+  for (let i = 0; i + 1 < sorted.length; i++) {
+    const a = sorted[i]!
+    const b = sorted[i + 1]!
+    if (b <= a) continue
+
+    let winner: Clip | null = null
+    let winnerStartF = 0
+    let hiddenClip: Clip | null = null
+    // Topmost track first. A clip that covers the whole interval decides: a
+    // hidden clip is deliberate black and stops the search, a visible clip
+    // paints, and no clip at all is a hole the track below may fill.
+    search: for (let t = ranges.length - 1; t >= 0; t--) {
+      for (const r of ranges[t]!) {
+        if (r.startF <= a && a < r.endF) {
+          if (r.clip.hidden === true) hiddenClip = r.clip
+          else {
+            winner = r.clip
+            winnerStartF = r.clipStartF
+          }
+          break search
+        }
+      }
+    }
+    push(a, b, winner, winnerStartF, hiddenClip)
+  }
+
+  return segments
 }
 
 export class Exporter {
@@ -261,8 +360,10 @@ export class Exporter {
     this.#cancelled = false
     const t0 = performance.now()
 
-    if (project.video.length === 0) {
-      throw new Error(project.audio.length > 0
+    const videoTracks = project.tracks.filter((t) => t.type === 'video').map((t) => t.clips)
+    const audioClipCount = project.tracks.reduce((n, t) => (t.type === 'audio' ? n + t.clips.length : n), 0)
+    if (videoTracks.every((clips) => clips.length === 0)) {
+      throw new Error(audioClipCount > 0
         ? 'The timeline has audio but no video. Export needs at least one video clip.'
         : 'Add a video to the timeline first.')
     }
@@ -327,6 +428,7 @@ export class Exporter {
     }
 
     const totalFrames = totalFramesFor(project, settings.fps)
+    const schedule = videoSchedule(videoTracks, settings.fps, totalFrames)
     const renderOptions = { width: settings.width, height: settings.height }
     const frameDuration = 1 / settings.fps
 
@@ -336,108 +438,85 @@ export class Exporter {
     try {
       await out.start()
 
-      // Walk the whole timeline, not just the clips. A gap between clips is
-      // still timeline: the video must hold black for its duration, or the
-      // export comes out shorter than the timeline and every frame after the
-      // gap is wrong.
-      let emittedUpTo = 0
-      let cursor = 0
+      // The schedule walks the WHOLE timeline, not just the clips: a gap
+      // between clips is still timeline, and the video must hold black for its
+      // duration or the export comes out shorter than the timeline and every
+      // frame after the gap is wrong.
+      //
+      // `startF`/`endF` are FRAME indices. The timestamp handed to `add()` is
+      // seconds — multiplying and dividing by totalFrames cancels to 1 and
+      // yields the bare frame index, which silently turned a 15s timeline into
+      // a 449s file.
+      for (const seg of schedule) {
+        this.#checkCancelled()
+        const count = seg.endF - seg.startF
+        if (count <= 0) continue
 
-      // `untilFrame` and `cursor` are FRAME indices. The timestamp handed to
-      // `add()` is seconds, so it must be converted — multiplying and dividing
-      // by totalFrames cancels to 1 and yields the bare frame index, which
-      // silently turned a 15s timeline into a 449s file.
-      const emitBlankUntil = async (untilFrame: number) => {
-        while (cursor < untilFrame && cursor < totalFrames) {
+        const entry = seg.clip ? this.#library.get(seg.clip.assetId) : undefined
+        const black = !seg.clip || clipRendersBlack(seg.clip, Boolean(entry?.videoSink))
+        if (black) {
+          // A gap, a hidden clip, or an audio-only file on a video track. All
+          // three occupy their span, so the output needs that many black frames
+          // — and none of them decodes: painting frames just to fill them black
+          // would make hiding a long clip slower than deleting it.
+          if (seg.hiddenClip) log.info(`export: clip ${seg.hiddenClip.id} is hidden — writing black`)
+          for (let k = seg.startF; k < seg.endF; k++) {
+            this.#checkCancelled()
+            renderBlank(ctx, renderOptions)
+            await canvasSource.add(k * frameDuration, frameDuration)
+            done++
+          }
+          continue
+        }
+
+        const clip = seg.clip!
+        const outTimes: number[] = []
+        for (let k = seg.startF; k < seg.endF; k++) {
+          outTimes.push(Number((k / settings.fps).toFixed(6)))
+        }
+        // `outTimes` is the tested mapping from frame index to output
+        // timestamp; `sourceTimesForClip` is the matching seek into the media
+        // file. They are different numbers and must not share an array.
+        const sourceTimes = sourceTimesForClip(clip, count, settings.fps, seg.startF - seg.clipStartF)
+
+        // Narrowed by the `black` test above, which is the only thing that
+        // could have sent us down this path.
+        const sink = entry!.videoSink!
+        let at = 0
+        for await (const wrapped of sink.canvasesAtTimestamps(sourceTimes)) {
+          this.#checkCancelled()
+          // The frame's place on the OUTPUT timeline, not in the source.
+          const t = outTimes[at++] ?? (seg.startF + at - 1) * frameDuration
+
+          if (wrapped) {
+            renderFrame(
+              ctx,
+              { image: wrapped.canvas, width: wrapped.canvas.width, height: wrapped.canvas.height },
+              clip,
+              renderOptions,
+            )
+          } else {
+            renderBlank(ctx, renderOptions)
+          }
+
+          await canvasSource.add(t, frameDuration, { keyFrame: done % keyframeFrames(settings.fps) === 0 })
+          done++
+
+          const nowMs = performance.now()
+          if (nowMs - lastReport > 200) {
+            lastReport = nowMs
+            this.#tick(done, totalFrames, t0)
+          }
+        }
+        // A short clip may yield fewer frames than the segment owns; fill the rest.
+        while (at < count) {
+          this.#checkCancelled()
           renderBlank(ctx, renderOptions)
-          await canvasSource.add(cursor * frameDuration, frameDuration)
-          cursor++
+          await canvasSource.add((seg.startF + at) * frameDuration, frameDuration)
+          at++
           done++
         }
-        emittedUpTo = untilFrame
       }
-
-      for (let index = 0; index < project.video.length; index++) {
-        this.#checkCancelled()
-
-        const clip = project.video[index]!
-        const start = clipStart(project.video, index)
-        const end = start + clipDuration(clip)
-
-        // Silence before this clip.
-        await emitBlankUntil(Math.min(totalFrames, Math.round((start * settings.fps))))
-
-        // `frameTimesForClip` is the tested mapping from clip to output frame
-        // timestamps; `sourceTimesForClip` is the matching seek into the media
-        // file. They are different numbers and must not share an array.
-        const outTimes = frameTimesForClip(project.video, index, totalFrames - cursor, settings.fps)
-        const remaining = outTimes.length
-        if (remaining <= 0) continue
-        const sourceTimes = sourceTimesForClip(clip, remaining, settings.fps)
-
-        const entry = this.#library.get(clip.assetId)
-        void emittedUpTo
-
-        if (clipRendersBlack(clip, Boolean(entry?.videoSink))) {
-          // An audio-only clip still occupies its span, so the output needs
-          // that many black frames — and so does a clip the user has hidden.
-          //
-          // Not decoding is the point: a hidden clip is a gap with an asset
-          // behind it, and decoding frames only to paint them black would make
-          // hiding a long clip slower than deleting it. The frames are counted
-          // and timed exactly as a real clip's would be, so hiding does not
-          // shift anything after it.
-          log.info(`export: clip ${clip.id} is hidden — writing black`)
-          for (const t of outTimes) {
-            this.#checkCancelled()
-            renderBlank(ctx, renderOptions)
-            await canvasSource.add(t, frameDuration)
-            cursor++
-            done++
-          }
-        } else {
-          // Narrowed by the `clipRendersBlack` test above, which is the only
-          // thing that could have sent us down this path.
-          const sink = entry!.videoSink!
-          let at = 0
-          for await (const wrapped of sink.canvasesAtTimestamps(sourceTimes)) {
-            this.#checkCancelled()
-            // The frame's place on the OUTPUT timeline, not in the source.
-            const t = outTimes[at++] ?? cursor * frameDuration
-
-            if (wrapped) {
-              renderFrame(
-                ctx,
-                { image: wrapped.canvas, width: wrapped.canvas.width, height: wrapped.canvas.height },
-                clip,
-                renderOptions,
-              )
-            } else {
-              renderBlank(ctx, renderOptions)
-            }
-
-            await canvasSource.add(t, frameDuration, { keyFrame: done % keyframeFrames(settings.fps) === 0 })
-            cursor++
-            done++
-
-            const nowMs = performance.now()
-            if (nowMs - lastReport > 200) {
-              lastReport = nowMs
-              this.#tick(done, totalFrames, t0)
-            }
-          }
-          // A short clip may yield fewer frames than it owns; fill the rest.
-          while (cursor < Math.min(totalFrames, Math.round(end * settings.fps))) {
-            renderBlank(ctx, renderOptions)
-            await canvasSource.add(cursor * frameDuration, frameDuration)
-            cursor++
-            done++
-          }
-        }
-      }
-
-      // Trailing silence.
-      await emitBlankUntil(totalFrames)
 
       // Audio is fed after the video loop. AudioBufferSource appends each
       // buffer directly after the previous one, so order is the only thing that

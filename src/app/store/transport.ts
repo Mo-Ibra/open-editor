@@ -15,7 +15,7 @@ import { createSignal, type Accessor } from 'solid-js'
 
 import { AudioEngine } from '../../audio/audio-engine.js'
 import {
-  clipAtLane,
+  clipAtTrack,
   findClip,
   isLinked,
   linkedPartner,
@@ -202,7 +202,7 @@ export function createTransport(deps: TransportDeps): Transport {
   }
 
   async function togglePlay(): Promise<void> {
-    if (project.video.length === 0 && project.audio.length === 0) {
+    if (project.tracks.every((t) => t.clips.length === 0)) {
       notify(
         'warn',
         hasImportedFiles()
@@ -246,11 +246,25 @@ export function createTransport(deps: TransportDeps): Transport {
     }
   }
 
+  /**
+   * The topmost video clip under `t`, across every video track.
+   *
+   * A single-track `find` was the pre-multi-track shortcut: it only saw the
+   * bottom layer, so stepping or transform-by-playhead picked the wrong clip (or
+   * none) once a second video track existed. Iterating in reverse matches the
+   * paint order `paintIntentAt` uses — the last video track is the top layer.
+   */
+  function videoClipAt(t: number): Clip | null {
+    const videoTracks = project.tracks.filter((track) => track.type === 'video')
+    for (let i = videoTracks.length - 1; i >= 0; i--) {
+      const found = clipAtTrack(videoTracks[i]!.clips, t)
+      if (found) return found.clip
+    }
+    return null
+  }
+
   function step(frames: number): void {
-    // The clip under the playhead is the one whose frames we are stepping through;
-    // a selected clip is the fallback for stepping through something not yet
-    // reached, and `OUTPUT_FPS` when there is nothing to step through at all.
-    const clip = clipAtLane(project.video, playhead())?.clip ?? selectedClip()
+    const clip = videoClipAt(playhead()) ?? selectedClip()
     const fps = frameRateFor(clip ? project.assets[clip.assetId] : undefined)
     seek(playhead() + frames / fps)
   }
@@ -262,7 +276,7 @@ export function createTransport(deps: TransportDeps): Transport {
 
   /** Transform the selected clip, or failing that whatever is under the playhead. */
   function setTransformActive(transform: Clip['transform']): void {
-    const clip = selectedClip() ?? clipAtLane(project.video, playhead())?.clip ?? null
+    const clip = selectedClip() ?? videoClipAt(playhead())
     if (!clip) {
       notify('warn', 'Select a clip first.')
       return

@@ -24,12 +24,12 @@ import {
 } from '../src/app/store/fingerprint.ts'
 import { emptyProject, type Clip, type Project } from '../src/model/project.ts'
 
-const clip = (id: string, lane: 'video' | 'audio', over: Partial<Clip> = {}): Clip => ({
-  id, lane, assetId: 'ast_1', in: 1.5, out: 4.25, ...over,
+const clip = (id: string, trackId: 'video' | 'audio', over: Partial<Clip> = {}): Clip => ({
+  id, trackId, assetId: 'ast_1', in: 1.5, out: 4.25, ...over,
 })
 
 const sample = (): Project => ({
-  version: 2,
+  version: 3,
   assets: {
     ast_1: {
       id: 'ast_1', name: 'clip.mp4', duration: 10, width: 1920, height: 1080,
@@ -38,8 +38,10 @@ const sample = (): Project => ({
       videoCodec: 'avc', audioCodec: 'aac', size: 1234,
     },
   },
-  video: [clip('a', 'video', { gain: 1.5, hidden: true, transform: { scale: 1.2, x: 0, y: 0 } })],
-  audio: [clip('b', 'audio', { offset: 2, muted: true, linkId: 'L' })],
+  tracks: [
+    { id: 'video', type: 'video', clips: [clip('a', 'video', { gain: 1.5, hidden: true, transform: { scale: 1.2, x: 0, y: 0 } })] },
+    { id: 'audio', type: 'audio', clips: [clip('b', 'audio', { offset: 2, muted: true, linkId: 'L' })] },
+  ],
 })
 
 // --- round trip -------------------------------------------------------------
@@ -73,7 +75,7 @@ test('the model never sees the fingerprint fields', () => {
 
 test('an asset with no recorded fingerprint still opens the edit', () => {
   const after = parseProjectFile(buildProjectFile(sample(), {}))
-  assert.equal(after.project.video.length, 1, 'the clips are all there')
+  assert.equal(after.project.tracks.find((t) => t.type === 'video')!.clips.length, 1, 'the clips are all there')
   assert.equal(fingerprintFor(after.media, 'ast_1'), null)
 })
 
@@ -100,15 +102,15 @@ test('damaged input is distinguishable from the wrong file', () => {
   assert.throws(() => parseProjectFile('{not json'), /not valid JSON/)
   assert.throws(() => parseProjectFile('null'), /empty or not a project/)
   const bad = JSON.parse(buildProjectFile(sample(), {}))
-  delete (bad.project as Partial<Project>).video
-  assert.throws(() => parseProjectFile(JSON.stringify(bad)), /video and an audio lane/)
+  delete (bad.project as Partial<Project>).tracks
+  assert.throws(() => parseProjectFile(JSON.stringify(bad)), /tracks array/)
 })
 
 test('a saved project file can be imported as a saved project file', () => {
   // The two formats are different things, and this is the case that makes the
   // difference obvious: an export carries an envelope, a save does not.
   const exported = buildProjectFile(sample(), {})
-  assert.equal(parseProjectFile(exported).project.version, 2)
+  assert.equal(parseProjectFile(exported).project.version, 3)
   assert.throws(() => parseProjectFile(JSON.stringify(emptyProject())), /not exported/)
 })
 
@@ -203,7 +205,7 @@ test('the project name survives the round trip', () => {
   // to name a project is so you can find it again.
   const p = emptyProject()
   p.assets.a1 = { ...p.assets.a1!, name: 'a1.mp4' }
-  p.video.push({ id: 'c1', lane: 'video', assetId: 'a1', in: 0, out: 5 })
+  p.tracks.find((t) => t.type === 'video')!.clips.push({ id: 'c1', trackId: 'video', assetId: 'a1', in: 0, out: 5 })
 
   const text = buildProjectFile(p, {}, { name: 'cut-a' })
   assert.equal(JSON.parse(text).name, 'cut-a')
@@ -217,7 +219,7 @@ test('a file with no name still opens, under a placeholder', () => {
   delete raw.name
   const parsed = parseProjectFile(JSON.stringify(raw))
   assert.equal(parsed.name, 'Imported project')
-  assert.equal(parsed.project.video.length, 0, 'and the edit is intact')
+  assert.equal(parsed.project.tracks.reduce((n, t) => n + t.clips.length, 0), 0, 'and the edit is intact')
 })
 
 test('a blank name is treated as absent, not as a nameless project', () => {

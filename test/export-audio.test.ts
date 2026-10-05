@@ -13,7 +13,7 @@
 import assert from 'node:assert/strict'
 import { buildExportAudio, verifyAudioTrack } from '../src/audio/export-audio.ts'
 import { mixTimeline, type MixSegment } from '../src/audio/audio.ts'
-import type { Project } from '../src/model/project.ts'
+import type { Clip, Project } from '../src/model/project.ts'
 
 const RATE = 48000
 const CHANNELS = 2
@@ -54,10 +54,17 @@ class FakeAudioBuffer {
 // Install globally so the modules under test find it.
 ;(globalThis as { AudioBuffer?: unknown }).AudioBuffer = FakeAudioBuffer
 
-/** The mixer walks the AUDIO lane. */
-const project = (clips: Project['audio']): Project => ({ version: 2, assets: {}, video: [], audio: clips })
-const clip = (id: string, i: number, o: number, extra: Record<string, unknown> = {}) =>
-  ({ id, lane: 'audio', assetId: 'a', in: i, out: o, ...extra }) as Project['audio'][number]
+/** The mixer walks the AUDIO tracks. */
+const project = (clips: Clip[]): Project => ({
+  version: 3,
+  assets: {},
+  tracks: [
+    { id: 'video', type: 'video', clips: [] },
+    { id: 'audio', type: 'audio', clips },
+  ],
+})
+const clip = (id: string, i: number, o: number, extra: Record<string, unknown> = {}): Clip =>
+  ({ id, trackId: 'audio', assetId: 'a', in: i, out: o, ...extra })
 
 const library = (assets: Record<string, boolean>) =>
   ({ get: (id: string) => (assets[id] ? ({ audioTrack: {}, asset: { name: `${id}.mp4` } } as never) : undefined) }) as never
@@ -168,6 +175,31 @@ const tone = (seconds: number, value: number) => {
   // Within one frame of slack is acceptable, not a problem.
   const nearly = { buffer: tone(10 - 1 / 30 + 0.001, 0.5) as unknown as AudioBuffer, silent: false }
   assert.equal(verifyAudioTrack(nearly, 10, 30).ok, true, 'one frame of slack is fine')
+}
+
+// --- every audio track is mixed, not just the first -----------------------
+{
+  // A single-track `.find` used to drop every audio track after the first, so
+  // the second layer was silent in the export. Each track positions its own
+  // clips independently, so a clip on the second track at 5s must be heard at
+  // 5s, not stacked after the first track's clip.
+  const p: Project = {
+    version: 3,
+    assets: {},
+    tracks: [
+      { id: 'video', type: 'video', clips: [] },
+      { id: 'audio', type: 'audio', clips: [clip('a', 0, 2)] },
+      { id: 'audio2', type: 'audio', clips: [{ ...clip('b', 0, 2), trackId: 'audio2', assetId: 'b', offset: 5 }] },
+    ],
+  }
+  const track = await buildExportAudio(p, 8, {
+    library: library({ a: true, b: true }),
+    getAssetAudio: async () => tone(10, 0.4),
+  })
+  assert.ok(track, 'a track is produced')
+  const mixed = track!.buffer as unknown as FakeAudioBuffer
+  assert.notEqual(mixed.getChannelData(0)[Math.round(0.5 * RATE)], 0, 'the first audio track is heard')
+  assert.notEqual(mixed.getChannelData(0)[Math.round(5.5 * RATE)], 0, 'the second audio track is layered in, not dropped')
 }
 
 console.log('export audio assertions passed')

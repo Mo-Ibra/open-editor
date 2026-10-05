@@ -121,7 +121,7 @@ divides by zero somewhere."
 
 ## 5. The batch path is not a loop
 
-`splitSelectionAtPlayhead` (`src/app/store/edits.ts:138`) is the multi-select
+`splitSelectionAtPlayhead` (`src/app/store/edits.ts:139`) is the multi-select
 case, and its docblock names the two things that make it more than a loop:
 
 - **A linked pair is split by `splitLinked`, which cuts both halves.** So a

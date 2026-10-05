@@ -13,6 +13,7 @@
  */
 
 import { dump } from '../../dev/debug.js'
+import { trackTypeById } from '../../model/project.js'
 import type { AppState } from '../store/state.js'
 import type { LayoutState } from '../store/layout.js'
 import type { ContextMenuState, MenuItem } from '../view/ui/ContextMenu.js'
@@ -35,8 +36,8 @@ export function menuItems(
     const many = n > 1
     const clips = state.selectedClips()
     const linked = state.selectionHasLinks()
-    const audio = clips.filter((c) => c.lane === 'audio')
-    const video = clips.filter((c) => c.lane === 'video')
+    const audio = clips.filter((c) => trackTypeById(state.project, c.trackId) === 'audio')
+    const video = clips.filter((c) => trackTypeById(state.project, c.trackId) === 'video')
     const allMuted = audio.length > 0 && audio.every((c) => c.muted)
     const allHidden = video.length > 0 && video.every((c) => c.hidden)
     const count = (one: string, plural: string): string => (many ? plural.replace('%d', String(n)) : one)
@@ -112,8 +113,10 @@ export function menuItems(
     ]
   }
 
-  if (target?.kind === 'lane') {
-    const lane = target.lane ?? 'video'
+  if (target?.kind === 'track') {
+    const trackId = target.trackId ?? state.project.tracks[0]?.id
+    if (!trackId) return []
+    const isAudio = trackTypeById(state.project, trackId) === 'audio'
     const selectedFile = state.selectedAsset()
     const file = selectedFile ? state.project.assets[selectedFile] : undefined
     return [
@@ -121,15 +124,15 @@ export function menuItems(
         label: file ? `Add "${file.name}" here` : 'Add the selected file here',
         disabled: !file,
         run: () => {
-          if (selectedFile) state.addAssetAt(selectedFile, lane, state.playhead())
+          if (selectedFile) state.addAssetAt(selectedFile, trackId, state.playhead())
         },
       },
       { separator: true, label: '', run: noop },
       {
-        label: `Clear ${lane} lane`,
+        label: `Clear ${isAudio ? 'audio' : 'video'} track`,
         danger: true,
-        disabled: state.laneOf(state.project, lane).length === 0,
-        run: () => state.clearLane(lane),
+        disabled: state.trackById(state.project, trackId).length === 0,
+        run: () => state.clearTrack(trackId),
       },
     ]
   }
@@ -177,7 +180,7 @@ export function menuItems(
     ]
   }
 
-  // The app itself: anything not on a clip, a lane, an asset, or the picture.
+    // The app itself: anything not on a clip, a track, an asset, or the picture.
   return [
     { label: 'Undo', shortcut: '⌘Z', disabled: !state.canUndo(), run: state.undo },
     { label: 'Redo', shortcut: '⇧⌘Z', disabled: !state.canRedo(), run: state.redo },
@@ -200,7 +203,7 @@ export function menuItems(
     // Only when there is sound to mute. A "Mute" row on a project with no audio
     // is a promise the app cannot keep, and it appears — and reads as broken —
     // on the empty timeline most users right-click first.
-    ...(state.project.audio.length > 0
+    ...(state.project.tracks.some((t) => t.type === 'audio' && t.clips.length > 0)
       ? [
           { separator: true, label: '', run: noop },
           {

@@ -406,7 +406,7 @@ console.log('ref-binding assertions passed')
 
   assert.match(
     branch,
-    /state\.place\(drag\.lane, drag\.index, start\)/,
+    /state\.place\(drag\.trackId, drag\.index, start\)/,
     'the move branch must place the dragged clip and let placeClip clamp it',
   )
   assert.doesNotMatch(
@@ -444,7 +444,7 @@ console.log('ref-binding assertions passed')
   // for every clip whose source in-point did not equal its timeline start.
   assert.match(
     trim,
-    /state\.seek\(drag\.kind === 'trim-out' \? Math\.max\(laneStartTime, edge - frame\) : laneStartTime\)/,
+    /state\.seek\(drag\.kind === 'trim-out' \? Math\.max\(trackStartTime, edge - frame\) : trackStartTime\)/,
     'the trim preview must seek timeline space, not the source time',
   )
   assert.doesNotMatch(trim, /state\.seek\([^)]*sourceT/, 'a source time must never be seeked as a timeline position')
@@ -660,7 +660,7 @@ console.log('ref-binding assertions passed')
 
   // The lane a clip lives in comes from the DOM, not from a prop, so a clip
   // rendered outside a lane would resolve to `undefined` and do nothing.
-  assert.match(written, /data-lane=\{props\.lane\}|data-lane="|data-lane=\{/, 'a lane must render data-lane')
+  assert.match(written, /data-track=\{props\.trackId\}|data-track="|data-track=\{/, 'a track must render data-track')
   assert.match(written, /data-clip-id=\{props\.clip\.id\}/, 'a clip must render its own id')
   assert.match(written, /data-clip-index=\{props\.index\}/, 'and its index, which drag reads as a number')
   console.log(`  ${names.size} gesture attributes are both read and rendered`)
@@ -990,12 +990,12 @@ function repoRootFor(): string {
   // so widening the decision widens the guard with it.
   assert.match(
     preview,
-    /const current = paintIntentAt\(state\.project\.video, forTime, unavailable\)/,
+    /const current = paintIntentAt\(state\.videoTracks\(\), forTime, unavailable\)/,
     'a decoded frame must re-check what to paint, through the function that decides it',
   )
   assert.match(
     preview,
-    /paintIntentAt\(state\.project\.video, forTime, unavailable\)[\s\S]{0,400}current\.kind === 'blank'/,
+    /paintIntentAt\(state\.videoTracks\(\), forTime, unavailable\)[\s\S]{0,400}current\.kind === 'blank'/,
     'and it must paint the blank rather than let the decoded frame through',
   )
   assert.doesNotMatch(
@@ -1021,8 +1021,13 @@ function repoRootFor(): string {
     assert.match(paintBlank, /if \(fault\)/, 'a fault explains itself; a deliberate blank stays silent')
     assert.match(
       intent,
-      /if \(!loc\) return \{ kind: 'blank', fault: null \}/,
-      'a gap is an edit, not a fault — so it is black and silent',
+      /if \(!loc\) continue/,
+      'a gap is an edit, not a fault — it falls through to a lower track, or black',
+    )
+    assert.match(
+      intent,
+      /return \{ kind: 'blank', fault: null \}\s*\}/,
+      'and with no clip anywhere below, it is black and silent',
     )
     assert.match(
       intent,
@@ -1049,7 +1054,7 @@ function repoRootFor(): string {
   assert.doesNotMatch(state, /setNotices\(\(prev\) => prev\.slice\(0, -1\)\)/, 'expiry must not remove by position')
 
   // --- the export must agree with the preview about hidden ---------------
-  assert.match(exporter, /clipRendersBlack\(clip, Boolean\(entry\?\.videoSink\)\)/, 'the export decides black by the same rule the preview does')
+  assert.match(exporter, /clipRendersBlack\(seg\.clip, Boolean\(entry\?\.videoSink\)\)/, 'the export decides black by the same rule the preview does')
 
   // --- the keymap must not be furniture ----------------------------------
   assert.doesNotMatch(
@@ -1114,7 +1119,7 @@ function repoRootFor(): string {
   // --- the whole track is a target -------------------------------------
   assert.match(timeline, /onDragOver=\{onDragOverTrack\}/, 'the track itself accepts a drop')
   assert.match(timeline, /onDrop=\{onDropTrack\}/, '')
-  assert.match(timeline, /function laneAtClientY/, 'and a drop between lanes picks the nearest one')
+  assert.match(timeline, /function trackAtClientY/, 'and a drop between tracks picks the nearest one')
   assert.match(timeline, /state\.dropFiles\(files/, 'a file from the desktop is imported *and* placed')
   const ruler = readView('ruler')
   assert.match(ruler, /onDragOver=\{props\.onDragOver\}/, 'the ruler accepts a drop too')
@@ -1124,7 +1129,7 @@ function repoRootFor(): string {
   // --- the cue shows the real extent, and says which mode ---------------
   assert.match(cue, /data-drop-caret=\{at\(\)\.mode\}/, 'the caret records the mode, for the tests and for the eye')
   assert.match(cue, /at\(\)\.incoming === true/, 'and hides an extent it does not know')
-  assert.match(assets, /const lanes: Lane\[\] = canVideo && canAudio \? \['video', 'audio'\]/, 'a file with both tracks makes a linked pair')
+  assert.match(assets, /const targetTypes: string\[\] = canVideo && canAudio \? \['video', 'audio'\]/, 'a file with both tracks makes a linked pair')
   console.log('  dropping works anywhere, in both modes, for both kinds of file')
 }
 
@@ -1167,7 +1172,7 @@ function repoRootFor(): string {
   // Every top-level key is written on its own line. Wrapping the whole project
   // in `reconcile` is what blanked `assets` and `version` once, because a
   // reconciler sets every key the target does not mention to `undefined`.
-  for (const key of ['version', 'assets', 'video', 'audio', 'captions']) {
+  for (const key of ['version', 'assets', 'tracks', 'captions']) {
     assert.match(state, new RegExp(`applyProject\\('${key}'`), `${key} is written explicitly`)
   }
   assert.doesNotMatch(
@@ -1411,7 +1416,7 @@ function repoRootFor(): string {
   assert.match(file, /has not been changed/, 'without blaming the file')
   // The model keeps its shape: fingerprints live beside the project.
   assert.match(file, /media: Record<string, ExportedMedia>/, 'fingerprints sit in their own bag')
-  assert.match(file, /const project = parseProject\(/, 'and the model still gets what it expects')
+  assert.match(file, /const project = migrateProject\(/, 'and the model still gets what it expects')
 
   // --- the ladder: certainty is earned ------------------------------------
   assert.match(prints, /isCertain[\s\S]{0,120}kind === 'identical'/, 'only identical is certain')

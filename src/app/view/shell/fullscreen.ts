@@ -58,18 +58,28 @@ export function createFullscreen(onError: (message: string) => void): Fullscreen
   }
 
   function toggle(): void {
+    // Leaving is always safe when the element on screen is the one we promoted.
+    // A refusal here is not the user's fault, so it is logged, not announced.
+    if (target && document.fullscreenElement === target) {
+      void document.exitFullscreen().catch((err: unknown) => {
+        log.warn('fullscreen exit refused', String(err))
+      })
+      return
+    }
+
+    // Entering needs a *live* element. Hiding the picture unmounts the stage,
+    // and a stale target rejects with a generic "refused" that blames the
+    // user's click for what is really a missing target. Name the real reason.
+    if (!target || !target.isConnected) {
+      onError('Show the picture before going full screen.')
+      return
+    }
+
     // Both calls reject rather than throw synchronously, and both reject for
     // reasons the user can act on: no user gesture, or a browser that will only
     // full screen an element they interacted with. Reporting beats an
     // unhandled rejection that explains nothing.
-    const request = document.fullscreenElement === target
-      ? document.exitFullscreen()
-      : target?.requestFullscreen()
-    if (!request) {
-      onError('Full screen is not available here.')
-      return
-    }
-    void request.catch((err: unknown) => {
+    void target.requestFullscreen().catch((err: unknown) => {
       log.warn('fullscreen refused', String(err))
       onError('The browser refused full screen. Try clicking the picture first.')
     })

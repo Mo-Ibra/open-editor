@@ -13,7 +13,7 @@
  *
  * Two of those left the last decoded frame sitting on the canvas, so the picture
  * froze on the last frame of the previous clip. For a gap that is not cosmetic:
- * the exporter writes black for every gap (`emitBlankUntil`, and `laneDuration`'s
+ * the exporter writes black for every gap (`emitBlankUntil`, and `trackDuration`'s
  * docstring says "the video holds black for it"), so a preview showing a frozen
  * frame is showing something the exported file will not contain. That is the
  * exact failure [ADR-1] exists to prevent — one render function, so preview and
@@ -29,6 +29,21 @@
  *   a decoder that will not open. Paint black *and* say so, because "I can see
  *   nothing here" with no explanation is the failure mode that costs hours.
  *
+ * **Which clip wins when there is more than one video track.** The tracks are
+ * walked top-down — a later video track sits above an earlier one, the way a
+ * layer stack paints — and the first track with a clip covering `t` decides:
+ *
+ * - a **gap** (no clip here) is a hole: the walk continues to the track below;
+ * - a **hidden** clip is deliberate black and stops the walk — the model's own
+ *   rule is "draw black for this clip", and honouring it means a hidden overlay
+ *   occludes what is under it rather than vanishing;
+ * - a **fault** stops the walk too: the topmost content is what the user expects
+ *   to see, and falling through would hide the very thing that needs reporting.
+ *
+ * Source frames are opaque, so at most one clip ever reaches `renderFrame` — the
+ * "compositing" is this selection, and both preview and export call it. That is
+ * what keeps ADR-1 true across tracks.
+ *
  * In a `.ts` file, not a `.tsx` one, and that is not tidiness: Node's type
  * stripping cannot load `.tsx` at all, so pure logic placed beside a component is
  * untested by construction. See `ticks.ts` and `paintIntentAt` for the same reason.
@@ -36,7 +51,7 @@
  * [ADR-1]: ../docs/decisions/0001-one-render-function.md
  */
 
-import { clipAtLane, sourceTimeAt, type Clip, type ClipLocation } from '../../../model/project.js'
+import { clipAtTrack, sourceTimeAt, type Clip, type ClipLocation } from '../../../model/project.js'
 
 export type PaintIntent =
   /** Paint black. `fault` is why, when why is a fault rather than an edit. */
@@ -57,25 +72,37 @@ export type Unavailable = (clip: Clip) => string | null
 /**
  * Decide what to paint at timeline time `t`.
  *
- * One lookup, and it returns the `ClipLocation` it found — `clipAtLane` sums the
- * lane from the start on every call, so handing the result back rather than
- * making the caller ask twice is worth the wider return type.
+ * `videoTracks` are the video tracks in paint order (first at the bottom). One
+ * lookup per track top-down, and the `ClipLocation` that decides is handed back
+ * — `clipAtTrack` sums the track from the start on every call, so making the
+ * caller ask twice is worth the wider return type.
+ *
+ * A project with no video tracks is the empty timeline: black, no fault.
  */
-export function paintIntentAt(video: Clip[], t: number, unavailable: Unavailable): PaintIntent {
-  const loc = clipAtLane(video, t)
+export function paintIntentAt(
+  videoTracks: readonly Clip[][],
+  t: number,
+  unavailable: Unavailable,
+): PaintIntent {
+  for (let i = videoTracks.length - 1; i >= 0; i--) {
+    const loc = clipAtTrack(videoTracks[i]!, t)
 
-  // No clip here. That is a **gap**, and a gap is part of the timeline rather
-  // than the absence of one — `laneDuration` counts it, `frameTimesForClip`
-  // counts it, and the exporter fills it with black. Deliberately silent: it is
-  // an edit somebody made.
-  if (!loc) return { kind: 'blank', fault: null }
+    // No clip here. That is a **gap**, and a gap is part of the timeline rather
+    // than the absence of one — `trackDuration` counts it, `frameTimesForClip`
+    // counts it, and the exporter fills it with black. It is a hole in *this*
+    // track: the track below shows through, or black if there is none.
+    if (!loc) continue
 
-  // Also an edit, and also cheap: no decode, no cache entry, nothing drawn but a
-  // fill. `clipRendersBlack` covers the same two cases on the export side.
-  if (loc.clip.hidden) return { kind: 'blank', fault: null }
+    // Also an edit, and also cheap: no decode, no cache entry, nothing drawn but
+    // a fill. `clipRendersBlack` covers the same two cases on the export side.
+    // It stops here: a hidden clip is black over whatever lies beneath it.
+    if (loc.clip.hidden) return { kind: 'blank', fault: null }
 
-  const fault = unavailable(loc.clip)
-  if (fault) return { kind: 'blank', fault }
+    const fault = unavailable(loc.clip)
+    if (fault) return { kind: 'blank', fault }
 
-  return { kind: 'decode', loc, sourceTime: sourceTimeAt(loc, t) }
+    return { kind: 'decode', loc, sourceTime: sourceTimeAt(loc, t) }
+  }
+
+  return { kind: 'blank', fault: null }
 }

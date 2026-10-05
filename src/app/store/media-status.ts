@@ -48,9 +48,13 @@ export interface MediaState {
 }
 
 export function clipUseCount(project: Project, assetId: string): number {
-  const inLane = (clips: { assetId: string }[]): number =>
-    clips.filter((c) => c.assetId === assetId).length
-  return inLane(project.video) + inLane(project.audio)
+  let count = 0
+  for (const track of project.tracks) {
+    for (const clip of track.clips) {
+      if (clip.assetId === assetId) count++
+    }
+  }
+  return count
 }
 
 /**

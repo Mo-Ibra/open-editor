@@ -40,13 +40,15 @@ async function seed(state: State): Promise<void> {
     name: 't',
     savedAt: 0,
     project: {
-      version: 2,
+      version: 3,
       assets: { a: asset },
-      video: [
-        { id: 'A', lane: 'video', assetId: 'a', in: 0, out: 10 },
-        { id: 'B', lane: 'video', assetId: 'a', in: 0, out: 10 },
+      tracks: [
+        { id: 'video', type: 'video', clips: [
+          { id: 'A', trackId: 'video', assetId: 'a', in: 0, out: 10 },
+          { id: 'B', trackId: 'video', assetId: 'a', in: 0, out: 10 },
+        ] },
+        { id: 'audio', type: 'audio', clips: [] },
       ],
-      audio: [],
     },
     media: {},
   }
@@ -69,7 +71,8 @@ function Harness(props: { state: State }) {
       onPointerUp={drag.onPointerUp}
     >
       <Lane
-        lane="video"
+        trackId="video"
+        type="video"
         label="video"
         state={props.state}
         height={80}
@@ -81,9 +84,12 @@ function Harness(props: { state: State }) {
   )
 }
 
+const videoOf = (state: State) => state.project.tracks.find((t) => t.type === 'video')!.clips
+const audioOf = (state: State) => state.project.tracks.find((t) => t.type === 'audio')!.clips
+
 const startOf = (state: State, id: string): number => {
-  const i = state.project.video.findIndex((c) => c.id === id)
-  return clipStart(state.project.video, i)
+  const clips = videoOf(state)
+  return clipStart(clips, clips.findIndex((c) => c.id === id))
 }
 
 describe('moving a clip by dragging', () => {
@@ -106,7 +112,7 @@ describe('moving a clip by dragging', () => {
 
     expect(startOf(state, 'A')).toBe(0)
     expect(startOf(state, 'B')).toBe(10)
-    expect(state.project.video.map((c) => c.id)).toEqual(['A', 'B'])
+    expect(videoOf(state).map((c) => c.id)).toEqual(['A', 'B'])
   })
 
   it('leaves the clip after it put when dragged right into it', async () => {
@@ -200,7 +206,7 @@ describe('the fixes from the gesture audit', () => {
     fireEvent.pointerMove(track, { clientX: 1360, pointerId: 1 }) // timeline 17
     fireEvent.pointerUp(track, { pointerId: 1 })
 
-    expect(state.project.video[1]!.out).toBeCloseTo(7, 9)
+    expect(videoOf(state)[1]!.out).toBeCloseTo(7, 9)
     // The playhead must sit one frame before timeline 17, not at source 7.
     expect(state.playhead()).toBeCloseTo(17 - 1 / 30, 9)
   })
@@ -221,7 +227,7 @@ describe('the fixes from the gesture audit', () => {
     fireEvent.pointerMove(track, { clientX: 960, pointerId: 1 }) // timeline 12
     fireEvent.pointerUp(track, { pointerId: 1 })
 
-    expect(state.project.video[1]!.in).toBeCloseTo(2, 9)
+    expect(videoOf(state)[1]!.in).toBeCloseTo(2, 9)
     // The new in frame sits at the clip's start (timeline 10), not at source 2.
     expect(state.playhead()).toBeCloseTo(10, 9)
   })
@@ -236,13 +242,15 @@ describe('frozen snap targets across lanes', () => {
       name: 't',
       savedAt: 0,
       project: {
-        version: 2,
+        version: 3,
         assets: { a: { ...asset, hasAudio: true } },
         // A linked pair, plus an unselected audio clip whose start is the bait.
-        video: [{ id: 'V', lane: 'video', assetId: 'a', in: 0, out: 10, linkId: 'L' }],
-        audio: [
-          { id: 'A0', lane: 'audio', assetId: 'a', in: 0, out: 10, linkId: 'L' },
-          { id: 'A1', lane: 'audio', assetId: 'a', in: 0, out: 10, offset: 10 }, // timeline 20..30
+        tracks: [
+          { id: 'video', type: 'video', clips: [{ id: 'V', trackId: 'video', assetId: 'a', in: 0, out: 10, linkId: 'L' }] },
+          { id: 'audio', type: 'audio', clips: [
+            { id: 'A0', trackId: 'audio', assetId: 'a', in: 0, out: 10, linkId: 'L' },
+            { id: 'A1', trackId: 'audio', assetId: 'a', in: 0, out: 10, offset: 10 }, // timeline 20..30
+          ] },
         ],
       },
       media: {},
@@ -275,7 +283,119 @@ describe('frozen snap targets across lanes', () => {
     fireEvent.pointerUp(track, { pointerId: 1 })
 
     expect(startOf(state, 'V')).toBeCloseTo(10.05, 9)
-    const a0 = state.project.audio.findIndex((c) => c.id === 'A0')
-    expect(clipStart(state.project.audio, a0)).toBeCloseTo(10.05, 9)
+    const audio = audioOf(state)
+    const a0 = audio.findIndex((c) => c.id === 'A0')
+    expect(clipStart(audio, a0)).toBeCloseTo(10.05, 9)
+  })
+})
+
+describe('dragging a clip to another track', () => {
+  async function seedTwoVideo(state: State): Promise<void> {
+    const file = {
+      format: 'open-editor.project',
+      formatVersion: 1,
+      name: 't',
+      savedAt: 0,
+      project: {
+        version: 3,
+        assets: { a: asset },
+        tracks: [
+          { id: 'v2', type: 'video', clips: [] },
+          { id: 'video', type: 'video', clips: [
+            { id: 'A', trackId: 'video', assetId: 'a', in: 0, out: 10 },
+            { id: 'B', trackId: 'video', assetId: 'a', in: 0, out: 10 },
+          ] },
+        ],
+      },
+      media: {},
+    }
+    try {
+      await state.projects.importText(JSON.stringify(file))
+    } catch {
+      // The project is written before importText's storage tail.
+    }
+  }
+
+  function TwoTrackHarness(props: { state: State }) {
+    let track!: HTMLDivElement
+    const menu = { show: noop, close: noop, open: () => null } as never
+    const drag = useTimelineDrag(props.state, menu, { track: () => track, scroller: () => undefined })
+    return (
+      <div
+        ref={track}
+        onPointerDown={drag.onPointerDown}
+        onPointerMove={drag.onPointerMove}
+        onPointerUp={drag.onPointerUp}
+      >
+        <Lane trackId="v2" type="video" label="v2" state={props.state} height={80} dropAt={() => null} setDropAt={() => {}} trackLeft={() => 0} />
+        <Lane trackId="video" type="video" label="video" state={props.state} height={80} dropAt={() => null} setDropAt={() => {}} trackLeft={() => 0} />
+      </div>
+    )
+  }
+
+  it('moves a clip straight down onto the video track under the pointer', async () => {
+    const state = createAppState()
+    await seedTwoVideo(state)
+    state.setZoom(80)
+    state.setClipSnap(false)
+    state.setLaneSnap(false)
+
+    const { container } = render(() => <TwoTrackHarness state={state} />)
+    const root = container.firstElementChild as HTMLElement
+    const v2El = container.querySelector('[data-track="v2"]') as HTMLElement
+    const v1El = container.querySelector('[data-track="video"]') as HTMLElement
+    const rect = (top: number): DOMRect =>
+      ({ top, height: 80, bottom: top + 80, left: 0, right: 800, width: 800, x: 0, y: top, toJSON: () => ({}) }) as DOMRect
+    // jsdom gives every element a zero rect; the hit test needs real rows.
+    Object.defineProperty(v2El, 'getBoundingClientRect', { value: () => rect(0) })
+    Object.defineProperty(v1El, 'getBoundingClientRect', { value: () => rect(80) })
+
+    const clipB = container.querySelector('[data-clip-id="B"]') as HTMLElement
+    // Press B (timeline 10) and drag straight up, no horizontal travel at all.
+    fireEvent.pointerDown(clipB, { clientX: 1000, clientY: 120, pointerId: 1 })
+    fireEvent.pointerMove(root, { clientX: 1000, clientY: 40, pointerId: 1 })
+    fireEvent.pointerUp(root, { pointerId: 1 })
+
+    const v2 = state.project.tracks.find((t) => t.id === 'v2')!
+    const v1 = state.project.tracks.find((t) => t.id === 'video')!
+    expect(v2.clips.map((c) => c.id)).toEqual(['B'])
+    expect(clipStart(v2.clips, 0)).toBe(10)
+    expect(v1.clips.map((c) => c.id)).toEqual(['A'])
+  })
+})
+
+describe('the remove-track button', () => {
+  it('keeps the track drag handler out of its pointerdown, so the click fires', () => {
+    // The button lives inside `#timeline-track`, whose pointerdown captures the
+    // pointer for dragging. The capture retargeted the click away from the
+    // button, so removal never fired. Stopping propagation on the button's
+    // pointerdown is the fix; this asserts the track handler is never reached.
+    const state = createAppState()
+    let trackDown = 0
+    let removed = 0
+    const { container } = render(() => (
+      <div onPointerDown={() => { trackDown++ }}>
+        <Lane
+          trackId="video"
+          type="video"
+          label="video"
+          state={state}
+          height={80}
+          dropAt={() => null}
+          setDropAt={() => {}}
+          trackLeft={() => 0}
+          canRemove={true}
+          onRemove={() => { removed++ }}
+        />
+      </div>
+    ))
+    const button = container.querySelector('[aria-label="Remove video track"]') as HTMLElement
+    expect(button).toBeTruthy()
+
+    fireEvent.pointerDown(button, { pointerId: 1 })
+    expect(trackDown, 'the button press must not start a track drag').toBe(0)
+
+    fireEvent.click(button)
+    expect(removed, 'the click reaches the button and removes the track').toBe(1)
   })
 })

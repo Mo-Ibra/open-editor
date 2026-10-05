@@ -21,7 +21,7 @@
 import { parseProject, type Project } from '../../model/project.js'
 
 /** The version this build writes. */
-export const CURRENT_VERSION = 2
+export const CURRENT_VERSION = 3
 
 /**
  * Forward-only steps, keyed by the version they produce.
@@ -39,7 +39,29 @@ export const CURRENT_VERSION = 2
  * version. Keeping them raw — not `Project` — is what lets a step exist at all:
  * a v2 project cannot be expressed as a v3 `Project`, because the types differ.
  */
-export const MIGRATIONS: Record<number, (raw: Record<string, unknown>) => Record<string, unknown>> = {}
+export const MIGRATIONS: Record<number, (raw: Record<string, unknown>) => Record<string, unknown>> = {
+  // v2 → v3: convert { video: [], audio: [] } to { tracks: [{ id, type, clips }] }.
+  // The old top-level lanes and each clip's `lane` are dropped on the way: they
+  // would otherwise ride along as dead fields on a project that no longer has
+  // anything called a lane.
+  3: (raw) => {
+    const video = Array.isArray(raw.video) ? raw.video : []
+    const audio = Array.isArray(raw.audio) ? raw.audio : []
+    const { video: _video, audio: _audio, ...rest } = raw
+    const toTrack = (type: 'video' | 'audio') => (c: Record<string, unknown>): Record<string, unknown> => {
+      const { lane: _lane, ...clip } = c as Record<string, unknown> & { lane?: unknown }
+      return { ...clip, trackId: type }
+    }
+    return {
+      ...rest,
+      version: 3,
+      tracks: [
+        { id: 'video', type: 'video', clips: video.map(toTrack('video')) },
+        { id: 'audio', type: 'audio', clips: audio.map(toTrack('audio')) },
+      ],
+    }
+  },
+}
 
 /** The record stored per project. Kept separate from the project itself. */
 export interface StoredProject {
@@ -62,11 +84,8 @@ export function serialiseProject(project: Project): string {
   const out: Record<string, unknown> = {
     version: CURRENT_VERSION,
     assets: project.assets,
-    video: project.video,
-    audio: project.audio,
+    tracks: project.tracks,
   }
-  // Only when set. An empty captions track is noise in a saved file, and
-  // `parseProject` already treats absence as "none".
   if (project.captions) out.captions = project.captions
   return JSON.stringify(out)
 }

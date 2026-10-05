@@ -36,8 +36,8 @@ export interface MenuItem {
 }
 
 export interface MenuTarget {
-  kind: 'clip' | 'lane' | 'asset' | 'preview' | 'timeline' | 'app'
-  lane?: 'video' | 'audio'
+  kind: 'clip' | 'track' | 'asset' | 'preview' | 'timeline' | 'app'
+  trackId?: string
   clipId?: string
   assetId?: string
   /** Where the pointer was, in client coordinates. */

@@ -20,9 +20,9 @@ import { emptyProject, type Clip, type Project } from '../src/model/project.ts'
 interface Shape { size?: number; duration?: number }
 const shape = new Map<string, Shape>()
 
-const clip = (id: string, lane: 'video' | 'audio', assetId: string): Clip => {
+const clip = (id: string, trackId: 'video' | 'audio', assetId: string): Clip => {
   const s = shape.get(assetId) ?? {}
-  return { id, lane, assetId, in: 0, out: s.duration ?? 5 }
+  return { id, trackId, assetId, in: 0, out: s.duration ?? 5 }
 }
 
 const sized = (assetId: string, s: Shape): void => void shape.set(assetId, s)
@@ -38,7 +38,14 @@ const project = (...clips: Clip[]): Project => {
       audioSampleRate: 48000, audioChannels: 2, videoCodec: 'avc', audioCodec: 'aac',
     }
   }
-  return { ...emptyProject(), assets, video: clips.filter((c) => c.lane === 'video'), audio: clips.filter((c) => c.lane === 'audio') }
+  return {
+    ...emptyProject(),
+    assets,
+    tracks: [
+      { id: 'video', type: 'video', clips: clips.filter((c) => c.trackId === 'video') },
+      { id: 'audio', type: 'audio', clips: clips.filter((c) => c.trackId === 'audio') },
+    ],
+  }
 }
 
 const want = (over: Partial<Fingerprint> = {}): Fingerprint => ({ size: 1000, duration: 5, quickHash: 'aaa', ...over })

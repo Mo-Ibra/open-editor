@@ -153,33 +153,40 @@ export class AudioEngine {
     let skipped = 0
     const jobs: Promise<void>[] = []
 
-    // The audio lane only. The picture is the exporter's business.
-    for (let i = 0; i < project.audio.length; i++) {
-      const clip = project.audio[i]!
-      const startsAt = clipStart(project.audio, i)
-      const endsAt = startsAt + clipDuration(clip)
+    // Every audio track, not just the first. Each track positions its own clips
+    // on the timeline, so starts are computed per track — flattening them into
+    // one list would stack the second track after the first instead of layering
+    // it. The picture is the exporter's business.
+    for (const track of project.tracks) {
+      if (track.type !== 'audio') continue
+      const clips = track.clips
+      for (let i = 0; i < clips.length; i++) {
+        const clip = clips[i]!
+        const startsAt = clipStart(clips, i)
+        const endsAt = startsAt + clipDuration(clip)
 
-      // Entirely in the past relative to where we are starting.
-      if (endsAt <= position) {
-        skipped++
-        continue
+        // Entirely in the past relative to where we are starting.
+        if (endsAt <= position) {
+          skipped++
+          continue
+        }
+
+        const offsetIntoClip = Math.max(0, position - startsAt)
+        const sourceFrom = clip.in + offsetIntoClip
+        const remaining = clip.out - sourceFrom
+        if (remaining <= 0) continue
+
+        // A clip that begins in the future is scheduled against the timeline
+        // clock, so its silence before it is real silence rather than a hole.
+        const delay = Math.max(0, startsAt - position)
+
+        jobs.push(
+          this.#schedule(ctx, project, clip, sourceFrom, remaining, delay).then((ok) => {
+            if (ok) scheduled++
+            else skipped++
+          }),
+        )
       }
-
-      const offsetIntoClip = Math.max(0, position - startsAt)
-      const sourceFrom = clip.in + offsetIntoClip
-      const remaining = clip.out - sourceFrom
-      if (remaining <= 0) continue
-
-      // A clip that begins in the future is scheduled against the timeline
-      // clock, so its silence before it is real silence rather than a hole.
-      const delay = Math.max(0, startsAt - position)
-
-      jobs.push(
-        this.#schedule(ctx, project, clip, sourceFrom, remaining, delay).then((ok) => {
-          if (ok) scheduled++
-          else skipped++
-        }),
-      )
     }
 
     // Logged once the scheduling has settled. `#schedule` decodes and connects

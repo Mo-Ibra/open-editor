@@ -10,9 +10,16 @@ import assert from 'node:assert/strict'
 import { clipRendersBlack, frameTimesForClip, totalFramesFor } from '../src/output/exporter.ts'
 import { projectDuration, type Clip, type Project } from '../src/model/project.ts'
 
-const c = (id: string, i: number, o: number): Clip => ({ id, lane: 'video', assetId: 'a', in: i, out: o })
-/** The exporter walks the VIDEO lane; a real project also has an audio lane. */
-const project = (clips: Clip[]): Project => ({ version: 2, assets: {}, video: clips, audio: [] })
+const c = (id: string, i: number, o: number): Clip => ({ id, trackId: 'video', assetId: 'a', in: i, out: o })
+/** The exporter walks the VIDEO tracks; a real project also has audio tracks. */
+const project = (clips: Clip[]): Project => ({
+  version: 3,
+  assets: {},
+  tracks: [
+    { id: 'video', type: 'video', clips },
+    { id: 'audio', type: 'audio', clips: [] },
+  ],
+})
 
 const clips = [c('a', 0, 10), c('b', 5, 25), c('c', 2, 4)] // 10s, 20s, 2s
 const FPS = 30
@@ -79,7 +86,7 @@ const FPS30 = 30
 // --- the bug, stated as a property ---
 {
   // A 15s clip cut from 10s to 25s of a 445.72s source.
-  const trimmed: Clip = { id: 't', lane: 'video', assetId: 'a', in: 10, out: 25 }
+  const trimmed: Clip = { id: 't', trackId: 'video', assetId: 'a', in: 10, out: 25 }
 
   const outTimes = frameTimesForClip([trimmed], 0, 10_000, FPS30)
   const sourceTimes = sourceTimesForClip(trimmed, outTimes.length, FPS30)
@@ -104,14 +111,14 @@ const FPS30 = 30
 
 // --- a clip that starts at source zero is unaffected -----------------------
 {
-  const flush: Clip = { id: 'f', lane: 'video', assetId: 'a', in: 0, out: 3 }
+  const flush: Clip = { id: 'f', trackId: 'video', assetId: 'a', in: 0, out: 3 }
   assert.deepEqual(sourceTimesForClip(flush, 3, FPS30), [0, 0.033333, 0.066667])
 }
 
 // --- gaps and multiple clips: source times restart per clip ---------------
 {
-  const a: Clip = { id: 'a', lane: 'video', assetId: 'a', in: 100, out: 102 }
-  const b: Clip = { id: 'b', lane: 'video', assetId: 'b', in: 5, out: 7 }
+  const a: Clip = { id: 'a', trackId: 'video', assetId: 'a', in: 100, out: 102 }
+  const b: Clip = { id: 'b', trackId: 'video', assetId: 'b', in: 5, out: 7 }
   const lane = [a, b]
 
   const firstOut = frameTimesForClip(lane, 0, 10_000, FPS30)
@@ -157,7 +164,7 @@ function outTimesAreContiguous(a: number[], b: number[]): boolean {
  */
 const blackFor = (clip: object, hasVideoSink: boolean): boolean => clipRendersBlack(clip as never, hasVideoSink)
 
-const vid = (over: object = {}): object => ({ lane: 'video', in: 0, out: 2, ...over })
+const vid = (over: object = {}): object => ({ trackId: 'video', in: 0, out: 2, ...over })
 
 assert.equal(blackFor(vid(), true), false, 'a normal video clip renders its frames')
 assert.equal(
@@ -176,7 +183,7 @@ assert.equal(
   'an explicit hidden:false is not hidden — hence the `=== true` in the rule',
 )
 assert.equal(
-  blackFor({ lane: 'audio', in: 0, out: 2, muted: true }, true),
+  blackFor({ trackId: 'audio', in: 0, out: 2, muted: true }, true),
   false,
   'muting is a gain, not a picture decision; the video rule must not care',
 )

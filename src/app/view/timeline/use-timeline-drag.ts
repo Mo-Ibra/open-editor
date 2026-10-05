@@ -18,9 +18,10 @@ import { createEffect, createSignal, onCleanup, onMount, type Accessor } from 's
 import {
   clipDuration,
   clipStart,
-  laneOf,
-  movingInLane,
-  type Lane,
+  movingInTrack,
+  trackById,
+  type ClipId,
+  type TrackId,
 } from '../../../model/project.js'
 import {
   collectTargets,
@@ -28,7 +29,7 @@ import {
   snapMove,
   snapPlayhead,
   snapTrimEdge,
-  targetLanes,
+  targetTracks,
   thresholdInSeconds,
   type SnapTarget,
 } from '../../../model/snapping.js'
@@ -60,15 +61,16 @@ type Drag =
   | { kind: 'playhead'; locked: SnapTarget | null }
   | {
     kind: 'move'
-    lane: Lane
+    trackId: TrackId
     index: number
     grabOffset: number
     locked: SnapTarget | null
-    /** Captured at drag start; see the note where it is built. */
     snapTargets: SnapTarget[]
+    /** Clips that travel with this drag, excluded from its snap targets. */
+    excluded: Set<ClipId>
   }
-  | { kind: 'trim-in'; lane: Lane; index: number; locked: SnapTarget | null }
-  | { kind: 'trim-out'; lane: Lane; index: number; locked: SnapTarget | null }
+  | { kind: 'trim-in'; trackId: TrackId; index: number; locked: SnapTarget | null }
+  | { kind: 'trim-out'; trackId: TrackId; index: number; locked: SnapTarget | null }
 
 /** The modifier keys a click can carry. Named, so the signature stays on one
  *  line — an inline object type here is both harder to read and invisible to
@@ -118,6 +120,8 @@ export function useTimelineDrag(
   let dragCommitted = false
   /** Client X at pointerdown, so a drag can require real movement first. */
   let pressX = 0
+  /** Client Y too: a purely vertical drag to another track must count as one. */
+  let pressY = 0
   /** Wheel bursts are summed and applied once per frame. */
   let pendingNotches = 0
   let rafId = 0
@@ -145,19 +149,26 @@ export function useTimelineDrag(
   /**
    * The lanes whose edges are targets for a drag in `lane`.
    *
-   * The policy itself lives in `snapping.ts` as `targetLanes`, because a *drop*
+   * The policy itself lives in `snapping.ts` as `targetTracks`, because a *drop*
    * needs the same answer and the two used to disagree — the drop snapped to
    * same-lane edges with clip snap switched off.
    */
-  const enabledLanes = (lane: Lane): Lane[] =>
-    targetLanes(lane, state.clipSnap(), state.laneSnap())
+  const allTrackIds = (): TrackId[] => state.project.tracks.map((t) => t.id)
 
-  const targets = (lane: Lane): SnapTarget[] =>
+  const enabledTracks = (trackId: TrackId): TrackId[] =>
+    targetTracks(trackId, allTrackIds(), state.clipSnap(), state.laneSnap())
+
+  const targets = (trackId: TrackId): SnapTarget[] =>
     collectTargets(state.project, {
       playhead: state.playhead(),
       includePlayhead: false,
-      lanes: enabledLanes(lane),
+      tracks: enabledTracks(trackId),
     })
+
+  /** Snapping targets with the clips that are travelling excluded, so the drag
+   *  never chases an edge that moves with it. */
+  const fixedTargets = (trackId: TrackId, excluded: ReadonlySet<ClipId>): SnapTarget[] =>
+    targets(trackId).filter((t) => !t.clipId || !excluded.has(t.clipId))
 
   /**
    * The playhead snaps to every clip edge in both lanes, plus the timeline
@@ -172,8 +183,30 @@ export function useTimelineDrag(
     return el ? event.clientX - el.getBoundingClientRect().left : 0
   }
 
-  const laneStart = (lane: Lane, index: number): number =>
-    clipStart(laneOf(state.project, lane), index)
+  /**
+   * The track whose row is nearest `clientY`, by its vertical midpoint.
+   *
+   * Read from the rendered rows rather than the model because the display order
+   * is not the model order — video tracks are shown top-layer-first — and only
+   * the DOM knows where each row actually sits. Null when nothing is rendered,
+   * which is what keeps the drag hook testable without a timeline.
+   */
+  const trackAtClientY = (clientY: number): TrackId | null => {
+    const root = elements.track()
+    if (!root) return null
+    let best: { trackId: TrackId; distance: number } | null = null
+    for (const track of state.project.tracks) {
+      const el = root.querySelector(`[data-track="${track.id}"]`)
+      if (!el) continue
+      const rect = el.getBoundingClientRect()
+      const distance = Math.abs(rect.top + rect.height / 2 - clientY)
+      if (!best || distance < best.distance) best = { trackId: track.id, distance }
+    }
+    return best?.trackId ?? null
+  }
+
+  const trackStart = (trackId: TrackId, index: number): number =>
+    clipStart(trackById(state.project, trackId), index)
 
   function onPointerDown(event: PointerEvent): void {
     // **Only the primary button drags.** Pointer events fire for every button,
@@ -183,8 +216,9 @@ export function useTimelineDrag(
     if (event.button !== 0) return
     dragCommitted = false
     pressX = event.clientX
+    pressY = event.clientY
     const target = event.target as HTMLElement
-    const lane = target.closest('[data-lane]')?.getAttribute('data-lane') as Lane | undefined
+    const trackId = target.closest('[data-track]')?.getAttribute('data-track') as TrackId | undefined
     elements.track()?.setPointerCapture(event.pointerId)
 
     // Every click positions the playhead, wherever it lands: ruler, empty lane,
@@ -195,41 +229,39 @@ export function useTimelineDrag(
     state.seek(state.xToTime(x))
 
     if (target.dataset.handle === 'in' || target.dataset.handle === 'out') {
-      if (!lane) return
+      if (!trackId) return
       const index = Number(target.dataset.index)
-      drag = { kind: target.dataset.handle === 'in' ? 'trim-in' : 'trim-out', lane, index, locked: null }
+      drag = { kind: target.dataset.handle === 'in' ? 'trim-in' : 'trim-out', trackId, index, locked: null }
       return
     }
 
-    if (target.dataset.clipIndex !== undefined && lane) {
+    if (target.dataset.clipIndex !== undefined && trackId) {
       const index = Number(target.dataset.clipIndex)
-      const clip = laneOf(state.project, lane)[index]
+      const clip = trackById(state.project, trackId)[index]
       if (!clip) return
       state.selectClip(clip.id, selectModeOf(event))
       const selected = new Set(state.selection())
       // Only *fixed* edges are targets, captured once. A dragged clip moves, and
       // in a group drag so does every clip after the first selected one in
-      // **each** lane — positions are derived, so a rightward shift pushes its
+      // **each** track — positions are derived, so a rightward shift pushes its
       // successors. An edge that travels with the drag is an edge the drag
-      // chases; that is the vibration. So both lanes' moving clips are excluded,
-      // not just the anchor lane's: a linked pair dragged as a block pushes its
-      // successors in the audio lane too, and those were left in the list as
+      // chases; that is the vibration. So every track's moving clips are excluded,
+      // not just the anchor track's: a linked pair dragged as a block pushes its
+      // successors in the other track too, and those were left in the list as
       // frozen targets pointing at where they used to be.
-      const movingByLane = {
-        video: movingInLane(state.project.video, selected),
-        audio: movingInLane(state.project.audio, selected),
-      }
+      const movingByTrack = new Map<TrackId, Set<string>>(
+        state.project.tracks.map((t) => [t.id, movingInTrack(t.clips, selected)]),
+      )
+      const excluded = new Set<ClipId>()
+      for (const moving of movingByTrack.values()) for (const id of moving) excluded.add(id)
       drag = {
         kind: 'move',
-        lane,
+        trackId,
         index,
-        grabOffset: state.xToTime(x) - laneStart(lane, index),
+        grabOffset: state.xToTime(x) - trackStart(trackId, index),
         locked: null,
-        snapTargets: targets(lane).filter(
-          (t) =>
-            !t.clipId ||
-            !(selected.has(t.clipId) || (t.lane !== null && movingByLane[t.lane].has(t.clipId))),
-        ),
+        excluded,
+        snapTargets: fixedTargets(trackId, excluded),
       }
       return
     }
@@ -273,11 +305,16 @@ export function useTimelineDrag(
       }
 
       case 'move': {
-        const clips = laneOf(state.project, drag.lane)
+        const clips = trackById(state.project, drag.trackId)
         const clip = clips[drag.index]
         if (!clip) return
         if (!dragCommitted) {
-          if (Math.abs(event.clientX - pressX) < DRAG_THRESHOLD) return
+          // Movement in *either* axis counts: dragging straight down onto the
+          // track below is a real gesture even with no horizontal travel.
+          if (
+            Math.abs(event.clientX - pressX) < DRAG_THRESHOLD &&
+            Math.abs(event.clientY - pressY) < DRAG_THRESHOLD
+          ) return
           state.commit()
           dragCommitted = true
         }
@@ -287,6 +324,41 @@ export function useTimelineDrag(
         // neighbour's end or its end against a neighbour's start. Snapping is
         // gated on the toggle; moving without it is exact.
         const raw = t - drag.grabOffset
+
+        // Vertical drop onto another track of the same kind. A video clip may
+        // join another video track and an audio clip another audio track, but
+        // never cross kinds: picture and sound are different media, so a hover
+        // over the wrong kind is ignored and the drag stays on its own track.
+        const over = trackAtClientY(event.clientY)
+        const fromTrackId = drag.trackId
+        if (over && over !== fromTrackId) {
+          const target = state.project.tracks.find((candidate) => candidate.id === over)
+          const current = state.project.tracks.find((candidate) => candidate.id === fromTrackId)
+          if (target && current && target.type === current.type) {
+            const dropTargets = fixedTargets(over, drag.excluded)
+            const snapped = state.snapping()
+              ? snapMove(
+                raw,
+                clipDuration(clip),
+                dropTargets,
+                thresholdInSeconds(SNAP_PIXELS, state.zoom()),
+                undefined,
+                null,
+              )
+              : null
+            const start = snapped ? snapped.start : raw
+            state.moveSelectionToTrack(over, clip.id, start)
+            // The gesture continues on the track it just joined.
+            drag.trackId = over
+            const landed = trackById(state.project, over).findIndex((candidate) => candidate.id === clip.id)
+            if (landed >= 0) drag.index = landed
+            drag.snapTargets = dropTargets
+            drag.locked = snapped?.target ?? null
+            setGuide(snapped ? { time: snapped.target.time, label: describeTarget(snapped.target) } : null)
+            return
+          }
+        }
+
         let start = raw
         if (state.snapping()) {
           const threshold = thresholdInSeconds(SNAP_PIXELS, state.zoom())
@@ -308,7 +380,7 @@ export function useTimelineDrag(
         // from a single clip: there is no unambiguous neighbour to swap with, so
         // the group only shifts and repacks, it never reorders.
         if (state.selectionCount() > 1) {
-          state.moveSelection(drag.lane, drag.index, start)
+          state.moveSelection(drag.trackId, drag.index, start)
           return
         }
 
@@ -320,7 +392,7 @@ export function useTimelineDrag(
         // Crossing a neighbour used to swap the two, which threw the neighbour
         // to the far side of the lane — the clip on the left visibly jumped
         // away, which reads as being destroyed. A clip is a wall, not a door.
-        state.place(drag.lane, drag.index, start)
+        state.place(drag.trackId, drag.index, start)
         return
       }
 
@@ -330,7 +402,7 @@ export function useTimelineDrag(
         // it becomes seconds at the current zoom; otherwise the magnet weakens
         // as you zoom in and feels broken at high zoom.
         const threshold = state.snapping() ? thresholdInSeconds(SNAP_PIXELS, state.zoom()) : 0
-        const clips = laneOf(state.project, drag.lane)
+        const clips = trackById(state.project, drag.trackId)
         const clip = clips[drag.index]
         if (!clip) return
         if (!dragCommitted) {
@@ -353,17 +425,17 @@ export function useTimelineDrag(
         const proposed = t
         const snapped =
           threshold > 0
-            ? snapTrimEdge(proposed, targets(drag.lane), threshold, { clipId: clip.id }, drag.locked)
+            ? snapTrimEdge(proposed, targets(drag.trackId), threshold, { clipId: clip.id }, drag.locked)
             : null
         // Timeline space, always. This is the one value `seek` may be given.
         const edge = snapped ? snapped.time : proposed
 
-        const laneStartTime = laneStart(drag.lane, drag.index)
+        const trackStartTime = trackStart(drag.trackId, drag.index)
         // The edge as a source time, for the trim itself.
-        const sourceT = clip.in + (edge - laneStartTime)
+        const sourceT = clip.in + (edge - trackStartTime)
 
-        if (drag.kind === 'trim-in') state.trim(drag.lane, drag.index, sourceT, clip.out)
-        else state.trim(drag.lane, drag.index, clip.in, sourceT)
+        if (drag.kind === 'trim-in') state.trim(drag.trackId, drag.index, sourceT, clip.out)
+        else state.trim(drag.trackId, drag.index, clip.in, sourceT)
 
         // The preview follows the handle.
         //
@@ -383,7 +455,7 @@ export function useTimelineDrag(
         // changed); a trim-out is held one frame before the pointer, which is
         // inside the half-open clip.
         const frame = 1 / state.outputFps()
-        state.seek(drag.kind === 'trim-out' ? Math.max(laneStartTime, edge - frame) : laneStartTime)
+        state.seek(drag.kind === 'trim-out' ? Math.max(trackStartTime, edge - frame) : trackStartTime)
 
         drag.locked = snapped?.target ?? null
         setGuide(snapped ? { time: snapped.time, label: describeTarget(snapped.target) } : null)
@@ -408,20 +480,20 @@ export function useTimelineDrag(
   function onContextMenu(event: MouseEvent): void {
     event.preventDefault()
     const target = event.target as HTMLElement
-    const laneEl = target.closest('[data-lane]')
-    const lane = (laneEl?.getAttribute('data-lane') as Lane | null) ?? undefined
+    const trackEl = target.closest('[data-track]')
+    const trackId = (trackEl?.getAttribute('data-track') as TrackId | null) ?? undefined
     const clipEl = target.closest('[data-clip-index]')
 
-    if (clipEl && lane) {
+    if (clipEl && trackId) {
       const clipId = clipEl.getAttribute('data-clip-id')
       if (!clipId) return
       if (!state.isSelected(clipId)) state.selectClip(clipId, 'replace')
       else state.setPrimary(clipId)
-      menu.show({ kind: 'clip', lane, clipId, x: event.clientX, y: event.clientY })
+      menu.show({ kind: 'clip', trackId, clipId, x: event.clientX, y: event.clientY })
       return
     }
 
-    menu.show({ kind: lane ? 'lane' : 'timeline', lane, x: event.clientX, y: event.clientY })
+    menu.show({ kind: trackId ? 'track' : 'timeline', trackId, x: event.clientX, y: event.clientY })
   }
 
   /**

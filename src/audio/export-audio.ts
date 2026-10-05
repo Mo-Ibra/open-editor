@@ -38,42 +38,62 @@ export async function buildExportAudio(
   duration: number,
   options: BuildAudioOptions,
 ): Promise<ExportAudioTrack | null> {
-  // The audio lane only. A video clip with no audio of its own contributes nothing.
-  const clips = project.audio
+  // Every audio track, not just the first. A video clip with no audio of its own
+  // contributes nothing. Starts are computed per track: flattening the tracks
+  // would stack later tracks after earlier ones instead of layering them.
+  const audioTracks = project.tracks.filter((t) => t.type === 'audio')
+  const totalClips = audioTracks.reduce((n, t) => n + t.clips.length, 0)
   const segments: MixSegment[] = []
   let withAudio = 0
-  // One pass for every clip's timeline start. Asking `clipStart` per clip inside
-  // this loop made building the audio mix quadratic, and this runs once per export
-  // over the whole lane.
-  const starts = clipStarts(clips)
+  let done = 0
 
-  for (let i = 0; i < clips.length; i++) {
-    const clip = clips[i]!
-    const entry = options.library.get(clip.assetId)
-    if (!entry?.audioTrack) continue
+  for (const track of audioTracks) {
+    const clips = track.clips
+    // One pass for every clip's timeline start. Asking `clipStart` per clip inside
+    // this loop made building the audio mix quadratic, and this runs once per export
+    // over the whole lane.
+    const starts = clipStarts(clips)
 
-    let decoded: AudioBuffer | null = null
-    try {
-      decoded = await options.getAssetAudio(clip.assetId)
-    } catch (err) {
-      log.warn(`export: no audio for ${entry.asset.name}: ${err instanceof Error ? err.message : String(err)}`)
-      continue
+    for (let i = 0; i < clips.length; i++) {
+      done++
+      const clip = clips[i]!
+      const report = () => options.onProgress?.(done / totalClips)
+      const entry = options.library.get(clip.assetId)
+      if (!entry?.audioTrack) {
+        report()
+        continue
+      }
+
+      let decoded: AudioBuffer | null = null
+      try {
+        decoded = await options.getAssetAudio(clip.assetId)
+      } catch (err) {
+        log.warn(`export: no audio for ${entry.asset.name}: ${err instanceof Error ? err.message : String(err)}`)
+        report()
+        continue
+      }
+      if (!decoded) {
+        report()
+        continue
+      }
+
+      const rate = decoded.sampleRate
+      // Integer indices, once. Never `start += (out - in)`.
+      const from = clamp(Math.round(clip.in * rate), 0, decoded.length)
+      const to = clamp(Math.round(clip.out * rate), from, decoded.length)
+      if (to <= from) {
+        report()
+        continue
+      }
+
+      segments.push({
+        buffer: sliceBuffer(decoded, from, to - from),
+        start: starts[i]!,
+        gain: clip.muted ? 0 : (clip.gain ?? 1),
+      })
+      withAudio++
+      report()
     }
-    if (!decoded) continue
-
-    const rate = decoded.sampleRate
-    // Integer indices, once. Never `start += (out - in)`.
-    const from = clamp(Math.round(clip.in * rate), 0, decoded.length)
-    const to = clamp(Math.round(clip.out * rate), from, decoded.length)
-    if (to <= from) continue
-
-    segments.push({
-      buffer: sliceBuffer(decoded, from, to - from),
-      start: starts[i]!,
-      gain: clip.muted ? 0 : (clip.gain ?? 1),
-    })
-    withAudio++
-    options.onProgress?.((i + 1) / clips.length)
   }
 
   if (!segments.length) {
@@ -87,7 +107,7 @@ export async function buildExportAudio(
   const silent = isSilent(buffer)
 
   log.info(
-    `export audio: mixed ${withAudio}/${clips.length} clips into ${buffer.duration.toFixed(2)}s ` +
+    `export audio: mixed ${withAudio}/${totalClips} clips into ${buffer.duration.toFixed(2)}s ` +
       `@ ${buffer.sampleRate} Hz x${buffer.numberOfChannels}${silent ? ' — all silence' : ''}`,
   )
   if (silent) log.warn('export audio: every segment was muted or empty, so the file will be silent')

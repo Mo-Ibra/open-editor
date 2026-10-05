@@ -16,19 +16,22 @@ import { test } from 'node:test'
 import { createSelection } from '../src/app/store/selection.ts'
 import { emptyProject, type Clip, type Project } from '../src/model/project.ts'
 
-const clip = (id: string, lane: 'video' | 'audio' = 'video'): Clip => ({
-  id, lane, assetId: 'a', in: 0, out: 5,
+const clip = (id: string, trackId = 'video'): Clip => ({
+  id, trackId, assetId: 'a', in: 0, out: 5,
 })
 
 function withClips(...clips: Clip[]): Project {
+  const videoClips = clips.filter((c) => c.trackId === 'video')
+  const audioClips = clips.filter((c) => c.trackId === 'audio')
   return {
     ...emptyProject(),
-    video: clips.filter((c) => c.lane === 'video'),
-    audio: clips.filter((c) => c.lane === 'audio'),
+    tracks: [
+      { id: 'video', type: 'video', clips: videoClips },
+      { id: 'audio', type: 'audio', clips: audioClips },
+    ],
   }
 }
 
-/** Video lane a, b, c then audio lane a1, b1. */
 function timeline(): Project {
   return withClips(clip('a'), clip('b'), clip('c'), clip('a1', 'audio'), clip('b1', 'audio'))
 }
@@ -42,8 +45,6 @@ test('a plain click selects exactly one clip', () => {
 })
 
 test('a plain click on an already-selected clip keeps a multi-selection', () => {
-  // The one that is easy to break: ctrl-click three clips, then click one of
-  // them again to move it, and the other two silently vanish.
   const s = createSelection(timeline())
   s.select('a')
   s.select('b', 'toggle')
@@ -111,7 +112,7 @@ test('shift-click works backwards', () => {
   assert.deepEqual(s.ids(), ['a', 'b', 'c'])
 })
 
-test('a range spans lanes, in video-then-audio order', () => {
+test('a range spans tracks, in track order', () => {
   const s = createSelection(timeline())
   s.select('b')
   s.select('b1', 'range')
@@ -119,9 +120,6 @@ test('a range spans lanes, in video-then-audio order', () => {
 })
 
 test('a range after a toggle merges rather than discarding', () => {
-  // ctrl then shift should extend the existing selection, not eat it. The span
-  // runs from the primary ('c') to the target, so it covers c, a1, b1 — and
-  // 'a' survives because it was already selected, not because it was spanned.
   const s = createSelection(timeline())
   s.select('a')
   s.select('c', 'toggle')
@@ -134,7 +132,6 @@ test('a range from a clip that has since vanished falls back to one clip', () =>
   const s = createSelection(timeline())
   s.select('a')
   s.select('b', 'toggle')
-  // 'a' is removed from the project without pruning, as if a stale anchor.
   s.replaceAll(['b'])
   s.select('c', 'range')
   assert.deepEqual(s.ids(), ['b', 'c'], 'no crash, and a sensible span')
@@ -147,19 +144,19 @@ test('selected clips come back in timeline order regardless of click order', () 
   assert.deepEqual(s.clips().map((c) => c.id), ['c', 'a1'])
 })
 
-test('lanes reports only the lanes that actually hold a selection', () => {
+test('tracks reports only the tracks that actually hold a selection', () => {
   const s = createSelection(timeline())
   s.select('a')
-  assert.deepEqual(s.lanes(), ['video'])
+  assert.deepEqual(s.tracks(), ['video'])
   s.select('a1', 'toggle')
-  assert.deepEqual(s.lanes(), ['video', 'audio'])
+  assert.deepEqual(s.tracks(), ['video', 'audio'])
 })
 
-test('selectAll takes both lanes', () => {
+test('selectAll takes all tracks', () => {
   const s = createSelection(timeline())
   s.selectAll()
   assert.equal(s.count(), 5)
-  assert.deepEqual(s.lanes(), ['video', 'audio'])
+  assert.deepEqual(s.tracks(), ['video', 'audio'])
 })
 
 test('replaceAll overwrites whatever was selected', () => {
@@ -177,8 +174,8 @@ test('prune drops ids whose clip is gone', () => {
   s.selectAll()
   assert.equal(s.count(), 5)
 
-  // Simulate the store having removed one lane's clips.
-  project.video = [clip('a')]
+  const vTrack = project.tracks.find((t) => t.type === 'video')!
+  vTrack.clips = [clip('a')]
   s.prune()
   assert.deepEqual([...s.ids()].sort(), ['a', 'a1', 'b1'], 'only the surviving clips remain')
 })
@@ -187,8 +184,7 @@ test('prune removes everything when the timeline is emptied', () => {
   const project = timeline()
   const s = createSelection(project)
   s.selectAll()
-  project.video = []
-  project.audio = []
+  for (const track of project.tracks) track.clips = []
   s.prune()
   assert.equal(s.count(), 0, 'a selection of nothing is not a selection')
 })
@@ -198,7 +194,8 @@ test('prune keeps the primary when that clip survives', () => {
   const s = createSelection(project)
   s.select('a')
   s.select('c', 'toggle')
-  project.video = [clip('a'), clip('b'), clip('c')]
+  const vTrack = project.tracks.find((t) => t.type === 'video')!
+  vTrack.clips = [clip('a'), clip('b'), clip('c')]
   s.prune()
   assert.equal(s.primary(), 'c')
 })

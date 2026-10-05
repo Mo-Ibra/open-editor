@@ -9,7 +9,8 @@
  */
 
 import { Show } from 'solid-js'
-import { Copy, Crosshair, Magnet, Rows3, Scissors, Trash2, Unlink } from 'lucide-solid'
+import { Copy, Crosshair, Magnet, Plus, Rows3, Scissors, Trash2, Unlink } from 'lucide-solid'
+import { trackTypeById } from '../../../model/project.js'
 import type { AppState } from '../../store/state.js'
 import type { LayoutState } from '../../store/layout.js'
 import { PanelToggle } from '../shell/PanelToggle.js'
@@ -17,6 +18,18 @@ import { PanelToggle } from '../shell/PanelToggle.js'
 export function Toolbar(props: { state: AppState; anyClips: () => boolean; layout: LayoutState }) {
   const state = props.state
   const count = (): number => state.selectionCount()
+  const clipIsAudio = (): boolean => {
+    const clip = state.selectedClip()
+    return clip ? trackTypeById(state.project, clip.trackId) === 'audio' : false
+  }
+  const clipIsVideo = (): boolean => {
+    const clip = state.selectedClip()
+    return clip ? trackTypeById(state.project, clip.trackId) === 'video' : false
+  }
+  const videoClipCount = (): number =>
+    state.project.tracks.filter((t) => t.type === 'video').reduce((n, t) => n + t.clips.length, 0)
+  const audioClipCount = (): number =>
+    state.project.tracks.filter((t) => t.type === 'audio').reduce((n, t) => n + t.clips.length, 0)
 
   return (
     <div class="flex h-9 shrink-0 items-center gap-1.5 border-b border-line-soft px-2">
@@ -87,6 +100,26 @@ export function Toolbar(props: { state: AppState; anyClips: () => boolean; layou
         playhead
       </button>
 
+      <span class="mx-1 h-5 w-px bg-line" />
+
+      {/* More tracks, on demand: another layer of picture for a montage, or
+          another stream of sound. The model has always held N tracks — these
+          are the two ways to make one. */}
+      <button
+        class="btn"
+        onClick={() => state.addTrack('video')}
+        title="Add a video track above the existing ones, for another layer of picture"
+      >
+        <Plus size={13} /> video
+      </button>
+      <button
+        class="btn"
+        onClick={() => state.addTrack('audio')}
+        title="Add an audio track below the existing ones, for another stream of sound"
+      >
+        <Plus size={13} /> audio
+      </button>
+
       {/* Level is audio-only and hide is video-only. A level slider on a video
           clip is a control that cannot do anything, and a "mute" button on a
           video clip is a promise the model refuses to keep. So each lane gets
@@ -95,7 +128,7 @@ export function Toolbar(props: { state: AppState; anyClips: () => boolean; layou
       <Show when={state.selectedClip()}>
         {(clip) => (
           <>
-          <Show when={clip().lane === 'audio'}>
+          <Show when={clipIsAudio()}>
             <label class="flex items-center gap-2 text-tiny text-muted">
               level
               <input
@@ -119,7 +152,7 @@ export function Toolbar(props: { state: AppState; anyClips: () => boolean; layou
               </button>
             </label>
           </Show>
-          <Show when={clip().lane === 'video'}>
+          <Show when={clipIsVideo()}>
             <button
               class="btn !py-0.5"
               classList={{ '!border-accent/50 !text-accent': clip().hidden }}
@@ -141,7 +174,7 @@ export function Toolbar(props: { state: AppState; anyClips: () => boolean; layou
       <span class="flex-1" />
 
       <span class="timecode pr-1 text-tiny text-muted">
-        {state.project.video.length} video · {state.project.audio.length} audio
+        {videoClipCount()} video · {audioClipCount()} audio
       </span>
       <PanelToggle
         panel="timeline"

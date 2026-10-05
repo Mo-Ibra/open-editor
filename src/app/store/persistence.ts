@@ -142,8 +142,9 @@ export async function listProjects(): Promise<ProjectSummary[]> {
 
 function countClips(json: string): number {
   try {
-    const parsed = JSON.parse(json) as { video?: unknown[]; audio?: unknown[] }
-    return (parsed.video?.length ?? 0) + (parsed.audio?.length ?? 0)
+    const parsed = JSON.parse(json) as { tracks?: { clips?: unknown[] }[] }
+    if (!Array.isArray(parsed.tracks)) return 0
+    return parsed.tracks.reduce((sum, t) => sum + (t.clips?.length ?? 0), 0)
   } catch {
     return 0
   }

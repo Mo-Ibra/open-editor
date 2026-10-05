@@ -75,7 +75,7 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
 
     setProbed(false)
     void availablePlans({
-      needsAudio: state.project.audio.length > 0,
+      needsAudio: state.audioClipCount() > 0,
       width,
       height: even(height),
       fps,
@@ -113,7 +113,7 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
   onCleanup(() => window.removeEventListener('keydown', onKey))
 
   function sourceSize(): SourceFacts | null {
-    const first = state.project.video[0]
+    const first = state.videoTracks().flat()[0]
     if (!first) return null
     const asset = state.getAsset(first.assetId)
     if (!asset) return null
@@ -208,7 +208,7 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
         <div class="flex h-11 shrink-0 items-center gap-3 border-b border-line px-4">
           <span class="text-[13px] font-semibold">Export</span>
           <span class="timecode text-mini text-muted">
-            {formatTime(state.duration())} · {state.project.video.length} video · {state.project.audio.length} audio
+            {formatTime(state.duration())} · {state.videoClipCount()} video · {state.audioClipCount()} audio
           </span>
           <span class="flex-1" />
           <button class="icon-btn" onClick={close} disabled={busy()} title="Close (Esc)" aria-label="Close">

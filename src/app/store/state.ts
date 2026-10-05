@@ -21,17 +21,19 @@
 import { batch, createSignal } from 'solid-js'
 import { createStore, produce, reconcile } from 'solid-js/store'
 
-import { applyLanes, type Lanes } from '../../model/project-store.js'
+import { applyTracks, type Tracks } from '../../model/project-store.js'
 import {
   clipStarts,
   emptyProject,
-  laneDuration,
-  laneOf,
   newId,
+  trackById,
+  trackDuration,
   type Asset,
   type AssetId,
   type Clip,
-  type Lane,
+  type Track,
+  type TrackId,
+  type TrackType,
   type Project,
 } from '../../model/project.js'
 
@@ -51,64 +53,25 @@ import { clampZoom, ZOOM_DEFAULT } from './zoom.js'
 export interface Notice {
   kind: 'info' | 'warn' | 'error'
   text: string
-  /**
-   * Identity, so a notice can be withdrawn by the timer that scheduled it.
-   *
-   * The expiry used to be `slice(0, -1)` — "drop the last one" — which is only
-   * correct if notices expire in the order they arrived. They do not: every
-   * notice sets its own 6s timer, so a burst of them expires out of order, and
-   * an old notice's timer deleted whichever notice was *newest*. The visible
-   * symptom was a fresh message vanishing a moment after it appeared, and an
-   * older one sitting on screen far longer than six seconds.
-   */
   id: number
 }
 
 export function createAppState() {
   const library = new MediaLibrary()
   const [project, applyProject] = createStore<Project>(emptyProject())
-  const [zoom, setZoomLevel] = createSignal(ZOOM_DEFAULT) // pixels per second
+  const [zoom, setZoomLevel] = createSignal(ZOOM_DEFAULT)
   const [notices, setNotices] = createSignal<Notice[]>([])
 
-  /**
-   * Bumped when the whole assets map is replaced.
-   *
-   * Solid's store setter **merges** into an object rather than replacing it, and
-   * this bit the media bin on the first saved project it ever opened: after
-   * `open()` the three asset keys were readable through the proxy — so the clip
-   * titles showed the right filenames — but `project.assets` was still the same
-   * object, and `<For each={Object.keys(project.assets)}>` never re-ran. The bin
-   * sat on its empty state with three files loaded, and it was not a media bug
-   * at all.
-   *
-   * `reconcile` does not help either: it mutates the existing object in place, so
-   * the reference is still stable. An explicit counter gives those consumers
-   * something to depend on. Same idea as `logRevision`.
-   */
   const [assetsRevision, setAssetsRevision] = createSignal(0)
-  /** Snapping to clips in the SAME lane, and the timeline start. */
   const [clipSnap, setClipSnap] = createSignal(true)
-  /** Snapping to clips in the OTHER lane, so picture aligns to sound. */
   const [laneSnap, setLaneSnap] = createSignal(true)
-  /**
-   * Snapping the playhead to nearby clip edges while it is dragged.
-   *
-   * A separate mode from the two clip-snapping toggles: it is about scrubbing,
-   * not about placing clips, and neither system consults the other.
-   */
   const [playheadSnap, setPlayheadSnap] = createSignal(true)
-  /**
-   * True when either *clip* snapping mode is on — the gate for moving and
-   * trimming. The playhead has its own gate (`playheadSnap`), so this must not
-   * include it, or turning playhead snap on would wake clip snapping too.
-   */
   const snapping = (): boolean => clipSnap() || laneSnap()
 
   let noticeId = 0
   function notify(kind: Notice['kind'], text: string): void {
     const notice: Notice = { kind, text, id: ++noticeId }
     setNotices((prev) => [...prev.slice(-4), notice])
-    // Errors stay. A transient one is the common case and 6s is enough to read.
     if (kind !== 'error') {
       setTimeout(() => {
         setNotices((prev) => prev.filter((n) => n.id !== notice.id))
@@ -116,122 +79,87 @@ export function createAppState() {
     }
   }
 
-  /** Selection owns its own signal; nothing below may write to it directly. */
   const sel = createSelection(project)
 
   const frameCache = new FrameCache()
   const audio = new AudioEngine({ library, onError: (message) => notify('error', message) })
 
-  /**
-   * The only way the project changes.
-   *
-   * Wrapping the store setter is deliberate, and it is doing two jobs rather
-   * than one. Both are the same job: **nothing the project owns is allowed to
-   * outlive it.**
-   *
-   * A selection outliving the clip it names is a live hazard, because every
-   * batch action resolves its targets through it. One deleted clip would
-   * otherwise stay selected and silently swallow the next Delete. Pruning here
-   * means no caller can forget.
-   *
-   * So is a playhead outliving the timeline. The lanes can shrink under a
-   * stationary playhead — a delete, clearing a lane, dropping a file whose clips
-   * were the tail — and `seek`/`advanceClock` both clamp, yet neither of them
-   * runs when the *lanes* change. Left alone, the playhead sat at 20s on a
-   * timeline of nothing, drawn at x=1600 inside a 600px track: clipped out of
-   * sight and unreachable by dragging.
-   */
-  function setProject(lanes: Lanes): void
-  function setProject(lane: Lane, clips: Clip[]): void
+  function setProject(tracks: Tracks): void
+  function setProject(trackId: TrackId, clips: Clip[]): void
   function setProject(key: 'assets', assetId: string, asset: Asset): void
   function setProject(a: unknown, b?: unknown, c?: unknown): void {
-    // Asset writes cannot orphan a clip selection, or move a clip, so they skip
-    // both — there is nothing for either to do.
     if (a === 'assets') applyProject(a as 'assets', b as string, c as Asset)
-    else if (typeof a === 'string') applyProject(a as Lane, b as Clip[])
-    // A plain two-key set, never `reconcile` — see model/project-store.ts for
-    // the media library that reconcile deleted.
-    else applyLanes((lanes) => applyProject(lanes), a as Lanes, sel.prune)
-    // Every edit goes through here, so this is the only place that has to know
-    // a save is due. A caller that forgets to mark itself dirty is exactly how a
-    // feature like this silently stops working.
+    else if (typeof a === 'string') {
+      const trackId = a as TrackId
+      applyProject('tracks', (prev: Project['tracks']) =>
+        prev.map((t) => (t.id === trackId ? { ...t, clips: b as Clip[] } : t)),
+      )
+    } else applyTracks((tracks) => applyProject('tracks', tracks), a as Tracks, sel.prune)
     projects.markDirty()
-    // And the only place that has to know the timeline just changed length.
-    // Deferred like `projects`: `transport` is built last, and a closure reading
-    // it is only ever called once construction has finished.
     transport.clampPlayhead()
   }
 
-  const setLanes = (video: Clip[], audioClips: Clip[]): void =>
-    setProject({ video, audio: audioClips })
+  const setTracks = (tracks: Project['tracks']): void => setProject(tracks)
 
-  /**
-   * Drop the open project's decoders.
-   *
-   * Called before a project is replaced. A `MediaLibrary` entry holds a live
-   * `Input` and a `CanvasSink`, so carrying them across a project switch leaks
-   * decoder resources for files the new project does not have — and keeps the
-   * old files visible in the bin, because a row is drawn whenever the library
-   * has an entry.
-   */
   function releaseLibrary(): void {
     library.clear()
   }
 
-  /**
-   * Replace the entire project, for opening a saved one.
-   *
-   * Every top-level key is written **explicitly**, never through `reconcile`.
-   * This is the same trap that once deleted the media library: a setter given
-   * only some keys sets the missing ones to `undefined`, and a project with no
-   * `assets` key is a project whose clips point at nothing. Spelled out, key by
-   * key, because that is the only shape here that cannot be got wrong by
-   * omission.
-   */
   function replaceProject(next: Project): void {
     applyProject('version', next.version)
-    // `reconcile` — but only here, and only for this key.
-    //
-    // Every other key is set plainly, because a *partial* object through a
-    // reconciler is exactly what deleted the media library once: keys the target
-    // did not mention were set to `undefined`. That is why `video` and `audio`
-    // are written on their own lines rather than through this call.
-    //
-    // The assets map is the one place a plain set is wrong in the other
-    // direction. Solid *merges* object writes, so it can add keys but never
-    // remove them, and starting a new project left the previous project's files
-    // sitting in the bin — and, worse, written into the new project. Only a
-    // reconciler deletes, and here the target is a complete map, so there is
-    // nothing to lose.
     applyProject('assets', reconcile(next.assets))
-    applyProject('video', next.video)
-    applyProject('audio', next.audio)
-    // `captions` is optional, so a plain set of `undefined` is not a deletion.
-    // Returning `undefined` from the updater is Solid's way to remove a key, and
-    // leaving the previous project's captions attached to a new one would be
-    // worse than losing them.
+    applyProject('tracks', next.tracks)
     if (next.captions === undefined) applyProject('captions', () => undefined)
     else applyProject('captions', next.captions)
-    // The merge above did not change the reference, so anything iterating the map
-    // has to be told. See the note on the signal.
     setAssetsRevision((n) => n + 1)
-    // Opening a project is the *other* way the timeline can change length under a
-    // stationary playhead, and this function deliberately bypasses `setProject`
-    // key by key — so it has to say so itself. Opening a shorter project with the
-    // playhead where the old one ended is the ordinary way to land out of range.
     transport.clampPlayhead()
   }
 
   const history = createHistory(
     project,
-    // Undo/redo write lanes directly: they restore a *recorded* state, so
-    // recording it as a new entry would make the stack fold in half.
-    (lanes) => setLanes(lanes.video, lanes.audio),
+    (tracks) => setTracks(tracks),
     () => sel.clear(),
   )
 
-  // Declared before `setProject` uses it, like `sel`. The read is a thunk so a
-  // save always sees the current project, never a captured copy.
+  // Tracks are structure, not clip edits, but they change through the same
+  // `setTracks` seam so undo, dirty-marking and the playhead clamp all apply.
+  // Video tracks stay grouped above audio ones: a new video track joins the top
+  // of that group (the next layer of picture), an audio track goes underneath.
+  function addTrack(type: TrackType): void {
+    history.commit()
+    const track: Track = { id: newId(type), type, clips: [] }
+    const tracks = [...project.tracks]
+    if (type === 'video') {
+      let insertAt = 0
+      for (let i = tracks.length - 1; i >= 0; i--) {
+        if (tracks[i]!.type === 'video') {
+          insertAt = i + 1
+          break
+        }
+      }
+      tracks.splice(insertAt, 0, track)
+    } else {
+      tracks.push(track)
+    }
+    setTracks(tracks)
+  }
+
+  /** Remove an empty track. A track with clips must be cleared first. */
+  function removeTrack(trackId: TrackId): void {
+    const track = project.tracks.find((t) => t.id === trackId)
+    if (!track) return
+    if (project.tracks.length <= 1) {
+      notify('warn', 'The timeline needs at least one track')
+      return
+    }
+    if (track.clips.length > 0) {
+      notify('warn', `Clear the ${track.type} track before removing it`)
+      return
+    }
+    history.commit()
+    setTracks(project.tracks.filter((t) => t.id !== trackId))
+  }
+
   const projects = createProjectStore({
     read: () => project,
     write: (next) => replaceProject(next),
@@ -239,10 +167,6 @@ export function createAppState() {
       try {
         const entry = await library.add(file, asset.id)
         if (entry.error) return { ok: false, reason: entry.error }
-        // Trust the probe over the stored metadata: a stale duration or frame
-        // count would disagree with the bytes silently, and the bytes are the
-        // truth. Handed back rather than written here, because the whole project
-        // is about to be written over the top.
         return { ok: true, probed: entry.asset }
       } catch (err) {
         return { ok: false, reason: err instanceof Error ? err.message : String(err) }
@@ -259,9 +183,6 @@ export function createAppState() {
       })),
     writeAsset: (asset) => setProject('assets', asset.id, asset),
     releaseLibrary,
-    // Re-add a matched file under the id the *imported* project gave it. The
-    // asset metadata is written after the project, so it always reflects the
-    // probe rather than whatever the file claimed when it was exported.
     restoreFile: async (file, assetId, name) => {
       const entry = await library.add(file, assetId)
       if (entry.error) {
@@ -284,12 +205,8 @@ export function createAppState() {
     history,
     selection: sel,
     notify,
-    setLanes,
+    setTracks,
     setAsset: (assetId, asset) => setProject('assets', assetId, asset),
-    // Deleting the key is not the same as writing `undefined` to it: a plain
-    // store set keeps the key, so the media bin (which lists `Object.keys`)
-    // would still show the row. `produce` actually removes it, and the revision
-    // tells the bin to re-read.
     dropAsset: (assetId) => {
       applyProject('assets', produce((map: Project['assets']) => {
         delete map[assetId]
@@ -297,9 +214,6 @@ export function createAppState() {
       setAssetsRevision((n) => n + 1)
     },
     pruneMedia: () => void projects.pruneUnusedMedia(),
-    // Deferred, because `transport` is built after this: it needs `edits`, which
-    // needs the assets. Reading it lazily keeps the two slices from needing each
-    // other at construction time — the same trick the transport slice uses.
     playhead: () => transport.playhead(),
     snapping,
     clipSnap,
@@ -309,9 +223,6 @@ export function createAppState() {
     rememberMedia: (assetId, file) => void projects.rememberMedia(assetId, file),
   })
 
-  // Declared before `edits` reads it, and only ever called once playback is
-  // under way — the deferred read keeps the two slices from needing each other
-  // at construction time.
   let transport: Transport
   const edits = createEdits({
     project,
@@ -319,7 +230,7 @@ export function createAppState() {
     selection: sel,
     audio,
     notify,
-    setLanes,
+    setTracks,
     playhead: () => transport.playhead(),
   })
 
@@ -332,65 +243,39 @@ export function createAppState() {
     setTransform: edits.setTransform,
   })
 
-  // --- timeline geometry --------------------------------------------------
-  // The only view maths that is neither editing nor transport.
-
-  /**
-   * Every clip's timeline start in a lane, in one pass.
-   *
-   * This used to be a `clipRect(lane, index)` that each `Clip` called for
-   * itself, so a repaint asked for every clip's `clipStart` and each one summed
-   * the lane from zero. `<For>` renders N clips, so the cost was quadratic *per
-   * frame*.
-   *
-   * **A plain function, not a memo — the caller owns the memo.** The first
-   * version of this optimisation declared a `createMemo` lazily and cached it in
-   * a closure here. That is a Solid trap: the memo is owned by the `Lane` whose
-   * render created it, so when `Lane` unmounts — a panel toggle, a layout
-   * change, HMR — Solid disposes it, but the closure still hands out the dead
-   * reference and a disposed memo returns its last value forever. After one
-   * remount the timeline was frozen: split a clip in two and the right half was
-   * drawn wherever the *old* layout put that index, leaving a real gap that no
-   * amount of re-splitting cleared. A reload fixed it until the next remount,
-   * which is exactly the intermittent shape it was reported with.
-   *
-   * So the pass lives here and the *memo* lives in `Lane`, whose lifetime the
-   * position shares. Still one pass per lane change, still derived and stored
-   * nowhere, but owned by a component that cannot outlive its own dependency.
-   * `test/components/lane-split.test.tsx` remounts the lane and then splits, so
-   * this cannot come back.
-   */
-  const clipStartsFor = (lane: Lane): number[] => clipStarts(laneOf(project, lane))
+  const clipStartsFor = (trackId: TrackId): number[] => clipStarts(trackById(project, trackId))
 
   const timeToX = (time: number) => time * zoom()
   const xToTime = (x: number) => x / zoom()
-  const laneLength = (lane: Lane) => laneDuration(laneOf(project, lane))
+  const trackLength = (trackId: TrackId) => trackDuration(trackById(project, trackId))
+
+  /** Clips of every video track, first track at the bottom. What preview and export paint. */
+  const videoTracks = (): Clip[][] =>
+    project.tracks.filter((t) => t.type === 'video').map((t) => t.clips)
+  const videoClipCount = (): number =>
+    project.tracks.reduce((n, t) => (t.type === 'video' ? n + t.clips.length : n), 0)
+  const audioClipCount = (): number =>
+    project.tracks.reduce((n, t) => (t.type === 'audio' ? n + t.clips.length : n), 0)
 
   return {
     project,
-    /** Projects: what is open, whether it is saved, what is missing. */
     projects,
 
-    // --- selection ---
-    // `selected` is the primary clip and `selection` is the whole set. Both
-    // names predate the slice and are kept so no UI file had to change.
     selected: sel.primary,
     selection: sel.ids,
     primary: sel.primary,
     isSelected: sel.isSelected,
     selectionCount: sel.count,
     selectedClips: sel.clips,
-    selectedLanes: sel.lanes,
+    selectedTracks: sel.tracks,
     selectClip: sel.select,
     setPrimary: sel.setPrimary,
     clearSelection: sel.clear,
     selectAll: sel.selectAll,
 
-    // The slices themselves, for a component that genuinely needs one whole.
     transport,
     history,
 
-    // --- view settings ---
     zoom,
     notices,
     snapping,
@@ -407,13 +292,11 @@ export function createAppState() {
     redo: history.redo,
     commit: history.commit,
 
-    // --- resources (not reactive) ---
     library,
     frameCache,
     audio,
     getAssetAudio: (id: string) => audio.decodedAudio(id),
 
-    // --- assets ---
     loading: assets.loading,
     selectedAsset: assets.selectedAsset,
     setSelectedAsset: assets.setSelectedAsset,
@@ -424,24 +307,26 @@ export function createAppState() {
     addAssetToTimeline: assets.addAssetToTimeline,
     addAssetAt: assets.addAssetAt,
     dropTimeFor: assets.dropTimeFor,
-    laneAccepts: assets.laneAccepts,
+    trackAccepts: assets.trackAccepts,
     addClip: assets.addClip,
     assetIds: assets.ids,
     entryFor: (assetId: AssetId) => library.get(assetId),
     getAsset: assets.get,
     peaksFor: assets.peaksFor,
 
-    // --- edits ---
     splitAt: edits.splitAt,
     splitSelectionAtPlayhead: edits.splitSelectionAtPlayhead,
     trimSelectionToPlayhead: edits.trimSelectionToPlayhead,
     deleteSelected: edits.deleteSelected,
     trimToPlayhead: edits.trimToPlayhead,
-    clearLane: edits.clearLane,
+    clearTrack: edits.clearTrack,
+    addTrack,
+    removeTrack,
     duplicateSelected: edits.duplicateSelected,
     reorder: edits.reorder,
     place: edits.place,
     moveSelection: edits.moveSelection,
+    moveSelectionToTrack: edits.moveSelectionToTrack,
     trim: edits.trim,
     setTransform: edits.setTransform,
     setClipGain: edits.setClipGain,
@@ -453,7 +338,6 @@ export function createAppState() {
     breakSelectedLinks: edits.breakSelectedLinks,
     selectionHasLinks: edits.selectionHasLinks,
 
-    // --- transport ---
     playhead: transport.playhead,
     playing: transport.playing,
     seek: transport.seek,
@@ -472,12 +356,12 @@ export function createAppState() {
 
     notify,
 
-    // --- geometry ---
-    // `clipRect` was replaced by `clipStartsFor`: one memoised pass per lane
-    // instead of one lane-wide sum per clip per frame. See the note above.
     clipStartsFor,
-    laneOf,
-    laneLength,
+    trackById,
+    trackLength,
+    videoTracks,
+    videoClipCount,
+    audioClipCount,
     timeToX,
     xToTime,
     newId,
@@ -487,8 +371,6 @@ export function createAppState() {
 
 type Transport = ReturnType<typeof createTransport>
 
-// Re-exported so the UI imports selection types from the store rather than
-// reaching into a slice for one.
 export type { SelectMode } from './selection.js'
 
 export type AppState = ReturnType<typeof createAppState>

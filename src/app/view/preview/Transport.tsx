@@ -54,7 +54,7 @@ export function Transport(props: {
         </Tooltip>
         {/* Only when the project actually has sound. A master mute on an empty
             timeline is a control that cannot do anything. */}
-        <Show when={state.project.audio.length > 0}>
+        <Show when={state.audioClipCount() > 0}>
           <Tooltip label={state.audio.isMuted ? 'Unmute (M)' : 'Mute (M)'}>
             <button
               classList={{ 'btn !px-2': true, 'text-warn!': state.audio.isMuted }}
@@ -86,12 +86,13 @@ export function Transport(props: {
           {props.pictureHidden() ? <EyeOff size={15} /> : <Eye size={15} />}
         </button>
       </Tooltip>
-      <Tooltip label={props.fullscreen() ? 'Leave full screen (F)' : 'Full screen (F)'}>
+      <Tooltip label={props.pictureHidden() ? 'Show the picture to go full screen (F)' : props.fullscreen() ? 'Leave full screen (F)' : 'Full screen (F)'}>
         <button
           class="btn !px-2"
           onClick={props.onToggleFullscreen}
+          disabled={props.pictureHidden()}
           aria-pressed={props.fullscreen()}
-          aria-label={props.fullscreen() ? 'Leave full screen' : 'Full screen'}
+          aria-label={props.pictureHidden() ? 'Full screen is unavailable while the picture is hidden' : props.fullscreen() ? 'Leave full screen' : 'Full screen'}
           data-preview-action="fullscreen"
         >
           {props.fullscreen() ? <Minimize2 size={15} /> : <Maximize2 size={15} />}

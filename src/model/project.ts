@@ -1,10 +1,11 @@
 /**
  * The editing model. This is the whole product (docs/data-model.md).
  *
- * Two lanes, `video` and `audio`, each an ordered array. Splitting a clip
- * with audio attached, cutting the dead air out of a voiceover, or dropping a
- * video and keeping its sound are all the operations people actually perform —
- * and none of them are expressible if a clip carries its own audio implicitly.
+ * N tracks, each typed 'video' or 'audio', each an ordered array. A file with
+ * picture and sound becomes a linked pair across two tracks. Trimming the
+ * picture while keeping the sound, or dropping a video and keeping its sound,
+ * are all the operations people actually perform — and none of them are
+ * expressible if a clip carries its own audio implicitly.
  *
  * Rules this file obeys, and which the rest of the codebase depends on:
  *
@@ -21,7 +22,8 @@
 
 export type AssetId = string
 export type ClipId = string
-export type Lane = 'video' | 'audio'
+export type TrackId = string
+export type TrackType = 'video' | 'audio'
 export type LinkId = string
 
 export type Rotation = 0 | 90 | 180 | 270
@@ -59,8 +61,8 @@ export interface ClipTransform {
 
 export interface Clip {
   id: ClipId
-  /** Which lane this lives in. A clip is in exactly one. */
-  lane: Lane
+  /** Which track this lives in. A clip is in exactly one. */
+  trackId: TrackId
   assetId: AssetId
   /** Source in-point, seconds. Fractional — this is what a human drags. */
   in: number
@@ -70,18 +72,18 @@ export interface Clip {
   /** Linear gain, 0–2. Absent means unity. */
   gain?: number
   /**
-   * Audio lane only. See `toggleMute` — a video clip is refused rather than
+   * Audio track only. See `toggleMute` — a video clip is refused rather than
    * carrying a meaningless flag.
    */
   muted?: boolean
   /**
-   * Video lane only: draw black for this clip, in the preview and in the
+   * Video track only: draw black for this clip, in the preview and in the
    * export, until it is shown again.
    *
    * The video counterpart of `muted`, and deliberately not the same field. A
-   * single "hidden" flag on both lanes would allow a state where a clip is
+   * single "hidden" flag on both tracks would allow a state where a clip is
    * neither audible nor visible, which is not a thing anyone can want and is
-   * two flags to keep straight. Refusing the wrong lane means no caller can
+   * two flags to keep straight. Refusing the wrong track means no caller can
    * produce that state.
    */
   hidden?: boolean
@@ -124,12 +126,17 @@ export interface CaptionTrack {
   style: CaptionStyle
 }
 
+export interface Track {
+  id: TrackId
+  type: TrackType
+  /** Array order IS timeline order. */
+  clips: Clip[]
+}
+
 export interface Project {
-  version: 2
+  version: 3
   assets: Record<AssetId, Asset>
-  /** Array order IS timeline order, per lane. */
-  video: Clip[]
-  audio: Clip[]
+  tracks: Track[]
   captions?: CaptionTrack
 }
 
@@ -147,7 +154,7 @@ export function clipOffset(clip: Clip): number {
 }
 
 /**
- * Timeline offset of index `i` within one lane, in seconds.
+ * Timeline offset of index `i` within one track, in seconds.
  *
  * The clip's OWN offset is included, because a gap sits *before* the clip, not
  * after it: the space to the left of clip 5 belongs to clip 5's timeline
@@ -165,17 +172,17 @@ export function clipStart(clips: Clip[], index: number): number {
 /**
  * Every clip's timeline start, in one pass.
  *
- * `clipStart` sums the lane from zero, which is free for a single lookup and
+ * `clipStart` sums the track from zero, which is free for a single lookup and
  * quadratic inside a loop — and the loops are everywhere. `clipAtLane` asked per
  * index on every preview frame, `collectTargets` per index on every trim
  * `pointermove`, `survivorsInRange` and `duplicateClips` per index on every drop
- * and every ⌘D, and the lane's `<For>` asked per clip on every repaint. Measured
- * at 1.2 ms per `clipAtLane` call on a 1600-clip lane, which is 72 ms of every
+ * and every ⌘D, and the track's `<For>` asked per clip on every repaint. Measured
+ * at 1.2 ms per `clipAtLane` call on a 1600-clip track, which is 72 ms of every
  * second of playback spent re-adding the same numbers.
  *
  * **The invariant is untouched.** Position is still derived from array order and
  * still stored nowhere; this is the same arithmetic with the running total hoisted
- * out of the inner loop. `shiftLane` already did it this way for exactly this
+ * out of the inner loop. `shiftTrack` already did it this way for exactly this
  * reason, and said so.
  *
  * Prefer this whenever the answer is needed for more than one clip. For a single
@@ -197,31 +204,40 @@ export function clipEnd(clips: Clip[], index: number): number {
 }
 
 /**
- * Total span of a lane, gaps included.
+ * Total span of a track, gaps included.
  *
  * A gap is part of the timeline: the video holds black for it and the audio
  * holds silence. Summing only clip durations would report a timeline that is
  * shorter than the one the user is looking at, and the export would come out
  * short to match.
  */
-export function laneDuration(clips: Clip[]): number {
+export function trackDuration(clips: Clip[]): number {
   let t = 0
   for (const clip of clips) t += clipOffset(clip) + clipDuration(clip)
   return t
 }
 
 /**
- * The timeline is as long as its longest lane.
+ * The timeline is as long as its longest track.
  *
  * Audio longer than the video does not extend the video — it would export
  * silence with no picture. The excess is simply not heard.
  */
 export function projectDuration(project: Project): number {
-  return Math.max(laneDuration(project.video), laneDuration(project.audio))
+  let max = 0
+  for (const track of project.tracks) {
+    const d = trackDuration(track.clips)
+    if (d > max) max = d
+  }
+  return max
 }
 
-export function laneOf(project: Project, lane: Lane): Clip[] {
-  return lane === 'video' ? project.video : project.audio
+export function trackById(project: Project, trackId: TrackId): Clip[] {
+  return project.tracks.find((t) => t.id === trackId)?.clips ?? []
+}
+
+export function trackTypeById(project: Project, trackId: TrackId): TrackType | null {
+  return project.tracks.find((t) => t.id === trackId)?.type ?? null
 }
 
 export interface ClipLocation {
@@ -232,7 +248,7 @@ export interface ClipLocation {
 }
 
 /**
- * Which clip is under timeline time `t` in this lane? Null means a gap.
+ * Which clip is under timeline time `t` in this track? Null means a gap.
  *
  * Uses the derived `clipStart` rather than accumulating durations, so a
  * position inside a gap correctly returns null. Accumulating here would claim
@@ -240,12 +256,12 @@ export interface ClipLocation {
  * the timeline is empty.
  *
  * **One pass, accumulating as it goes** — not `clipStart(clips, i)` per index.
- * Both compute the same thing, but this one sums the lane prefix once instead of
+ * Both compute the same thing, but this one sums the track prefix once instead of
  * once per clip, which is the difference between 0.03 ms and 1.2 ms on a
- * 1600-clip lane. The preview calls this on every frame, so that is 72 ms per
+ * 1600-clip track. The preview calls this on every frame, so that is 72 ms per
  * second of playback or zero.
  */
-export function clipAtLane(clips: Clip[], t: number): ClipLocation | null {
+export function clipAtTrack(clips: Clip[], t: number): ClipLocation | null {
   let start = 0
   for (let i = 0; i < clips.length; i++) {
     const clip = clips[i]!
@@ -297,11 +313,11 @@ export function newId(prefix: string): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`
 }
 
-/** Find a clip by id in either lane. */
-export function findClip(project: Project, clipId: ClipId): { clip: Clip; lane: Lane; index: number } | null {
-  for (const lane of ['video', 'audio'] as const) {
-    const index = laneOf(project, lane).findIndex((c) => c.id === clipId)
-    if (index >= 0) return { clip: laneOf(project, lane)[index]!, lane, index }
+/** Find a clip by id in any track. */
+export function findClip(project: Project, clipId: ClipId): { clip: Clip; trackId: TrackId; index: number } | null {
+  for (const track of project.tracks) {
+    const index = track.clips.findIndex((c) => c.id === clipId)
+    if (index >= 0) return { clip: track.clips[index]!, trackId: track.id, index }
   }
   return null
 }
@@ -309,22 +325,22 @@ export function findClip(project: Project, clipId: ClipId): { clip: Clip; lane: 
 /**
  * The other half of a linked pair, or null when the clip is unlinked.
  *
- * **The partner lives in the other lane, always.** The link exists to pair
- * picture with sound, so the answer can only be the clip of the same `linkId`
- * in the opposite lane. Searching both lanes and returning the first match was
- * what made a split linked pair resolve its partner to its own same-lane left
- * half once the right halves kept the original id — the fault behind "the second
- * cut does not cut the audio" and "trim selection only trims the video".
- *
- * Requiring the other lane also makes this robust to a project written by an
- * older build: even if two clips in one lane still share an id, neither can be
- * mistaken for the other's partner.
+ * **The partner lives in a track of the opposite type, always.** The link exists
+ * to pair picture with sound, so the answer can only be the clip of the same
+ * `linkId` in an opposite-type track. Searching all tracks and returning the
+ * first match in an opposite-type track is what makes this robust to a project
+ * written by an older build.
  */
 export function linkedPartner(project: Project, clip: Clip): Clip | null {
   if (!clip.linkId) return null
-  const otherLane: Lane = clip.lane === 'video' ? 'audio' : 'video'
-  for (const other of laneOf(project, otherLane)) {
-    if (other.linkId === clip.linkId) return other
+  const clipType = trackTypeById(project, clip.trackId)
+  if (!clipType) return null
+  const otherType: TrackType = clipType === 'video' ? 'audio' : 'video'
+  for (const track of project.tracks) {
+    if (track.type !== otherType) continue
+    for (const other of track.clips) {
+      if (other.linkId === clip.linkId) return other
+    }
   }
   return null
 }
@@ -338,8 +354,10 @@ export function breakLink(project: Project, clip: Clip): Project {
   if (!clip.linkId) return project
   return {
     ...project,
-    video: project.video.map((c) => (c.linkId === clip.linkId ? { ...c, linkId: undefined } : c)),
-    audio: project.audio.map((c) => (c.linkId === clip.linkId ? { ...c, linkId: undefined } : c)),
+    tracks: project.tracks.map((track) => ({
+      ...track,
+      clips: track.clips.map((c) => (c.linkId === clip.linkId ? { ...c, linkId: undefined } : c)),
+    })),
   }
 }
 
@@ -370,24 +388,28 @@ export function appendAsset(project: Project, assetId: AssetId, asset: Asset): P
   const linkId = linked ? newId('lnk') : undefined
   const video: Clip[] =
     asset.hasVideo && asset.duration > 0
-      ? [{ id: newId('clp'), lane: 'video', assetId, in: 0, out: asset.duration, ...(linkId ? { linkId } : {}) }]
+      ? [{ id: newId('clp'), trackId: 'video', assetId, in: 0, out: asset.duration, ...(linkId ? { linkId } : {}) }]
       : []
   const audio: Clip[] =
     asset.hasAudio
-      ? [{ id: newId('clp'), lane: 'audio', assetId, in: 0, out: asset.duration, ...(linkId ? { linkId } : {}) }]
+      ? [{ id: newId('clp'), trackId: 'audio', assetId, in: 0, out: asset.duration, ...(linkId ? { linkId } : {}) }]
       : []
 
   return {
     ...project,
-    video: [...project.video, ...video],
-    audio: [...project.audio, ...audio],
+    tracks: [
+      { id: 'video', type: 'video', clips: video },
+      { id: 'audio', type: 'audio', clips: audio },
+    ],
   }
 }
 
-/** Remove one clip. Linked partners survive — deleting is per-lane. */
-export function removeClip(project: Project, lane: Lane, index: number): Project {
-  const clips = laneOf(project, lane).filter((_, i) => i !== index)
-  return { ...project, [lane]: clips } as Project
+/** Remove one clip. Linked partners survive — deleting is per-track. */
+export function removeClip(project: Project, trackId: TrackId, index: number): Project {
+  const tracks = project.tracks.map((track) =>
+    track.id === trackId ? { ...track, clips: track.clips.filter((_, i) => i !== index) } : track,
+  )
+  return { ...project, tracks }
 }
 
 /**
@@ -397,13 +419,18 @@ export function removeClip(project: Project, lane: Lane, index: number): Project
  * carrying an old offset into a new slot would leave an arbitrary hole. To
  * leave a gap, drag the clip — that is `placeClip`.
  */
-export function moveClip(project: Project, lane: Lane, from: number, to: number): Project {
-  const clips = laneOf(project, lane)
+export function moveClip(project: Project, trackId: TrackId, from: number, to: number): Project {
+  const track = project.tracks.find((t) => t.id === trackId)
+  if (!track) return project
+  const clips = track.clips
   if (from === to || from < 0 || to < 0 || from >= clips.length || to >= clips.length) return project
   const next = clips.slice()
   const [clip] = next.splice(from, 1)
   next.splice(to, 0, { ...clip!, offset: 0 })
-  return { ...project, [lane]: next } as Project
+  return {
+    ...project,
+    tracks: project.tracks.map((t) => (t.id === trackId ? { ...t, clips: next } : t)),
+  }
 }
 
 /**
@@ -422,85 +449,89 @@ export function moveClip(project: Project, lane: Lane, from: number, to: number)
  * right half, while dragging the right half (which has no successor) moved
  * alone.
  *
- * A negative offset would push the lane before zero, and the target is the
+ * A negative offset would push the track before zero, and the target is the
  * clip's absolute start, so the prefix is subtracted once here — **not** its own
  * `clipStart`, which already includes the offset now and would turn the absolute
  * target into a half-speed increment.
  */
-export function placeClip(project: Project, lane: Lane, index: number, start: number): Project {
-  const clips = laneOf(project, lane)
-  const clip = clips[index]
-  if (!clip) return project
+export function placeClip(project: Project, trackId: TrackId, index: number, start: number): Project {
+  const tracks = project.tracks.map((track) => {
+    if (track.id !== trackId) return track
+    const clips = track.clips
+    const clip = clips[index]
+    if (!clip) return track
 
-  const prefix = index === 0 ? 0 : clipEnd(clips, index - 1)
-  const successor = clips[index + 1]
-  // Where the clip after this one must stay. `clipStart(clips, index + 1)` is
-  // its *current* absolute position; the moved clip may not reach past it.
-  const successorStart = successor ? clipStart(clips, index + 1) : Number.POSITIVE_INFINITY
-  const upper = successor ? successorStart - clipDuration(clip) : Number.POSITIVE_INFINITY
-  // `Math.max(prefix, …)` on the upper bound too: a clip longer than the space
-  // between its neighbours has no legal interior, and pinning the predecessor
-  // beats a negative offset.
-  const target = Math.min(Math.max(prefix, start), Math.max(prefix, upper))
+    const prefix = index === 0 ? 0 : clipEnd(clips, index - 1)
+    const successor = clips[index + 1]
+    // Where the clip after this one must stay. `clipStart(clips, index + 1)` is
+    // its *current* absolute position; the moved clip may not reach past it.
+    const successorStart = successor ? clipStart(clips, index + 1) : Number.POSITIVE_INFINITY
+    const upper = successor ? successorStart - clipDuration(clip) : Number.POSITIVE_INFINITY
+    // `Math.max(prefix, …)` on the upper bound too: a clip longer than the space
+    // between its neighbours has no legal interior, and pinning the predecessor
+    // beats a negative offset.
+    const target = Math.min(Math.max(prefix, start), Math.max(prefix, upper))
 
-  const next = clips.slice()
-  next[index] = { ...clip, offset: target - prefix }
-  if (successor) {
-    // Hold the successor exactly where it is. Deriving its offset from the new
-    // end of the moved clip is what keeps it still while this one travels.
-    const gap = Math.max(0, successorStart - (target + clipDuration(clip)))
-    next[index + 1] = { ...successor, offset: gap }
-  }
-  return { ...project, [lane]: next } as Project
+    const next = clips.slice()
+    next[index] = { ...clip, offset: target - prefix }
+    if (successor) {
+      // Hold the successor exactly where it is. Deriving its offset from the new
+      // end of the moved clip is what keeps it still while this one travels.
+      const gap = Math.max(0, successorStart - (target + clipDuration(clip)))
+      next[index + 1] = { ...successor, offset: gap }
+    }
+    return { ...track, clips: next }
+  })
+  return { ...project, tracks }
 }
 
 /**
  * Move every selected clip by the same time delta.
  *
  * Group drag is a **rigid shift**, not a reorder: the selected clips keep their
- * order and their spacing, and each lane is repacked around them. A selected
+ * order and their spacing, and each track is repacked around them. A selected
  * clip dragged left butts against its unselected predecessor rather than
  * crossing it; dragged right, it pushes the unselected clips after it along.
  *
  * **A group ripples; a single clip does not.** `placeClip` moves one clip
  * locally and pins the clip after it, so a single drag never drags a neighbour
  * along. A group is a different gesture — several clips moving as a block *do*
- * repack the lane, because keeping the block together is the whole point.
+ * repack the track, because keeping the block together is the whole point.
  * Swapping past a neighbour is not offered at all any more.
  *
  * `anchorStart` is the desired timeline start of the clip under the pointer.
  * The delta is derived from that clip and then **clamped once, for the whole
- * selection**, before any lane is repacked.
+ * selection**, before any track is repacked.
  *
  * The clamp is the part that makes the shift rigid rather than merely intended.
- * A leftward drag is limited, per lane, by where that lane's first selected clip
- * can but against its predecessor; those limits are different whenever one lane
- * sits behind a gap. Clamping each lane independently let the picture stop at
+ * A leftward drag is limited, per track, by where that track's first selected clip
+ * can but against its predecessor; those limits are different whenever one track
+ * sits behind a gap. Clamping each track independently let the picture stop at
  * zero while its sound kept travelling — one gesture, two outcomes, and a linked
  * pair left permanently out of sync with no undo entry that says so. Taking the
- * *most constrained* lane's limit and applying it to both keeps the block rigid:
+ * *most constrained* track's limit and applying it to both keeps the block rigid:
  * it may stop short of the pointer, which is the honest cost of the promise.
  */
 export function moveSelectionTo(
   project: Project,
-  anchorLane: Lane,
+  anchorTrackId: TrackId,
   anchorIndex: number,
   anchorStart: number,
   selected: ReadonlySet<ClipId>,
 ): Project {
-  const anchorClips = laneOf(project, anchorLane)
+  const anchorClips = trackById(project, anchorTrackId)
   if (!anchorClips[anchorIndex]) return project
   const desired = anchorStart - clipStart(anchorClips, anchorIndex)
   if (desired === 0) return project
 
   let delta = desired
   if (desired < 0) {
-    // Leftward only: rightward has no wall to hit. For each lane the binding
+    // Leftward only: rightward has no wall to hit. For each track the binding
     // clip is the first selected one — everything before it is fixed, and the
     // selected clips after it keep their spacing. `floor - start` is how far
     // left that clip may go, so it is a lower bound on the delta.
-    for (const lane of ['video', 'audio'] as const) {
-      const clips = project[lane]
+    for (const track of project.tracks) {
+      const clips = track.clips
       const first = clips.findIndex((clip) => selected.has(clip.id))
       if (first < 0) continue
       const floor = first === 0 ? 0 : clipEnd(clips, first - 1)
@@ -511,13 +542,107 @@ export function moveSelectionTo(
 
   return {
     ...project,
-    video: shiftLane(project.video, selected, delta),
-    audio: shiftLane(project.audio, selected, delta),
+    tracks: project.tracks.map((track) => ({
+      ...track,
+      clips: shiftTrack(track.clips, selected, delta),
+    })),
   }
 }
 
 /**
- * Repack one lane with the selected clips shifted by `delta`.
+ * Drag the selection onto another track of the same kind.
+ *
+ * Every selected clip of the target's kind — wherever it currently sits — lands
+ * on `targetTrackId` as one block, keeping its spacing, with the anchor clip's
+ * start placed at `anchorStart`. This is what makes a montage: pull a piece of
+ * one video up onto another video track and it *becomes* a clip of that layer.
+ *
+ * The target is repacked like any track — a clip lands where it was asked to be,
+ * or at the end of its predecessor, whichever is later — so dropping onto an
+ * occupied stretch pushes the target's later clips right and two clips never
+ * overlap. Selected clips of the *other* kind (the sound half of a linked pair,
+ * say) cannot join the target and instead shift by the same delta inside their
+ * own tracks, so a linked pair stays in sync while its picture changes layer.
+ */
+export function moveClipsToTrack(
+  project: Project,
+  targetTrackId: TrackId,
+  selected: ReadonlySet<ClipId>,
+  anchorClipId: ClipId,
+  anchorStart: number,
+): Project {
+  const target = project.tracks.find((t) => t.id === targetTrackId)
+  if (!target) return project
+
+  // Where each selected clip is now, in absolute time.
+  const starts = new Map<ClipId, number>()
+  for (const track of project.tracks) {
+    let start = 0
+    for (const clip of track.clips) {
+      start += clipOffset(clip)
+      if (selected.has(clip.id)) starts.set(clip.id, start)
+      start += clipDuration(clip)
+    }
+  }
+  const anchorNow = starts.get(anchorClipId)
+  if (anchorNow === undefined) return project
+  const delta = anchorStart - anchorNow
+
+  // The target's future contents: its own fixed clips where they are, and the
+  // movers at their shifted positions. Sorting by the desired start lets the
+  // repack below resolve any overlap by pushing right, in timeline order.
+  const placed: { clip: Clip; desired: number }[] = []
+  for (const track of project.tracks) {
+    if (track.type !== target.type) continue
+    let start = 0
+    for (const clip of track.clips) {
+      start += clipOffset(clip)
+      if (starts.has(clip.id)) {
+        placed.push({ clip: { ...clip, trackId: targetTrackId }, desired: start + delta })
+      } else if (track.id === targetTrackId) {
+        placed.push({ clip, desired: start })
+      }
+      start += clipDuration(clip)
+    }
+  }
+  placed.sort((a, b) => a.desired - b.desired)
+
+  const clips: Clip[] = []
+  let cursor = 0
+  for (const { clip, desired } of placed) {
+    const at = Math.max(cursor, desired)
+    clips.push(clipOffset(clip) === at - cursor ? clip : { ...clip, offset: at - cursor })
+    cursor = at + clipDuration(clip)
+  }
+
+  const tracks = project.tracks.map((track) => {
+    if (track.id === targetTrackId) return { ...track, clips }
+    if (track.type === target.type) {
+      // Same kind but not the target: the movers have left. The clips that stay
+      // keep their absolute positions — a hole is left where the mover was, so a
+      // clip pulled up to another layer does not drag its successors left.
+      const kept: Clip[] = []
+      let original = 0
+      let cursor = 0
+      for (const clip of track.clips) {
+        original += clipOffset(clip)
+        if (!starts.has(clip.id)) {
+          const offset = Math.max(0, original - cursor)
+          kept.push(clipOffset(clip) === offset ? clip : { ...clip, offset })
+          cursor = original + clipDuration(clip)
+        }
+        original += clipDuration(clip)
+      }
+      return kept.length === track.clips.length ? track : { ...track, clips: kept }
+    }
+    // The other kind: keep the linked half in sync by the same delta.
+    return { ...track, clips: shiftTrack(track.clips, selected, delta) }
+  })
+  return { ...project, tracks }
+}
+
+/**
+ * Repack one track with the selected clips shifted by `delta`.
  *
  * Each clip's desired position is its current one, plus `delta` when selected.
  * Walking left to right, a clip lands at its desired position or at the end of
@@ -525,10 +650,10 @@ export function moveSelectionTo(
  * neighbour in front, and a rightward move pushes the one behind. `offset`
  * (silence before the clip) is re-derived from that, never stored as a position.
  */
-function shiftLane(clips: Clip[], selected: ReadonlySet<ClipId>, delta: number): Clip[] {
+function shiftTrack(clips: Clip[], selected: ReadonlySet<ClipId>, delta: number): Clip[] {
   if (!clips.some((clip) => selected.has(clip.id))) return clips
   const out: Clip[] = []
-  // Running ends, not `clipStart` per index: the latter sums the lane on every
+  // Running ends, not `clipStart` per index: the latter sums the track on every
   // call, which is O(n²) across a group drag and shows up on a long timeline.
   let originalEnd = 0
   let cursor = 0
@@ -540,7 +665,7 @@ function shiftLane(clips: Clip[], selected: ReadonlySet<ClipId>, delta: number):
     const offset = target - cursor
     // Reuse the clip when its own offset did not change. `<For>` keys on the
     // object reference, so handing it a fresh object for every clip remounts
-    // the whole lane — and each remount repaints that clip's filmstrip, which
+    // the whole track — and each remount repaints that clip's filmstrip, which
     // made dragging a group of two heavy on a timeline of many.
     out.push(offset === clipOffset(clip) ? clip : { ...clip, offset })
     originalEnd = originalStart + clipDuration(clip)
@@ -550,7 +675,7 @@ function shiftLane(clips: Clip[], selected: ReadonlySet<ClipId>, delta: number):
 }
 
 /**
- * Which clips in a lane move when the selection is dragged.
+ * Which clips in a track move when the selection is dragged.
  *
  * The selected clips move by design, and so does every clip after the first
  * selected one — positions are derived (`clipStart`), so a clip dragged right
@@ -558,7 +683,7 @@ function shiftLane(clips: Clip[], selected: ReadonlySet<ClipId>, delta: number):
  * a snap target that travels with the drag is a target the clip chases: that is
  * the vibration. Only the clips *before* the first selected one are fixed.
  */
-export function movingInLane(clips: Clip[], selected: ReadonlySet<ClipId>): Set<ClipId> {
+export function movingInTrack(clips: Clip[], selected: ReadonlySet<ClipId>): Set<ClipId> {
   const moving = new Set<ClipId>()
   let past = false
   for (const clip of clips) {
@@ -581,10 +706,10 @@ export function movingInLane(clips: Clip[], selected: ReadonlySet<ClipId>): Set<
  */
 export type DropMode = 'overwrite' | 'insert'
 
-/** Index of the first clip starting at or after `time`, or the end of the lane. */
+/** Index of the first clip starting at or after `time`, or the end of the track. */
 function firstIndexAtOrAfter(clips: Clip[], time: number): number {
   // `clipStarts` once, rather than `clipStart` per index. This runs on every drop,
-  // over a lane that can be thousands of clips long.
+  // over a track that can be thousands of clips long.
   const starts = clipStarts(clips)
   for (let i = 0; i < starts.length; i++) {
     if (starts[i]! >= time - 1e-9) return i
@@ -639,7 +764,7 @@ function nearestCuttable(clips: Clip[], index: number, time: number): number {
 }
 
 /**
- * Put `clip` on `lane` starting at `time`, pushing later clips along.
+ * Put `clip` on `trackId` starting at `time`, pushing later clips along.
  *
  * Works whether `time` is in a gap, inside a clip, or past the end — which is
  * the whole point. Dropping inside a clip splits it, so the material after the
@@ -650,49 +775,53 @@ function nearestCuttable(clips: Clip[], index: number, time: number): number {
  * right index, plus an `offset` for any gap the user aimed at. Nothing else is
  * stored, so nothing else can drift.
  */
-export function insertClipAt(project: Project, lane: Lane, time: number, clip: Clip): Project {
-  let clips = laneOf(project, lane)
-  const covering = indexCovering(clips, time)
+export function insertClipAt(project: Project, trackId: TrackId, time: number, clip: Clip): Project {
+  const tracks = project.tracks.map((track) => {
+    if (track.id !== trackId) return track
+    let clips = track.clips
+    const covering = indexCovering(clips, time)
 
-  // Two ways a drop can land, and both used to end up in the same wrong place —
-  // the far end of the clip it was dropped on, with nothing on screen to explain
-  // it. Aiming at 0.01s and getting 10s.
-  //
-  // **At a clip's start**, within MIN_CLIP. The user aimed *before* it, not a hair
-  // inside it, and cutting there would split off a 40ms fragment of somebody's
-  // footage — worse than useless. Treated as the boundary it is: the clip goes in
-  // front, flush.
-  //
-  // **Mid-clip.** The cut still has to clear both ends, so it is nudged to the
-  // nearest legal one: 40ms of movement, invisible, and the edit that was meant.
-  let at: number
-  let offset: number
+    // Two ways a drop can land, and both used to end up in the same wrong place —
+    // the far end of the clip it was dropped on, with nothing on screen to explain
+    // it. Aiming at 0.01s and getting 10s.
+    //
+    // **At a clip's start**, within MIN_CLIP. The user aimed *before* it, not a hair
+    // inside it, and cutting there would split off a 40ms fragment of somebody's
+    // footage — worse than useless. Treated as the boundary it is: the clip goes in
+    // front, flush.
+    //
+    // **Mid-clip.** The cut still has to clear both ends, so it is nudged to the
+    // nearest legal one: 40ms of movement, invisible, and the edit that was meant.
+    let at: number
+    let offset: number
 
-  if (covering < 0) {
-    at = firstIndexAtOrAfter(clips, time)
-    offset = Math.max(0, time - (at === 0 ? 0 : clipEnd(clips, at - 1)))
-  } else if (time - clipStart(clips, covering) < MIN_CLIP) {
-    at = covering
-    const floor = at === 0 ? 0 : clipEnd(clips, at - 1)
-    offset = Math.max(floor, clipStart(clips, covering)) - floor
-  } else {
-    const cut = nearestCuttable(clips, covering, time)
-    const halves = splitOne(clips, covering, cut)
-    if (halves) {
-      clips = halves
-      at = covering + 1
-      offset = Math.max(0, cut - clipEnd(clips, at - 1))
-    } else {
-      // A clip shorter than `2 × MIN_CLIP` has no legal interior at all, so there
-      // is nothing to cut. In front of it still beats the far end of it.
+    if (covering < 0) {
+      at = firstIndexAtOrAfter(clips, time)
+      offset = Math.max(0, time - (at === 0 ? 0 : clipEnd(clips, at - 1)))
+    } else if (time - clipStart(clips, covering) < MIN_CLIP) {
       at = covering
       const floor = at === 0 ? 0 : clipEnd(clips, at - 1)
       offset = Math.max(floor, clipStart(clips, covering)) - floor
+    } else {
+      const cut = nearestCuttable(clips, covering, time)
+      const halves = splitOne(clips, covering, cut)
+      if (halves) {
+        clips = halves
+        at = covering + 1
+        offset = Math.max(0, cut - clipEnd(clips, at - 1))
+      } else {
+        // A clip shorter than `2 × MIN_CLIP` has no legal interior at all, so there
+        // is nothing to cut. In front of it still beats the far end of it.
+        at = covering
+        const floor = at === 0 ? 0 : clipEnd(clips, at - 1)
+        offset = Math.max(floor, clipStart(clips, covering)) - floor
+      }
     }
-  }
 
-  const next = [...clips.slice(0, at), { ...clip, offset }, ...clips.slice(at)]
-  return { ...project, [lane]: next } as Project
+    const next = [...clips.slice(0, at), { ...clip, offset }, ...clips.slice(at)]
+    return { ...track, clips: next }
+  })
+  return { ...project, tracks }
 }
 
 /**
@@ -754,21 +883,25 @@ function rederiveOffsets(items: { clip: Clip; from: number }[]): Clip[] {
 }
 
 /**
- * Remove everything between `start` and `end` from a lane.
+ * Remove everything between `start` and `end` from a track.
  *
  * A clip crossing either edge is *trimmed*, not deleted: clearing the middle of
  * a long clip leaves its head and its tail, which is not what "overwrite" means
  * if you read it as "delete". Gaps outside the span are kept, so the tail does
  * not slide left to fill the hole.
  */
-export function clearLaneRange(project: Project, lane: Lane, start: number, end: number): Project {
+export function clearTrackRange(project: Project, trackId: TrackId, start: number, end: number): Project {
   if (end <= start) return project
-  const next = rederiveOffsets(survivorsInRange(laneOf(project, lane), start, end))
-  return { ...project, [lane]: next } as Project
+  const tracks = project.tracks.map((track) => {
+    if (track.id !== trackId) return track
+    const next = rederiveOffsets(survivorsInRange(track.clips, start, end))
+    return { ...track, clips: next }
+  })
+  return { ...project, tracks }
 }
 
 /**
- * Place a clip at `time` on `lane`: overwrite what is there, or push it along.
+ * Place a clip at `time` on `trackId`: overwrite what is there, or push it along.
  *
  * The single entry point a drop should use, so "where does this go" has exactly
  * one answer in the codebase.
@@ -778,28 +911,31 @@ export function clearLaneRange(project: Project, lane: Lane, start: number, end:
  * - `insert` splices the clip into the array and leaves every later `offset`
  *   alone. Because position is derived, that *is* the push-along — everything
  *   after moves right by the inserted length, with no arithmetic at all.
- * - `overwrite` has to re-encode the lane, because the clips after the drop are
+ * - `overwrite` has to re-encode the track, because the clips after the drop are
  *   supposed to stay exactly where they were. It records the survivors' absolute
  *   starts, adds the new clip among them, and derives every offset in one pass
  *   at the end.
  */
 export function placeClipAt(
   project: Project,
-  lane: Lane,
+  trackId: TrackId,
   time: number,
   clip: Clip,
   mode: DropMode,
 ): Project {
-  if (mode === 'insert') return insertClipAt(project, lane, time, clip)
+  if (mode === 'insert') return insertClipAt(project, trackId, time, clip)
 
   const end = time + clipDuration(clip)
-  const items = survivorsInRange(laneOf(project, lane), time, end)
-  // Put the new clip where it belongs among the survivors, keeping the list in
-  // the order the timeline should read in.
-  const at = items.findIndex((it) => it.from >= time - 1e-9)
-  const withNew = [...items.slice(0, at < 0 ? items.length : at), { clip, from: time }, ...items.slice(at < 0 ? items.length : at)]
-
-  return { ...project, [lane]: rederiveOffsets(withNew) } as Project
+  const tracks = project.tracks.map((track) => {
+    if (track.id !== trackId) return track
+    const items = survivorsInRange(track.clips, time, end)
+    // Put the new clip where it belongs among the survivors, keeping the list in
+    // the order the timeline should read in.
+    const at = items.findIndex((it) => it.from >= time - 1e-9)
+    const withNew = [...items.slice(0, at < 0 ? items.length : at), { clip, from: time }, ...items.slice(at < 0 ? items.length : at)]
+    return { ...track, clips: rederiveOffsets(withNew) }
+  })
+  return { ...project, tracks }
 }
 
 /**
@@ -810,7 +946,7 @@ export function placeClipAt(
  * Giving each half its own id would silently break the link the moment anyone
  * touched the copy.
  *
- * Each half is placed against its own lane, so a copy can overlap the clip
+ * Each half is placed against its own track, so a copy can overlap the clip
  * that followed the original. That is not a new hazard — dragging a clip right
  * already allows it — and resolving it here would mean inventing a ripple rule
  * the model deliberately does not have.
@@ -837,19 +973,19 @@ export function duplicateClips(project: Project, clipIds: Iterable<ClipId>): Pro
   let out: Project | null = null
   let copied = 0
 
-  // Walk each lane front to back and insert directly after the source clip, so
+  // Walk each track front to back and insert directly after the source clip, so
   // later indices are never invalidated by an earlier insert.
-  for (const lane of ['video', 'audio'] as const) {
-    const source = project[lane]
+  for (const track of project.tracks) {
+    const source = track.clips
     const next: Clip[] = []
-    // One pass for the whole lane. This asked `clipStart` *and* `clipEnd` per
+    // One pass for the whole track. This asked `clipStart` *and* `clipEnd` per
     // index, so duplicating on a long timeline was quadratic twice over.
     const starts = clipStarts(source)
     for (let index = 0; index < source.length; index += 1) {
       const clip = source[index]!
       next.push(clip)
       if (!ids.has(clip.id)) continue
-      if (!out) out = { ...project, video: project.video.slice(), audio: project.audio.slice() }
+      if (!out) out = { ...project, tracks: project.tracks.map((t) => ({ ...t, clips: t.clips.slice() })) }
 
       // The copy starts where the original ends.
       const start = starts[index]! + clipDuration(clip)
@@ -865,7 +1001,10 @@ export function duplicateClips(project: Project, clipIds: Iterable<ClipId>): Pro
       next.push({ ...copy, offset: start - (starts[index]! + clipDuration(clip)) })
       copied += 1
     }
-    if (out) out[lane] = next
+    if (out) {
+      const outTrack = out.tracks.find((t) => t.id === track.id)!
+      outTrack.clips = next
+    }
   }
 
   return copied === 0 ? project : out!
@@ -881,8 +1020,10 @@ export function duplicateClips(project: Project, clipIds: Iterable<ClipId>): Pro
  */
 const MIN_CLIP = 0.04
 
-export function trimClip(project: Project, lane: Lane, index: number, inPoint: number, outPoint: number): Project {
-  const clips = laneOf(project, lane)
+export function trimClip(project: Project, trackId: TrackId, index: number, inPoint: number, outPoint: number): Project {
+  const track = project.tracks.find((t) => t.id === trackId)
+  if (!track) return project
+  const clips = track.clips
   const clip = clips[index]
   if (!clip) return project
   const asset = project.assets[clip.assetId]
@@ -893,7 +1034,7 @@ export function trimClip(project: Project, lane: Lane, index: number, inPoint: n
   // that dragging a handle past the far edge asks for. This is the only write
   // path that could produce one, and a zero-length clip is what
   // `survivorsInRange`'s own comment calls corrupt: it is skipped by
-  // `clipAtLane`, so the playhead can never land on it and it cannot be split,
+  // `clipAtTrack`, so the playhead can never land on it and it cannot be split,
   // yet it still sits in the array shifting everything after it.
   //
   // **Refused rather than clamped**, because which end the user is holding is
@@ -908,11 +1049,14 @@ export function trimClip(project: Project, lane: Lane, index: number, inPoint: n
 
   const next = clips.slice()
   next[index] = { ...clip, in: inClamped, out: outClamped }
-  return { ...project, [lane]: next } as Project
+  return {
+    ...project,
+    tracks: project.tracks.map((t) => (t.id === trackId ? { ...t, clips: next } : t)),
+  }
 }
 
 /**
- * Split **one clip in one lane**, leaving its link partner whole.
+ * Split **one clip in one track**, leaving its link partner whole.
  *
  * This is the gesture "cut the picture and keep the sound" (or the reverse):
  * the user selected one side of a linked pair, so only that side is cut. The
@@ -922,19 +1066,28 @@ export function trimClip(project: Project, lane: Lane, index: number, inPoint: n
  * clip the user never cut.
  *
  * `splitLinked` is the "cut both halves" version and is used when the pair is
- * selected together, or when nothing is selected and both lanes are cut.
+ * selected together, or when nothing is selected and both tracks are cut.
  */
-export function splitClip(project: Project, lane: Lane, index: number, timelineT: number): Project {
-  const clips = laneOf(project, lane)
-  const clip = clips[index]
-  if (!clip) return project
+export function splitClip(project: Project, trackId: TrackId, index: number, timelineT: number): Project {
+  let split = false
+  const tracks = project.tracks.map((track) => {
+    if (track.id !== trackId) return track
+    const clips = track.clips
+    const clip = clips[index]
+    if (!clip) return track
 
-  const local = timelineT - clipStart(clips, index)
-  if (local < MIN_CLIP || local > clipDuration(clip) - MIN_CLIP) return project
+    const local = timelineT - clipStart(clips, index)
+    if (local < MIN_CLIP || local > clipDuration(clip) - MIN_CLIP) return track
 
-  const left: Clip = { ...clip, out: clip.in + local }
-  const right: Clip = { ...clip, id: newId('clp'), in: clip.in + local, offset: 0, linkId: undefined }
-  return { ...project, [lane]: [...clips.slice(0, index), left, right, ...clips.slice(index + 1)] } as Project
+    const left: Clip = { ...clip, out: clip.in + local }
+    const right: Clip = { ...clip, id: newId('clp'), in: clip.in + local, offset: 0, linkId: undefined }
+    split = true
+    return { ...track, clips: [...clips.slice(0, index), left, right, ...clips.slice(index + 1)] }
+  })
+  // Return the SAME project when nothing split, so callers that detect a no-op by
+  // identity (see `splitCore` in edits.ts) record no history for a refused cut.
+  if (!split) return project
+  return { ...project, tracks }
 }
 
 /**
@@ -945,8 +1098,11 @@ export function splitClip(project: Project, lane: Lane, index: number, timelineT
  * splitting the audio at the video's source time would land in the wrong
  * place.
  */
-export function splitLinked(project: Project, lane: Lane, index: number, timelineT: number): Project {
-  const clips = laneOf(project, lane)
+export function splitLinked(project: Project, trackId: TrackId, index: number, timelineT: number): Project {
+  let next = project
+  const track = project.tracks.find((t) => t.id === trackId)
+  if (!track) return project
+  const clips = track.clips
   const clip = clips[index]
   if (!clip) return project
 
@@ -957,7 +1113,7 @@ export function splitLinked(project: Project, lane: Lane, index: number, timelin
   //
   // Keeping the original `linkId` on both halves made *four* clips share one id,
   // and since `linkedPartner` then had no way to tell one pair from the other, a
-  // second split resolved the partner to its own same-lane left half. The result
+  // second split resolved the partner to its own same-track left half. The result
   // was that the audio half was never cut again, "Split selection" reported
   // nothing to split, and "Trim selection" trimmed only the video. The left
   // halves keep the original id, so they remain paired; the right halves get one
@@ -968,23 +1124,33 @@ export function splitLinked(project: Project, lane: Lane, index: number, timelin
   // position comes from being next in the array.
   const right: Clip = { ...clip, id: newId('clp'), in: clip.in + local, offset: 0, linkId: rightLink }
 
-  let next = { ...project, [lane]: [...clips.slice(0, index), left, right, ...clips.slice(index + 1)] } as Project
+  next = {
+    ...next,
+    tracks: next.tracks.map((t) =>
+      t.id === trackId ? { ...t, clips: [...clips.slice(0, index), left, right, ...clips.slice(index + 1)] } : t,
+    ),
+  }
 
   const partner = linkedPartner(project, clip)
   if (partner) {
-    const otherLane: Lane = partner.lane
-    const otherClips = laneOf(next, otherLane)
-    const partnerIndex = otherClips.findIndex((c) => c.id === partner.id)
-    if (partnerIndex >= 0) {
-      const partnerLocal = timelineT - clipStart(otherClips, partnerIndex)
-      const p = otherClips[partnerIndex]!
-      // Respect the same minimum on the partner: a split that is valid for
-      // video but produces a 10 ms audio clip is not a split anyone wanted.
-      if (partnerLocal >= MIN_CLIP && partnerLocal <= clipDuration(p) - MIN_CLIP) {
-        const pLeft: Clip = { ...p, out: p.in + partnerLocal }
-        const pRight: Clip = { ...p, id: newId('clp'), in: p.in + partnerLocal, offset: 0, linkId: rightLink }
-        const other = [...otherClips.slice(0, partnerIndex), pLeft, pRight, ...otherClips.slice(partnerIndex + 1)]
-        next = { ...next, [otherLane]: other } as Project
+    const partnerTrack = next.tracks.find((t) => t.id === partner.trackId)
+    if (partnerTrack) {
+      const otherClips = partnerTrack.clips
+      const partnerIndex = otherClips.findIndex((c) => c.id === partner.id)
+      if (partnerIndex >= 0) {
+        const partnerLocal = timelineT - clipStart(otherClips, partnerIndex)
+        const p = otherClips[partnerIndex]!
+        // Respect the same minimum on the partner: a split that is valid for
+        // video but produces a 10 ms audio clip is not a split anyone wanted.
+        if (partnerLocal >= MIN_CLIP && partnerLocal <= clipDuration(p) - MIN_CLIP) {
+          const pLeft: Clip = { ...p, out: p.in + partnerLocal }
+          const pRight: Clip = { ...p, id: newId('clp'), in: p.in + partnerLocal, offset: 0, linkId: rightLink }
+          const other = [...otherClips.slice(0, partnerIndex), pLeft, pRight, ...otherClips.slice(partnerIndex + 1)]
+          next = {
+            ...next,
+            tracks: next.tracks.map((t) => (t.id === partnerTrack.id ? { ...t, clips: other } : t)),
+          }
+        }
       }
     }
   }
@@ -995,23 +1161,31 @@ export function splitLinked(project: Project, lane: Lane, index: number, timelin
 export function setTransform(project: Project, clipId: ClipId, transform: ClipTransform): Project {
   const found = findClip(project, clipId)
   if (!found) return project
-  const next = laneOf(project, found.lane).slice()
-  next[found.index] = { ...next[found.index]!, transform }
-  return { ...project, [found.lane]: next } as Project
+  const tracks = project.tracks.map((track) => {
+    if (track.id !== found.trackId) return track
+    const next = track.clips.slice()
+    next[found.index] = { ...next[found.index]!, transform }
+    return { ...track, clips: next }
+  })
+  return { ...project, tracks }
 }
 
 export function setClipGain(project: Project, clipId: ClipId, gain: number): Project {
   const found = findClip(project, clipId)
   if (!found) return project
-  const next = laneOf(project, found.lane).slice()
-  next[found.index] = { ...next[found.index]!, gain: clamp(gain, 0, 2) }
-  return { ...project, [found.lane]: next } as Project
+  const tracks = project.tracks.map((track) => {
+    if (track.id !== found.trackId) return track
+    const next = track.clips.slice()
+    next[found.index] = { ...next[found.index]!, gain: clamp(gain, 0, 2) }
+    return { ...track, clips: next }
+  })
+  return { ...project, tracks }
 }
 
 /**
  * Mute or unmute a clip.
  *
- * **Audio lane only.** A video clip has nothing to mute, and letting one carry
+ * **Audio track only.** A video clip has nothing to mute, and letting one carry
  * a `muted` flag is worse than a no-op: the flag shows up in the UI as a mute
  * badge on a clip with no sound, and it silently changes the audio mixer's
  * gain for a clip that was never in it. Refusing here means no caller can
@@ -1019,16 +1193,22 @@ export function setClipGain(project: Project, clipId: ClipId, gain: number): Pro
  */
 export function toggleMute(project: Project, clipId: ClipId): Project {
   const found = findClip(project, clipId)
-  if (!found || found.lane !== 'audio') return project
-  const next = laneOf(project, found.lane).slice()
-  next[found.index] = { ...next[found.index]!, muted: !next[found.index]!.muted }
-  return { ...project, [found.lane]: next } as Project
+  if (!found) return project
+  const trackType = trackTypeById(project, found.trackId)
+  if (trackType !== 'audio') return project
+  const tracks = project.tracks.map((track) => {
+    if (track.id !== found.trackId) return track
+    const next = track.clips.slice()
+    next[found.index] = { ...next[found.index]!, muted: !next[found.index]!.muted }
+    return { ...track, clips: next }
+  })
+  return { ...project, tracks }
 }
 
 /**
  * Hide or show a clip: black picture, sound untouched.
  *
- * **Video lane only**, for the same reason `toggleMute` is audio-only. What it
+ * **Video track only**, for the same reason `toggleMute` is audio-only. What it
  * costs to be lax here is higher, though: a `hidden` flag that reached the
  * exporter would write a black run into somebody's file.
  *
@@ -1039,10 +1219,16 @@ export function toggleMute(project: Project, clipId: ClipId): Project {
  */
 export function toggleHidden(project: Project, clipId: ClipId): Project {
   const found = findClip(project, clipId)
-  if (!found || found.lane !== 'video') return project
-  const next = laneOf(project, found.lane).slice()
-  next[found.index] = { ...next[found.index]!, hidden: !next[found.index]!.hidden }
-  return { ...project, [found.lane]: next } as Project
+  if (!found) return project
+  const trackType = trackTypeById(project, found.trackId)
+  if (trackType !== 'video') return project
+  const tracks = project.tracks.map((track) => {
+    if (track.id !== found.trackId) return track
+    const next = track.clips.slice()
+    next[found.index] = { ...next[found.index]!, hidden: !next[found.index]!.hidden }
+    return { ...track, clips: next }
+  })
+  return { ...project, tracks }
 }
 
 // ---------------------------------------------------------------------------
@@ -1050,7 +1236,14 @@ export function toggleHidden(project: Project, clipId: ClipId): Project {
 // ---------------------------------------------------------------------------
 
 export function emptyProject(): Project {
-  return { version: 2, assets: {}, video: [], audio: [] }
+  return {
+    version: 3,
+    assets: {},
+    tracks: [
+      { id: 'video', type: 'video', clips: [] },
+      { id: 'audio', type: 'audio', clips: [] },
+    ],
+  }
 }
 
 /**
@@ -1062,19 +1255,23 @@ export function parseProject(text: string): Project {
   if (typeof data !== 'object' || data === null) throw new Error('Project is not an object')
   const p = data as Partial<Project>
 
-  if (p.version !== 2) {
+  if (p.version !== 3) {
     throw new Error(
-      p.version === 1
-        ? 'This project was saved before the two-lane format and cannot be opened.'
+      p.version === 2
+        ? 'This project was saved before the multi-track format and cannot be opened.'
         : `Unsupported project version: ${String(p.version)}`,
     )
   }
   if (typeof p.assets !== 'object' || p.assets === null) throw new Error('Project has no assets map')
-  if (!Array.isArray(p.video) || !Array.isArray(p.audio)) throw new Error('Project must have a video and an audio lane')
+  if (!Array.isArray(p.tracks)) throw new Error('Project must have a tracks array')
 
-  for (const [lane, clips] of [['video', p.video], ['audio', p.audio]] as const) {
-    for (const clip of clips) {
-      if (typeof clip.id !== 'string') throw new Error(`A ${lane} clip is missing its id`)
+  for (const track of p.tracks) {
+    if (typeof track.id !== 'string') throw new Error('A track is missing its id')
+    if (track.type !== 'video' && track.type !== 'audio') throw new Error(`Track ${track.id} has invalid type`)
+    if (!Array.isArray(track.clips)) throw new Error(`Track ${track.id} has no clips array`)
+    for (const clip of track.clips) {
+      if (typeof clip.id !== 'string') throw new Error(`A clip in track ${track.id} is missing its id`)
+      if (typeof clip.trackId !== 'string') throw new Error(`Clip ${clip.id} missing trackId`)
       if (typeof clip.assetId !== 'string') throw new Error(`Clip ${clip.id} missing assetId`)
       if (typeof clip.in !== 'number' || typeof clip.out !== 'number') {
         throw new Error(`Clip ${clip.id} has non-numeric in/out`)
@@ -1083,10 +1280,9 @@ export function parseProject(text: string): Project {
   }
 
   return {
-    version: 2,
+    version: 3,
     assets: p.assets,
-    video: p.video,
-    audio: p.audio,
+    tracks: p.tracks,
     ...(p.captions ? { captions: p.captions } : {}),
   }
 }

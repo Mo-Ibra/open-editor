@@ -193,10 +193,9 @@ export function App() {
   })
 
   // Cached frames belong to the media they were decoded from, so any change to
-  // the lanes invalidates the cache.
+  // the tracks invalidates the cache.
   createEffect(() => {
-    state.project.video
-    state.project.audio
+    state.project.tracks
     state.frameCache.clear()
   })
 
@@ -332,7 +331,7 @@ function TopBar(props: {
 
       <div class="flex min-w-0 items-center gap-3 text-muted">
         <span class="timecode text-mini">
-          {state.project.video.length} video · {state.project.audio.length} audio
+          {state.videoClipCount()} video · {state.audioClipCount()} audio
         </span>
         <Show when={state.canUndo()}>
           <span class="rounded-full border border-line bg-raised px-1.5 py-px text-tiny">edited</span>
@@ -359,8 +358,8 @@ function TopBar(props: {
         <button
           class="btn btn-primary"
           onClick={props.onExport}
-          disabled={!state.project.video.length}
-          title={state.project.video.length ? 'Export the timeline' : 'Add a video clip first'}
+          disabled={!state.videoClipCount()}
+          title={state.videoClipCount() ? 'Export the timeline' : 'Add a video clip first'}
         >
           <Download size={13} /> Export
         </button>
@@ -387,7 +386,7 @@ function StatusFooter(props: { state: AppState; pictureHidden: () => boolean }) 
 
       <span class="text-line">|</span>
       <span>
-        {state.project.video.length} video · {state.project.audio.length} audio
+        {state.videoClipCount()} video · {state.audioClipCount()} audio
       </span>
 
       <Show when={state.selectionCount() > 0}>

@@ -2,16 +2,16 @@
  * The project store survives an edit.
  *
  * This is a regression test for a bug that cost a whole media library and was
- * invisible in every other test: `setProject` was changed from a plain two-key
- * set to `setProject(reconcile(next))`, and `reconcile` sets any store key the
- * target does not mention to `undefined`. Since the target was only
- * `{ video, audio }`, every edit silently wiped `project.assets`.
+ * invisible in every other test: `setProject` was changed from a plain
+ * single-key set to `setProject(reconcile(next))`, and `reconcile` sets any
+ * store key the target does not mention to `undefined`. Since an edit only
+ * produced `{ tracks }`, every edit silently wiped `project.assets`.
  *
  * The failure surfaced as `Cannot read properties of undefined (reading
  * 'ast_…')` — an asset id read out of a store that no longer had an `assets`
  * key at all. The file on disk was fine; the pointer to it was gone.
  *
- * The fix is `applyLanes`, which does a plain set. This test pins the
+ * The fix is `applyTracks`, which does a plain set. This test pins the
  * behaviour, and also pins *why*, so the next person to "optimise" it with
  * `reconcile` finds out immediately.
  */
@@ -20,8 +20,8 @@ import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
 import { createStore } from 'solid-js/store'
 
-import { applyLanes, type Lanes } from '../src/model/project-store.ts'
-import { emptyProject, splitLinked, removeClip, type Asset, type Project } from '../src/model/project.ts'
+import { applyTracks, type Tracks } from '../src/model/project-store.ts'
+import { emptyProject, splitLinked, removeClip, type Asset, type Clip, type Project } from '../src/model/project.ts'
 
 const asset: Asset = {
   id: 'ast_7fdu42uz',
@@ -47,17 +47,19 @@ function freshStore() {
     assets: { [asset.id]: asset },
   })
   // The exact shape state.ts uses for every edit.
-  const edit = (lanes: Lanes) => applyLanes((value) => setProject(value), lanes, () => undefined)
+  const edit = (tracks: Tracks) => applyTracks((value) => setProject('tracks', value), tracks, () => undefined)
   return { project, setProject, edit }
 }
 
 /** A video clip on the timeline, for seeding. */
-const vclip = (id: string, out = 10) => ({ id, lane: 'video' as const, assetId: asset.id, in: 0, out })
+const vclip = (id: string, out = 10): Clip => ({ id, trackId: 'video', assetId: asset.id, in: 0, out })
+
+const videoClips = (p: Project): Clip[] => p.tracks.find((t) => t.type === 'video')?.clips ?? []
 
 test('an edit leaves the asset library intact', () => {
   const { project, edit } = freshStore()
 
-  edit({ video: [vclip('a')], audio: [] })
+  edit(project.tracks.map((t) => (t.type === 'video' ? { ...t, clips: [vclip('a')] } : t)))
 
   assert.ok(project.assets, 'project.assets must still be an object after an edit')
   assert.equal(project.assets[asset.id]?.name, 'clip.mp4')
@@ -68,7 +70,7 @@ test('the asset is still reachable by the id the library handed out', () => {
   // The exact expression that threw in the browser.
   const { project, edit } = freshStore()
 
-  edit({ video: [vclip('a')], audio: [] })
+  edit(project.tracks.map((t) => (t.type === 'video' ? { ...t, clips: [vclip('a')] } : t)))
 
   assert.equal(project.assets['ast_7fdu42uz']?.id, 'ast_7fdu42uz')
 })
@@ -76,56 +78,55 @@ test('the asset is still reachable by the id the library handed out', () => {
 test('a real edit — splitting a clip — keeps the library', () => {
   const { project, edit } = freshStore()
   // Seed one clip through the same path an import would use.
-  edit({ video: [vclip('a')], audio: [] })
+  edit(project.tracks.map((t) => (t.type === 'video' ? { ...t, clips: [vclip('a')] } : t)))
 
-  const split = splitLinked({ ...project, video: [...project.video] } as Project, 'video', 0, 4)
-  edit({ video: split.video, audio: split.audio })
+  const split = splitLinked({ ...project, tracks: project.tracks.map((t) => ({ ...t, clips: [...t.clips] })) }, 'video', 0, 4)
+  edit(split.tracks)
 
-  assert.equal(project.video.length, 2, 'the split happened')
+  assert.equal(videoClips(project).length, 2, 'the split happened')
   assert.equal(project.assets[asset.id]?.name, 'clip.mp4', 'and the library survived it')
 })
 
 test('deleting a clip keeps the library', () => {
   const { project, edit } = freshStore()
-  edit({ video: [vclip('a'), vclip('b')], audio: [] })
+  edit(project.tracks.map((t) => (t.type === 'video' ? { ...t, clips: [vclip('a'), vclip('b')] } : t)))
 
-  const after = removeClip({ ...project, video: [...project.video] } as Project, 'video', 0)
-  edit({ video: after.video, audio: after.audio })
+  const after = removeClip({ ...project, tracks: project.tracks.map((t) => ({ ...t, clips: [...t.clips] })) }, 'video', 0)
+  edit(after.tracks)
 
-  assert.equal(project.video.length, 1)
+  assert.equal(videoClips(project).length, 1)
   assert.equal(project.assets[asset.id]?.name, 'clip.mp4')
 })
 
-test('the write is a plain set: no key outside the lanes is touched', () => {
-  // Guards the fix directly. If someone swaps `applyLanes` for `reconcile`,
-  // this fails even if the other tests happen to pass.
-  const writes: unknown[] = []
-  const project = { ...emptyProject(), assets: { [asset.id]: asset } }
+test('the write is a plain set: one value, one call', () => {
+  // Guards the fix directly. If someone swaps the plain set for `reconcile`,
+  // the setter receives a recipe function instead of the exact tracks value,
+  // and this fails even if the other tests happen to pass.
+  const calls: unknown[] = []
+  const tracks: Tracks = []
 
-  applyLanes(
-    (lanes) => writes.push(Object.keys(lanes).sort()),
-    { video: [], audio: [] },
+  applyTracks(
+    (value) => calls.push(value),
+    tracks,
     () => undefined,
   )
 
-  assert.deepEqual(writes, [['audio', 'video']], 'only the two lanes are ever written')
-  assert.ok(project.assets[asset.id])
+  assert.equal(calls.length, 1, 'a single write, so a single notification')
+  assert.equal(calls[0], tracks, 'the exact value handed through, not a merge of it')
 })
 
 test('the post-write hook runs after the write, not before', () => {
   // pruneSelection reads the project to see which clips still exist. If it ran
   // first it would prune against the previous project and keep dead ids.
   const order: string[] = []
-  const store = { video: [], audio: [], assets: {} }
 
-  applyLanes(
+  applyTracks(
     () => {
       order.push('write')
     },
-    { video: [], audio: [] },
+    [],
     () => {
       order.push('prune')
-      void store
     },
   )
 

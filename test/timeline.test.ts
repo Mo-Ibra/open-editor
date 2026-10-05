@@ -154,27 +154,36 @@ test('shift wins over ctrl when both are held', () => {
 
 const c = (id: string, o: number, extra: Partial<Clip> = {}): Clip => ({
   id,
-  lane: 'video',
+  trackId: 'video',
   assetId: 'a',
   in: 0,
   out: o,
   ...extra,
 })
 
-const projectOf = (video: Clip[]): Project => ({ version: 2, assets: {}, video, audio: [] })
+const projectOf = (video: Clip[]): Project => ({
+  version: 3,
+  assets: {},
+  tracks: [
+    { id: 'video', type: 'video', clips: video },
+    { id: 'audio', type: 'audio', clips: [] },
+  ],
+})
+/** The video clips of a project built here — the only track these tests write. */
+const vclips = (p: Project): Clip[] => p.tracks.find((t) => t.type === 'video')!.clips
 const startOf = (clips: Clip[], id: string): number => clipStart(clips, clips.findIndex((x) => x.id === id))
 
 test('a clip dragged into free space lands where the pointer says', () => {
   // A(0–10)  B(10–12)  [gap]  C(18–28)
   const p = projectOf([c('A', 10), c('B', 2), c('C', 10, { offset: 8 })])
-  const out = placeClip(p, 'video', 2, 21).video
+  const out = vclips(placeClip(p, 'video', 2, 21))
   assert.equal(clipStart(out, 2), 21)
 })
 
 test('a clip dragged left stops at its predecessor and never crosses it', () => {
   const p = projectOf([c('A', 10), c('B', 10)])
   // Drag B's head from 10 deep into A.
-  const out = placeClip(p, 'video', 1, 4).video
+  const out = vclips(placeClip(p, 'video', 1, 4))
   assert.equal(startOf(out, 'A'), 0, 'A did not move')
   assert.equal(startOf(out, 'B'), 10, 'B stopped against A rather than swapping past it')
   assert.deepEqual(out.map((x) => x.id), ['A', 'B'], 'no reorder happened')
@@ -182,19 +191,19 @@ test('a clip dragged left stops at its predecessor and never crosses it', () => 
 
 test('a clip at the head of the lane cannot be dragged before zero', () => {
   const p = projectOf([c('A', 10)])
-  const out = placeClip(p, 'video', 0, -4).video
+  const out = vclips(placeClip(p, 'video', 0, -4))
   assert.equal(clipStart(out, 0), 0)
 })
 
 test('dragging a clip right leaves the clip after it where it is', () => {
   // A gap ahead: the clip moves into it and the next clip does not move.
   const p = projectOf([c('A', 10), c('B', 10, { offset: 10 })]) // A 0–10, B 20–30
-  const out = placeClip(p, 'video', 0, 3).video
+  const out = vclips(placeClip(p, 'video', 0, 3))
   assert.equal(startOf(out, 'A'), 3, 'A moved into the gap')
   assert.equal(startOf(out, 'B'), 20, 'B stayed put')
 
   // No gap: A cannot move right without overlapping B, so it is blocked.
-  const blocked = placeClip(projectOf([c('A', 10), c('B', 10)]), 'video', 0, 3).video
+  const blocked = vclips(placeClip(projectOf([c('A', 10), c('B', 10)]), 'video', 0, 3))
   assert.equal(startOf(blocked, 'A'), 0, 'A is walled in by B')
   assert.equal(startOf(blocked, 'B'), 10, 'and B is untouched')
 })
@@ -203,12 +212,12 @@ test('dragging the left half of a cut leaves the right half still', () => {
   // The user's report: piece 1 pulled piece 2. A move now pins the successor.
   const p = projectOf([c('P1', 10), c('P2', 10)]) // P1 0–10, P2 10–20
   // Move P1 right as far as it can go; P2 must not move.
-  const right = placeClip(p, 'video', 0, 5).video
+  const right = vclips(placeClip(p, 'video', 0, 5))
   assert.equal(startOf(right, 'P1'), 0, 'P1 cannot overlap P2, so it stops')
   assert.equal(startOf(right, 'P2'), 10, 'P2 did not follow')
   // Give P2 a trailing gap and it is still pinned.
   const withGap = projectOf([c('P1', 10), c('P2', 10, { offset: 4 })]) // P2 at 14
-  const moved = placeClip(withGap, 'video', 0, 3).video
+  const moved = vclips(placeClip(withGap, 'video', 0, 3))
   assert.equal(startOf(moved, 'P1'), 3, 'P1 moved into the gap')
   assert.equal(startOf(moved, 'P2'), 14, 'P2 stayed exactly where it was')
 })
@@ -216,8 +225,8 @@ test('dragging the left half of a cut leaves the right half still', () => {
 test('a clip dragged toward a gap stops at the clip in front, not inside the gap', () => {
   // A(0–10)  gap  B(20–30). B may move left within the gap, but not past A.
   const p = projectOf([c('A', 10), c('B', 10, { offset: 10 })])
-  assert.equal(startOf(placeClip(p, 'video', 1, 15).video, 'B'), 15, 'it may sit in the gap')
-  assert.equal(startOf(placeClip(p, 'video', 1, 4).video, 'B'), 10, 'but it cannot pass A')
+  assert.equal(startOf(vclips(placeClip(p, 'video', 1, 15)), 'B'), 15, 'it may sit in the gap')
+  assert.equal(startOf(vclips(placeClip(p, 'video', 1, 4)), 'B'), 10, 'but it cannot pass A')
 })
 
 // --- a single-clip move does not vibrate ------------------------------------
@@ -232,8 +241,15 @@ test('a clip dragged toward a gap stops at the clip in front, not inside the gap
 // clip never moves backwards while the pointer advances.
 
 test('a snapped single-clip move tracks the pointer without vibrating', () => {
-  const c = (id: string, i: number, o: number): Clip => ({ id, lane: 'video', assetId: 'a', in: i, out: o })
-  const project = (video: Clip[]): Project => ({ version: 2, assets: {}, video, audio: [] })
+  const c = (id: string, i: number, o: number): Clip => ({ id, trackId: 'video', assetId: 'a', in: i, out: o })
+  const project = (video: Clip[]): Project => ({
+    version: 3,
+    assets: {},
+    tracks: [
+      { id: 'video', type: 'video', clips: video },
+      { id: 'audio', type: 'audio', clips: [] },
+    ],
+  })
 
   let clips = [c('A', 0, 4), c('B', 0, 4)] // A 0–4, B 4–8
   // Grabbed by its head, so the pointer position *is* the desired start.
@@ -241,7 +257,7 @@ test('a snapped single-clip move tracks the pointer without vibrating', () => {
   const snapTargets = collectTargets(project(clips), {
     playhead: 0,
     includePlayhead: false,
-    lanes: ['video'],
+    tracks: ['video'],
   }).filter((t) => t.clipId !== 'B') // the dragged clip is never a target for itself
 
   let locked = null
@@ -258,7 +274,7 @@ test('a snapped single-clip move tracks the pointer without vibrating', () => {
       locked = null
     }
 
-    clips = placeClip(project(clips), 'video', 1, start).video
+    clips = vclips(placeClip(project(clips), 'video', 1, start))
 
     const now = clipStart(clips, 1)
     assert.ok(now >= last - 1e-9, `at px=${px.toFixed(2)} the clip moved backwards: ${last} → ${now}`)

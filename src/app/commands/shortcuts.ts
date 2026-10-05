@@ -15,6 +15,7 @@ import type { AppState } from '../store/state.js'
 import type { Shortcut } from './keyboard.js'
 import type { LayoutState } from '../store/layout.js'
 import type { Fullscreen } from '../view/shell/fullscreen.js'
+import { trackTypeById } from '../../model/project.js'
 import { shouldSuppressNativeMenu } from '../view/ui/ContextMenu.js'
 
 export interface ShortcutContext {
@@ -46,15 +47,15 @@ export function createShortcuts({
   importProject,
   openMedia,
 }: ShortcutContext): Shortcut[] {
-  const hasClips = (): boolean => state.project.video.length > 0 || state.project.audio.length > 0
+  const hasClips = (): boolean => state.project.tracks.some((t) => t.clips.length > 0)
   const hasSelection = (): boolean => state.selectionCount() > 0
 
   /** What `M` will do to the current selection, in the legend's own words. */
   const muteLabel = (): string => {
     const clips = state.selectedClips()
     if (clips.length === 0) return 'mute all'
-    const audio = clips.filter((c) => c.lane === 'audio')
-    const video = clips.filter((c) => c.lane === 'video')
+    const audio = clips.filter((c) => trackTypeById(state.project, c.trackId) === 'audio')
+    const video = clips.filter((c) => trackTypeById(state.project, c.trackId) === 'video')
     if (video.length === 0) return audio.every((c) => c.muted) ? 'unmute selection' : 'mute selection'
     if (audio.length === 0) return video.every((c) => c.hidden) ? 'show picture' : 'hide picture'
     return 'mute and hide selection'

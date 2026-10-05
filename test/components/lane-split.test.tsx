@@ -49,17 +49,19 @@ const boxes = (container: HTMLElement) =>
   })
 
 const lane = (state: ReturnType<typeof createAppState>) => (
-  <Lane lane="video" label="v" state={state} height={80} dropAt={() => null} setDropAt={() => {}} trackLeft={() => 0} />
+  <Lane trackId="video" type="video" label="v" state={state} height={80} dropAt={() => null} setDropAt={() => {}} trackLeft={() => 0} />
 )
 
 describe('Lane handles a split', () => {
   it('draws the two halves flush, for a linked pair', async () => {
     const state = createAppState()
     await seed(state, {
-      version: 2,
+      version: 3,
       assets: { a: asset },
-      video: [{ id: 'v1', lane: 'video', assetId: 'a', in: 0, out: 20, linkId: 'L' }],
-      audio: [{ id: 'a1', lane: 'audio', assetId: 'a', in: 0, out: 20, linkId: 'L' }],
+      tracks: [
+        { id: 'video', type: 'video', clips: [{ id: 'v1', trackId: 'video', assetId: 'a', in: 0, out: 20, linkId: 'L' }] },
+        { id: 'audio', type: 'audio', clips: [{ id: 'a1', trackId: 'audio', assetId: 'a', in: 0, out: 20, linkId: 'L' }] },
+      ],
     })
     state.setZoom(80)
 
@@ -74,7 +76,7 @@ describe('Lane handles a split', () => {
       { left: '400px', width: '1200px' },
     ])
     // And the sound follows, which was the other half of the cutting bug.
-    expect(state.project.audio.length).toBe(2)
+    expect(state.project.tracks.find((t) => t.type === 'audio')!.clips.length).toBe(2)
   })
 
   it('still tracks positions after the lane remounts', async () => {
@@ -85,10 +87,12 @@ describe('Lane handles a split', () => {
     // layout's position: a fixed gap.
     const state = createAppState()
     await seed(state, {
-      version: 2,
+      version: 3,
       assets: { a: asset },
-      video: [{ id: 'v1', lane: 'video', assetId: 'a', in: 0, out: 20 }],
-      audio: [],
+      tracks: [
+        { id: 'video', type: 'video', clips: [{ id: 'v1', trackId: 'video', assetId: 'a', in: 0, out: 20 }] },
+        { id: 'audio', type: 'audio', clips: [] },
+      ],
     })
     state.setZoom(80)
 
@@ -110,11 +114,13 @@ describe('Lane handles a split', () => {
   it('keeps the leading gap where it was, and adds none', async () => {
     const state = createAppState()
     await seed(state, {
-      version: 2,
+      version: 3,
       assets: { a: asset },
-      // 5s of deliberate silence, then a 20s clip.
-      video: [{ id: 'v1', lane: 'video', assetId: 'a', in: 0, out: 20, offset: 5 }],
-      audio: [],
+      tracks: [
+        // 5s of deliberate silence, then a 20s clip.
+        { id: 'video', type: 'video', clips: [{ id: 'v1', trackId: 'video', assetId: 'a', in: 0, out: 20, offset: 5 }] },
+        { id: 'audio', type: 'audio', clips: [] },
+      ],
     })
     state.setZoom(80)
 
