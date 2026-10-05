@@ -57,7 +57,9 @@ class ImageFrameSource implements FrameSource {
   #frame(): Promise<HTMLCanvasElement> {
     if (this.#canvas) return Promise.resolve(this.#canvas)
     this.#decoding ??= (async () => {
-      const bitmap = await createImageBitmap(this.#file)
+      // `from-image` honours EXIF orientation, so a phone photo comes in upright
+      // instead of sideways (and its width/height match what is drawn).
+      const bitmap = await createImageBitmap(this.#file, { imageOrientation: 'from-image' })
       const canvas = document.createElement('canvas')
       canvas.width = bitmap.width
       canvas.height = bitmap.height

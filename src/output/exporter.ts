@@ -493,7 +493,7 @@ export class Exporter {
               ctx,
               { image: wrapped.canvas, width: wrapped.canvas.width, height: wrapped.canvas.height },
               clip,
-              renderOptions,
+              entry!.asset.isImage ? { ...renderOptions, fit: 'cover' } : renderOptions,
             )
           } else {
             renderBlank(ctx, renderOptions)

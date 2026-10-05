@@ -20,10 +20,33 @@ export interface RenderClip {
   transform?: ClipTransform
 }
 
+/**
+ * How a source is scaled into the output.
+ *
+ * `contain` (the default) fits the whole source inside the frame, letterboxing
+ * the remainder. `cover` fills the frame and crops the overflow. Stills use
+ * `cover`, because a photograph that is not the sequence's aspect otherwise
+ * sits as a small strip in the middle of a much larger canvas.
+ */
+export type RenderFit = 'contain' | 'cover'
+
 export interface RenderOptions {
   width: number
   height: number
   background?: string
+  fit?: RenderFit
+}
+
+/** The single place the source is scaled: contain letterboxes, cover crops. */
+function frameScale(
+  source: { width: number; height: number },
+  options: RenderOptions,
+): number {
+  const horizontal = options.width / source.width
+  const vertical = options.height / source.height
+  return (options.fit ?? 'contain') === 'cover'
+    ? Math.max(horizontal, vertical)
+    : Math.min(horizontal, vertical)
 }
 
 /** A source image plus its intrinsic size. */
@@ -40,10 +63,11 @@ export interface SourceImage {
  * are applied by the media layer when the frame is produced, so that preview
  * and export cannot disagree about them. See `src/library.ts`.
  *
- * Geometry: the source is fitted (letterboxed, never cropped) into the output,
- * then the clip transform is applied about the centre of the output. A scale
- * above 1 therefore zooms in on the centre of the frame, which is the only
- * interpretation a user ever wants from "zoom".
+ * Geometry: the source is scaled into the output — letterboxed (`contain`, the
+ * default) or cropped (`cover`, for stills) — then the clip transform is
+ * applied about the centre of the output. A scale above 1 therefore zooms in on
+ * the centre of the frame, which is the only interpretation a user ever wants
+ * from "zoom".
  */
 export function renderFrame(
   ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
@@ -57,7 +81,7 @@ export function renderFrame(
   ctx.fillStyle = background
   ctx.fillRect(0, 0, width, height)
 
-  const fit = Math.min(width / source.width, height / source.height)
+  const fit = frameScale(source, options)
   const drawWidth = source.width * fit
   const drawHeight = source.height * fit
 
@@ -92,7 +116,7 @@ export function fitRect(
   source: { width: number; height: number },
   options: RenderOptions,
 ): { x: number; y: number; width: number; height: number } {
-  const fit = Math.min(options.width / source.width, options.height / source.height)
+  const fit = frameScale(source, options)
   const width = source.width * fit
   const height = source.height * fit
   return { x: (options.width - width) / 2, y: (options.height - height) / 2, width, height }

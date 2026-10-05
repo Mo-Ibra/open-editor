@@ -344,18 +344,19 @@ export function Preview(props: {
       })
   }
 
-  function paint(
-    canvasLike: HTMLCanvasElement | OffscreenCanvas,
-    clip: { transform?: { scale: number; x: number; y: number } },
-  ): void {
+  function paint(canvasLike: HTMLCanvasElement | OffscreenCanvas, clip: Clip): void {
     const source: SourceImage = { image: canvasLike, width: canvasLike.width, height: canvasLike.height }
     if (source.width === 0 || source.height === 0) {
       explain(`decoded frame has no pixels (${source.width}x${source.height})`)
       return
     }
     const viewport = options()
-    const fit = Math.min(viewport.width / source.width, viewport.height / source.height)
-    renderFrame(context(), source, clip, viewport)
+    // A still fills the frame; a video keeps its own aspect inside it.
+    const fit = state.getAsset(clip.assetId)?.isImage ? 'cover' : 'contain'
+    const fitScale = fit === 'cover'
+      ? Math.max(viewport.width / source.width, viewport.height / source.height)
+      : Math.min(viewport.width / source.width, viewport.height / source.height)
+    renderFrame(context(), source, clip, { ...viewport, fit })
 
     // Measure what actually landed on the canvas.
     //
@@ -366,7 +367,7 @@ export function Preview(props: {
     const stats = diagnostics.sample(viewport.width, viewport.height)
     log.debug(
       `paint ${source.width}x${source.height} → ${viewport.width}x${viewport.height} ` +
-        `fit=${fit.toFixed(4)} draw=${(source.width * fit).toFixed(0)}x${(source.height * fit).toFixed(0)} ` +
+        `fit=${fit} ${fitScale.toFixed(4)} draw=${(source.width * fitScale).toFixed(0)}x${(source.height * fitScale).toFixed(0)} ` +
         `luma max=${stats.max} mean=${stats.mean}`,
     )
     lastLuma = stats
