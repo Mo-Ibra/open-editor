@@ -175,9 +175,14 @@ export function Preview(props: {
     // inflating the paint counter with work nobody can see. The health check
     // calls this state out rather than treating it as a fault.
     //
+    if (props.layout.pictureHidden()) {
+      paintedAt = t
+      return
+    }
+
     // `!canvas` covers the hidden-at-startup case: the `<Show>` never rendered
     // the stage, so the ref never ran and `context()` would throw instead.
-    if (props.layout.pictureHidden() || !canvas) {
+    if (!canvas) {
       paintedAt = t
       return
     }

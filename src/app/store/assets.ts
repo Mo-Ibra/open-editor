@@ -36,6 +36,7 @@ import type { History } from './history.js'
 
 /** One line saying what an asset is, for the import notice and the bin. */
 function describe(asset: Asset): string {
+  if (asset.isImage) return `${asset.width}×${asset.height} image · ${Math.round(asset.duration * 100) / 100}s`
   const kind = asset.hasVideo ? `${asset.width}×${asset.height}` : 'audio only'
   const sound = asset.hasAudio
     ? asset.hasVideo

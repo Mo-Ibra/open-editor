@@ -46,6 +46,14 @@ export interface Asset {
    *  than no clip. */
   hasVideo: boolean
   hasAudio: boolean
+  /**
+   * True for a still image. It has a picture (`hasVideo: true`) but no decoder
+   * and no inherent length — `duration` is a fixed default the editor assigns,
+   * and the library hands the preview and export a single decoded frame for
+   * any source time. Absent (undefined) on everything imported before images
+   * existed, which is the same as false.
+   */
+  isImage?: boolean
   audioSampleRate: number
   audioChannels: number
   videoCodec: string | null

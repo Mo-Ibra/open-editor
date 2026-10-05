@@ -28,7 +28,7 @@ export function AssetBin(props: { state: AppState; menu: ContextMenuState; layou
   const state = props.state
   let input!: HTMLInputElement
   const [query, setQuery] = createSignal('')
-  const [kind, setKind] = createSignal<'all' | 'video' | 'audio'>('all')
+  const [kind, setKind] = createSignal<'all' | 'video' | 'audio' | 'image'>('all')
 
   const allIds = () => state.assetIds()
 
@@ -39,8 +39,14 @@ export function AssetBin(props: { state: AppState; menu: ContextMenuState; layou
     return allIds().filter((id) => {
       const asset = state.getAsset(id)
       if (!asset) return false
-      if (filter === 'video' && !asset.hasVideo) return false
-      if (filter === 'audio' && !asset.hasAudio) return false
+      // A file's *kind* is the tab it belongs to, and it belongs to exactly
+      // one. Testing `hasAudio` for the audio tab listed every talking-head
+      // video as well, because a video clip has sound; the audio tab means
+      // audio-only sources. Video means everything with a picture that is not
+      // a still, and image means a still.
+      if (filter === 'video' && (!asset.hasVideo || asset.isImage)) return false
+      if (filter === 'audio' && !(asset.hasAudio && !asset.hasVideo)) return false
+      if (filter === 'image' && !asset.isImage) return false
       if (q && !asset.name.toLowerCase().includes(q)) return false
       return true
     })
@@ -86,7 +92,7 @@ export function AssetBin(props: { state: AppState; menu: ContextMenuState; layou
         <input
           ref={input}
           type="file"
-          accept="video/*,audio/*"
+          accept="video/*,audio/*,image/*"
           multiple
           hidden
           onChange={(e) => {
@@ -109,7 +115,7 @@ export function AssetBin(props: { state: AppState; menu: ContextMenuState; layou
             />
           </label>
           <div class="flex shrink-0 items-center rounded-md border border-line bg-raised p-0.5">
-            <For each={['all', 'video', 'audio'] as const}>
+            <For each={['all', 'video', 'audio', 'image'] as const}>
               {(k) => (
                 <button
                   class="rounded px-1.5 py-0.5 text-tiny font-medium capitalize transition-colors"
@@ -292,7 +298,8 @@ function Thumbnail(props: { state: AppState; assetId: string; asset: Asset }) {
     <span
       class="relative grid h-7 w-12 shrink-0 place-items-center overflow-hidden rounded-[5px]"
       classList={{
-        'bg-[#1e3a63] text-[#8fb6ff]': props.asset.hasVideo,
+        'bg-[#3b2f63] text-[#c3b0ff]': props.asset.isImage,
+        'bg-[#1e3a63] text-[#8fb6ff]': !!props.asset.hasVideo && !props.asset.isImage,
         'bg-[#14402f] text-[#6fd39a]': !props.asset.hasVideo,
       }}
     >
@@ -302,7 +309,10 @@ function Thumbnail(props: { state: AppState; assetId: string; asset: Asset }) {
       <Show when={!props.asset.hasVideo}>
         <span class="text-tiny font-bold">A</span>
       </Show>
-      <Show when={props.asset.hasVideo && !thumb()}>
+      <Show when={props.asset.isImage && !thumb()}>
+        <span class="text-tiny font-bold">I</span>
+      </Show>
+      <Show when={props.asset.hasVideo && !props.asset.isImage && !thumb()}>
         <span class="text-tiny font-bold">V</span>
       </Show>
     </span>
@@ -313,6 +323,7 @@ function Thumbnail(props: { state: AppState; assetId: string; asset: Asset }) {
 function describe(asset: Asset): string {
   const duration = formatDuration(asset.duration)
   if (!asset.hasVideo) return `audio · ${duration}`
+  if (asset.isImage) return `image · ${asset.width}×${asset.height} · ${duration}`
   const fps = asset.variableFrameRate
     ? `vfr ~${asset.frameRate.toFixed(1)}`
     : `${asset.frameRate.toFixed(0)}fps`

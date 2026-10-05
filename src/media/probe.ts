@@ -22,17 +22,73 @@ import type { Asset, AssetId, Rotation } from '../model/project.js'
 import { newId } from '../model/project.js'
 import { log } from '../dev/debug.js'
 
+/**
+ * How long a still image occupies the timeline when it is dropped in.
+ *
+ * A number has to come from somewhere, and the file does not carry one. Five
+ * seconds is long enough to read a title card and short enough to trim without
+ * dragging; every still in the project can be retimed by dragging its clip.
+ */
+export const IMAGE_DURATION = 5
+
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp'])
+
+/**
+ * Whether a file should be treated as a still image.
+ *
+ * mediabunny only understands containers, so an image never reaches it. The
+ * MIME type is authoritative when the browser provides one; some drag sources
+ * hand over a blank type, so the extension is the fallback. SVG is deliberately
+ * excluded: `createImageBitmap` cannot decode it, so it would import and then
+ * never appear.
+ */
+export function isImageFile(file: File): boolean {
+  if (file.type === 'image/svg+xml') return false
+  if (file.type.startsWith('image/')) return true
+  const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
+  return IMAGE_EXTENSIONS.has(ext)
+}
+
 /** A probed file plus the live handles needed to decode it later. */
 export interface LoadedAsset {
   asset: Asset
   file: File
-  input: Input
+  /** Null for a still image — there is no container to read. */
+  input: Input | null
   /** Null when the file has no video, or the browser cannot decode it. */
   decodable: boolean
   reason: string | null
 }
 
 export async function loadAsset(file: File, id: AssetId = newId('ast')): Promise<LoadedAsset> {
+  if (isImageFile(file)) {
+    // Decode once to measure it. The library decodes again on demand for the
+    // frame itself; a still is cheap enough that caching the bitmap across the
+    // two would save less than it costs to keep alive.
+    const bitmap = await createImageBitmap(file)
+    const asset: Asset = {
+      id,
+      name: file.name,
+      duration: IMAGE_DURATION,
+      width: bitmap.width,
+      height: bitmap.height,
+      rotation: 0,
+      frameRate: 0,
+      variableFrameRate: false,
+      hasVideo: true,
+      hasAudio: false,
+      isImage: true,
+      audioSampleRate: 0,
+      audioChannels: 0,
+      videoCodec: 'image',
+      audioCodec: null,
+      size: file.size,
+    }
+    bitmap.close()
+    log.info('probed: image', { name: file.name, size: `${asset.width}x${asset.height}`, duration: asset.duration })
+    return { asset, file, input: null, decodable: true, reason: null }
+  }
+
   const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS })
 
   if (!(await input.canRead())) {

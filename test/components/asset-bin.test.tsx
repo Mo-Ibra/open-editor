@@ -15,10 +15,10 @@ import type { AppState } from '../../src/app/store/state.js'
 import type { ContextMenuState } from '../../src/app/view/ui/ContextMenu.js'
 import type { LayoutState } from '../../src/app/store/layout.js'
 
-const asset = (id: string, name: string): Asset => ({
+const asset = (id: string, name: string, extra: Partial<Asset> = {}): Asset => ({
   id, name, duration: 4, width: 1280, height: 720, rotation: 0, frameRate: 30,
   variableFrameRate: false, hasVideo: true, hasAudio: false, audioSampleRate: 48000,
-  audioChannels: 2, videoCodec: 'avc', audioCodec: null, size: 1000,
+  audioChannels: 2, videoCodec: 'avc', audioCodec: null, size: 1000, ...extra,
 })
 
 function fakeState(assets: Asset[]) {
@@ -59,5 +59,41 @@ describe('AssetBin', () => {
 
     fireEvent.click(container.querySelector('[aria-label="Remove from the project"]')!)
     expect(removed).toEqual(['a2'])
+  })
+
+  it('puts each file in exactly one kind: a talking-head is video, not audio', () => {
+    const { state } = fakeState([
+      asset('v1', 'talk.mp4', { hasVideo: true, hasAudio: true }),
+      asset('v2', 'silent.mp4', { hasVideo: true, hasAudio: false }),
+      asset('a1', 'music.mp3', { hasVideo: false, hasAudio: true, width: 0, height: 0 }),
+      asset('i1', 'logo.png', { isImage: true, hasAudio: false }),
+    ])
+    const { container } = render(() => (
+      <AssetBin state={state as unknown as AppState} menu={menu} layout={layout} />
+    ))
+    const text = (): string => container.textContent ?? ''
+    const tab = (label: string): Element =>
+      [...container.querySelectorAll('button')].find((b) => b.textContent?.trim() === label)!
+
+    fireEvent.click(tab('video'))
+    expect(text()).toContain('talk.mp4')
+    expect(text()).toContain('silent.mp4')
+    expect(text()).not.toContain('music.mp3')
+    expect(text()).not.toContain('logo.png')
+
+    fireEvent.click(tab('audio'))
+    expect(text()).toContain('music.mp3')
+    expect(text()).not.toContain('talk.mp4')
+    expect(text()).not.toContain('logo.png')
+
+    fireEvent.click(tab('image'))
+    expect(text()).toContain('logo.png')
+    expect(text()).not.toContain('talk.mp4')
+    expect(text()).not.toContain('music.mp3')
+
+    fireEvent.click(tab('all'))
+    expect(text()).toContain('talk.mp4')
+    expect(text()).toContain('music.mp3')
+    expect(text()).toContain('logo.png')
   })
 })

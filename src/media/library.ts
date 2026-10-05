@@ -6,17 +6,12 @@
  * has no opinion about it — `src/project.ts` knows nothing about mediabunny.
  */
 
-import { CanvasSink, Input, type InputAudioTrack, type InputVideoTrack, type InputFormat } from 'mediabunny'
 import {
-  AdtsInputFormat,
-  BlobSource,
-  FlacInputFormat,
-  MatroskaInputFormat,
-  Mp3InputFormat,
-  Mp4InputFormat,
-  MpegTsInputFormat,
-  OggInputFormat,
-  QuickTimeInputFormat,
+  CanvasSink,
+  Input,
+  type InputAudioTrack,
+  type InputVideoTrack,
+  type WrappedCanvas,
 } from 'mediabunny'
 import { loadAsset } from './probe.js'
 import { quickHash } from './quick-hash.js'
@@ -24,17 +19,77 @@ import type { Asset, AssetId } from '../model/project.js'
 import { newId } from '../model/project.js'
 import { log, tag } from '../dev/debug.js'
 
-// MP4 and MOV share a demuxer; MKV and WebM share another.
-const FORMATS: InputFormat[] = [
-  new Mp4InputFormat(),
-  new QuickTimeInputFormat(),
-  new MatroskaInputFormat(),
-  new OggInputFormat(),
-  new Mp3InputFormat(),
-  new FlacInputFormat(),
-  new AdtsInputFormat(),
-  new MpegTsInputFormat(),
-]
+/**
+ * What the preview, the thumbnails and the exporter need from a decoded
+ * source: a frame for a time.
+ *
+ * `CanvasSink` satisfies this for real video. A still image cannot use
+ * mediabunny at all, but it can satisfy the same two methods — so the type is
+ * an interface rather than `CanvasSink`, and an image rides the existing render
+ * path unchanged instead of every consumer learning about a second kind of
+ * source.
+ */
+export interface FrameSource {
+  getCanvas(timestamp: number): Promise<WrappedCanvas | null>
+  canvasesAtTimestamps(
+    timestamps: AsyncIterable<number> | Iterable<number>,
+  ): AsyncGenerator<WrappedCanvas | null, void, unknown>
+}
+
+/**
+ * A frame source for a still image.
+ *
+ * Decodes the file once, on first use, and then answers every timestamp with
+ * that same canvas. The reported duration is the image's timeline length, so
+ * the frame cache treats any time inside the clip as a hit.
+ */
+class ImageFrameSource implements FrameSource {
+  #canvas: HTMLCanvasElement | null = null
+  #decoding: Promise<HTMLCanvasElement> | null = null
+  #file: File
+  #duration: number
+
+  constructor(file: File, duration: number) {
+    this.#file = file
+    this.#duration = duration
+  }
+
+  #frame(): Promise<HTMLCanvasElement> {
+    if (this.#canvas) return Promise.resolve(this.#canvas)
+    this.#decoding ??= (async () => {
+      const bitmap = await createImageBitmap(this.#file)
+      const canvas = document.createElement('canvas')
+      canvas.width = bitmap.width
+      canvas.height = bitmap.height
+      const ctx = canvas.getContext('2d')
+      if (!ctx) {
+        bitmap.close()
+        throw new Error('A 2D canvas is not available, so the image cannot be shown.')
+      }
+      ctx.drawImage(bitmap, 0, 0)
+      bitmap.close()
+      this.#canvas = canvas
+      return canvas
+    })()
+    return this.#decoding
+  }
+
+  async getCanvas(timestamp: number): Promise<WrappedCanvas | null> {
+    if (timestamp < 0) return null
+    return { canvas: await this.#frame(), timestamp: 0, duration: this.#duration }
+  }
+
+  async *canvasesAtTimestamps(
+    timestamps: AsyncIterable<number> | Iterable<number>,
+  ): AsyncGenerator<WrappedCanvas | null, void, unknown> {
+    // Every requested timestamp gets the same frame; the value itself is
+    // irrelevant, only the count of requests matters.
+    for await (const timestamp of timestamps) {
+      void timestamp
+      yield { canvas: await this.#frame(), timestamp: 0, duration: this.#duration }
+    }
+  }
+}
 
 export interface LibraryEntry {
   asset: Asset
@@ -48,8 +103,8 @@ export interface LibraryEntry {
    * that can only compare names is a relink screen that guesses.
    */
   quickHash: string | null
-  /** Null when the browser cannot decode this file. */
-  videoSink: CanvasSink | null
+  /** Null when the browser cannot decode this file, or the file is audio-only. */
+  videoSink: FrameSource | null
   videoTrack: InputVideoTrack | null
   audioTrack: InputAudioTrack | null
   /** Set when the file loaded but cannot be decoded. */
@@ -94,20 +149,30 @@ export class MediaLibrary {
   async add(file: File, id?: string): Promise<LibraryEntry> {
     const done = tag('library')
     log.info(`add ${file.name} (${(file.size / 1e6).toFixed(2)} MB)`)
-    // The probe opens its own Input. Reuse that one rather than parsing the
-    // container twice — on a 12 MB file that is not free.
     const loaded = await loadAsset(file, id ?? newId('ast'))
-    const input = new Input({ source: new BlobSource(file), formats: FORMATS })
-    const videoTrack = await input.getPrimaryVideoTrack()
-    const audioTrack = await input.getPrimaryAudioTrack()
 
-    this.#inputs.set(loaded.asset.id, input)
+    let videoTrack: InputVideoTrack | null = null
+    let audioTrack: InputAudioTrack | null = null
+    let videoSink: FrameSource | null = null
+
+    if (loaded.asset.isImage) {
+      // No container to parse. One decoded frame answers every timestamp.
+      videoSink = new ImageFrameSource(file, loaded.asset.duration)
+    } else if (loaded.input) {
+      // Reuse the Input the probe already opened rather than parsing the
+      // container a second time — on a 12 MB file that is not free.
+      const input = loaded.input
+      this.#inputs.set(loaded.asset.id, input)
+      videoTrack = await input.getPrimaryVideoTrack()
+      audioTrack = await input.getPrimaryAudioTrack()
+      videoSink = videoTrack && loaded.decodable ? new CanvasSink(videoTrack) : null
+    }
 
     const entry: LibraryEntry = {
       quickHash: await quickHash(file),
       asset: loaded.asset,
       file,
-      videoSink: videoTrack && loaded.decodable ? new CanvasSink(videoTrack) : null,
+      videoSink,
       videoTrack,
       audioTrack,
       error: loaded.decodable ? null : (loaded.reason ?? 'unsupported codec'),
