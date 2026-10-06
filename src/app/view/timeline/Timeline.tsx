@@ -13,6 +13,7 @@ import type { ContextMenuState } from '../ui/ContextMenu.js'
 import { DND_ASSET, draggedAssetId } from '../media/AssetBin.js'
 import { Lane as LaneView, type DropPreview } from './Lane.js'
 import { Ruler } from './Ruler.js'
+import { TextLane } from './TextLane.js'
 import { ticks } from './ticks.js'
 import { TimelineScrollbar } from './TimelineScrollbar.js'
 import { Toolbar } from './Toolbar.js'
@@ -168,6 +169,8 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
           onPointerCancel={drag.onPointerUp}
         >
           <Ruler state={state} onDrop={onDropTrack} onDragOver={onDragOverTrack} />
+
+          <TextLane state={state} trackLeft={trackLeft} menu={props.menu} />
 
           <div class="pointer-events-none absolute inset-x-0 bottom-0 top-6 z-0">
             <For each={ticks(state.duration(), state.zoom())}>

@@ -9,7 +9,7 @@
  */
 
 import { Show } from 'solid-js'
-import { Copy, Crosshair, Magnet, Plus, Rows3, Scissors, Trash2, Unlink } from 'lucide-solid'
+import { Copy, Crosshair, Magnet, Plus, Rows3, Scissors, Trash2, Type, Unlink } from 'lucide-solid'
 import { trackTypeById } from '../../../model/project.js'
 import type { AppState } from '../../store/state.js'
 import type { LayoutState } from '../../store/layout.js'
@@ -118,6 +118,14 @@ export function Toolbar(props: { state: AppState; anyClips: () => boolean; layou
         title="Add an audio track below the existing ones, for another stream of sound"
       >
         <Plus size={13} /> audio
+      </button>
+      <button
+        class="btn"
+        classList={{ '!border-accent/50 !text-accent': state.hasActiveText() }}
+        onClick={() => state.addText()}
+        title="Add a title at the playhead. Drag it on the picture to place it, or in the text lane to time it"
+      >
+        <Type size={13} /> text
       </button>
 
       {/* Level is audio-only and hide is video-only. A level slider on a video

@@ -47,8 +47,11 @@ import { createEdits } from './edits.js'
 import { createHistory } from './history.js'
 import { createProjectStore } from './project-store.js'
 import { createSelection } from './selection.js'
+import { createTextEdits } from './text-edits.js'
 import { createTransport } from './transport.js'
 import { clampZoom, ZOOM_DEFAULT } from './zoom.js'
+
+import type { TextClip, TextId } from '../../model/text.js'
 
 export interface Notice {
   kind: 'info' | 'warn' | 'error'
@@ -80,6 +83,7 @@ export function createAppState() {
   }
 
   const sel = createSelection(project)
+  const [activeTextId, setActiveTextId] = createSignal<TextId | null>(null)
 
   const frameCache = new FrameCache()
   const audio = new AudioEngine({ library, onError: (message) => notify('error', message) })
@@ -101,6 +105,18 @@ export function createAppState() {
 
   const setTracks = (tracks: Project['tracks']): void => setProject(tracks)
 
+  /**
+   * Write the text overlays. A separate seam from `setTracks` because text
+   * lives outside the track model, but it marks dirty and clamps the playhead
+   * the same way, so removing a title can never leave the playhead past the
+   * (now shorter) timeline.
+   */
+  const setTexts = (texts: TextClip[]): void => {
+    applyProject('texts', texts)
+    projects.markDirty()
+    transport.clampPlayhead()
+  }
+
   function releaseLibrary(): void {
     library.clear()
   }
@@ -111,14 +127,25 @@ export function createAppState() {
     applyProject('tracks', next.tracks)
     if (next.captions === undefined) applyProject('captions', () => undefined)
     else applyProject('captions', next.captions)
+    if (next.texts === undefined) applyProject('texts', () => undefined)
+    else applyProject('texts', next.texts)
+    setActiveTextId(null)
     setAssetsRevision((n) => n + 1)
     transport.clampPlayhead()
   }
 
   const history = createHistory(
     project,
-    (tracks) => setTracks(tracks),
-    () => sel.clear(),
+    (doc) => {
+      setTracks(doc.tracks)
+      setTexts(doc.texts)
+    },
+    () => {
+      sel.clear()
+      // A reverted text no longer exists; leaving its id active would point
+      // the inspector at a ghost.
+      setActiveTextId(null)
+    },
   )
 
   // Tracks are structure, not clip edits, but they change through the same
@@ -243,6 +270,17 @@ export function createAppState() {
     setTransform: edits.setTransform,
   })
 
+  const textEdits = createTextEdits({
+    project,
+    history,
+    setTexts,
+    playhead: () => transport.playhead(),
+    selectionCount: sel.count,
+    deleteClips: () => edits.deleteSelected(),
+    activeTextId,
+    setActiveTextId,
+  })
+
   const clipStartsFor = (trackId: TrackId): number[] => clipStarts(trackById(project, trackId))
 
   const timeToX = (time: number) => time * zoom()
@@ -337,6 +375,22 @@ export function createAppState() {
     toggleHidden: edits.toggleHidden,
     breakSelectedLinks: edits.breakSelectedLinks,
     selectionHasLinks: edits.selectionHasLinks,
+
+    // --- text overlays -----------------------------------------------------
+    texts: textEdits.texts,
+    activeText: textEdits.activeText,
+    activeTextId: textEdits.activeTextId,
+    hasActiveText: textEdits.hasActiveText,
+    setActiveText: textEdits.setActiveText,
+    addText: textEdits.addText,
+    updateText: textEdits.updateText,
+    moveText: textEdits.moveText,
+    removeText: textEdits.removeText,
+    removeActiveText: textEdits.removeActiveText,
+    duplicateActiveText: textEdits.duplicateActiveText,
+    // One Delete key for both worlds: it removes the active title when there is
+    // one, and the clip selection otherwise, so the key never does nothing.
+    deleteActive: textEdits.deleteActive,
 
     playhead: transport.playhead,
     playing: transport.playing,

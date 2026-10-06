@@ -6,9 +6,17 @@
  * drawn (docs/decisions/0001-one-render-function.md).
  */
 
-import { createEffect, createSignal, onCleanup, onMount, Show } from 'solid-js'
+import { createEffect, createMemo, createSignal, onCleanup, onMount, Show } from 'solid-js'
 import type { Clip } from '../../../model/project.js'
-import { renderBlank, renderFrame, type SourceImage } from '../../../render/render.js'
+import {
+  textFrameAt,
+  textLayersAt,
+  TEXT_SIZE_MAX,
+  TEXT_SIZE_MIN,
+  type TextClip,
+  type TextId,
+} from '../../../model/text.js'
+import { renderBlank, renderFrame, textFrameRect, type SourceImage } from '../../../render/render.js'
 import type { AppState } from '../../store/state.js'
 import type { ContextMenuState } from '../ui/ContextMenu.js'
 import type { LayoutState } from '../../store/layout.js'
@@ -16,6 +24,7 @@ import type { Fullscreen } from '../shell/fullscreen.js'
 import { log } from '../../../dev/debug.js'
 import { createDiagnostics, HEALTH_INTERVAL_MS } from '../../../dev/preview-diagnostics.js'
 import { Transport } from './Transport.js'
+import { TextInspector } from './TextInspector.js'
 import { paintIntentAt } from './paint-intent.js'
 import { usePlaybackClock } from './use-playback-clock.js'
 
@@ -82,6 +91,145 @@ export function Preview(props: {
     // and `canvas` is undefined. Callers that legitimately run without a canvas
     // (the diagnostics) get a 0x0 viewport instead of a TypeError.
     return canvas ? { width: canvas.width, height: canvas.height } : { width: 0, height: 0 }
+  }
+
+  function clamp(value: number, lo: number, hi: number): number {
+    return value < lo ? lo : value > hi ? hi : value
+  }
+
+  /**
+   * Stage height in canvas pixels, mirrored into a signal.
+   *
+   * `canvas` is a ref, not a signal: a memo that read `canvas.height` would not
+   * re-run when the element appears or changes aspect. The draw effect already
+   * tracks `canvas.width`, so this is where the height joins the reactive graph.
+   */
+  const [stageHeight, setStageHeight] = createSignal(0)
+
+  /** The text layers that belong on the frame at timeline time `t`. */
+  const layersAt = (t: number) => textLayersAt(state.texts(), t, options().height)
+
+  /**
+   * The on-screen box of the active title, in canvas pixels, or null.
+   *
+   * Derived rather than assigned from `draw()`: the box has to follow a title
+   * that is being dragged, and a drag writes to the store without a decode.
+   * Deriving it from the same data the renderer draws is what keeps the handles
+   * on the words.
+   */
+  const textBox = createMemo(() => {
+    if (props.layout.pictureHidden() || stageHeight() === 0) return null
+    const active = state.activeText()
+    if (!active) return null
+    const layer = textFrameAt(active, state.playhead(), stageHeight())
+    return layer ? textFrameRect(context(), layer) : null
+  })
+
+  type TextDrag = {
+    id: TextId
+    mode: 'move' | 'scale'
+    startX: number
+    startY: number
+    rect: DOMRect
+    origin: TextClip
+    anchorX: number
+    anchorY: number
+    startDistance: number
+    committed: boolean
+  }
+  let textDrag: TextDrag | null = null
+
+  /** Magnet a title to the frame's edges and centre. */
+  function snapAxis(value: number): number {
+    for (const target of [0, 0.5, 1]) {
+      if (Math.abs(value - target) < 0.012) return target
+    }
+    return value
+  }
+
+  function beginTextDrag(mode: 'move' | 'scale', clip: TextClip, event: PointerEvent): void {
+    const rect = canvas.getBoundingClientRect()
+    const anchorX = rect.left + clip.x * rect.width
+    const anchorY = rect.top + clip.y * rect.height
+    textDrag = {
+      id: clip.id,
+      mode,
+      startX: event.clientX,
+      startY: event.clientY,
+      rect,
+      origin: clip,
+      anchorX,
+      anchorY,
+      startDistance: Math.max(6, Math.hypot(event.clientX - anchorX, event.clientY - anchorY)),
+      committed: false,
+    }
+    window.addEventListener('pointermove', onTextDragMove)
+    window.addEventListener('pointerup', onTextDragEnd)
+    window.addEventListener('pointercancel', onTextDragEnd)
+    event.preventDefault()
+  }
+
+  function onTextDragMove(event: PointerEvent): void {
+    const drag = textDrag
+    if (!drag) return
+    // Commit once, on the first real movement, so a click that merely selects a
+    // title does not leave an undo step behind.
+    if (!drag.committed) {
+      state.commit()
+      drag.committed = true
+    }
+    if (drag.mode === 'move') {
+      const x = snapAxis(clamp(drag.origin.x + (event.clientX - drag.startX) / drag.rect.width, 0, 1))
+      const y = snapAxis(clamp(drag.origin.y + (event.clientY - drag.startY) / drag.rect.height, 0, 1))
+      state.updateText(drag.id, { x, y }, { commit: false })
+    } else {
+      const distance = Math.hypot(event.clientX - drag.anchorX, event.clientY - drag.anchorY)
+      const size = clamp(drag.origin.style.size * (distance / drag.startDistance), TEXT_SIZE_MIN, TEXT_SIZE_MAX)
+      state.updateText(drag.id, { style: { size } }, { commit: false })
+    }
+  }
+
+  function onTextDragEnd(): void {
+    textDrag = null
+    window.removeEventListener('pointermove', onTextDragMove)
+    window.removeEventListener('pointerup', onTextDragEnd)
+    window.removeEventListener('pointercancel', onTextDragEnd)
+  }
+  // A title mid-drag would otherwise keep its listeners after the stage unmounts.
+  onCleanup(onTextDragEnd)
+
+  /** The topmost visible title under a pointer, if any. */
+  function hitText(event: PointerEvent): { id: TextId; clip: TextClip } | null {
+    if (stageHeight() === 0) return null
+    const rect = canvas.getBoundingClientRect()
+    const px = ((event.clientX - rect.left) / rect.width) * canvas.width
+    const py = ((event.clientY - rect.top) / rect.height) * canvas.height
+    const clips = state.texts()
+    for (let i = clips.length - 1; i >= 0; i--) {
+      const clip = clips[i]!
+      const layer = textFrameAt(clip, state.playhead(), stageHeight())
+      if (!layer) continue
+      const box = textFrameRect(context(), layer)
+      if (px >= box.x && px <= box.x + box.width && py >= box.y && py <= box.y + box.height) {
+        return { id: clip.id, clip }
+      }
+    }
+    return null
+  }
+
+  function onStagePointerDown(event: PointerEvent): void {
+    if (event.button !== 0) return
+    ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
+    const hit = hitText(event)
+    if (hit) {
+      state.clearSelection()
+      state.setActiveText(hit.id)
+      beginTextDrag('move', hit.clip, event)
+      return
+    }
+    // Clicking the picture away from any title drops it back to the caret.
+    state.setActiveText(null)
+    onScrub(event)
   }
 
   /**
@@ -192,7 +340,7 @@ export function Preview(props: {
       // state ("Drop a video file anywhere to begin.") speak — the canvas
       // diagnostic overlay is a developer readout, and putting it on top of the
       // first screen a user ever sees reads as a crash.
-      renderBlank(context(), options())
+      renderBlank(context(), options(), layersAt(t))
       lastError = null
       paintedAt = t
       return
@@ -212,7 +360,7 @@ export function Preview(props: {
     // reason is what costs hours. A deliberate blank says nothing at all — see
     // `paint-intent.ts` on why that distinction is the point.
     function paintBlank(fault: string | null, at: number): void {
-      renderBlank(context(), options())
+      renderBlank(context(), options(), layersAt(at))
       lastError = null
       paintedAt = at
       if (fault) explain(fault)
@@ -243,7 +391,7 @@ export function Preview(props: {
     // A held frame covers this time. Repaint it and skip the decode entirely.
     const cached = state.frameCache.find(sourceTime)
     if (cached) {
-      paint(cached.canvas, loc.clip)
+      paint(cached.canvas, loc.clip, t)
       lastError = null
       paintedAt = t
       if (showDiag()) drawDiagnostic()
@@ -276,7 +424,7 @@ export function Preview(props: {
           // Before the track's first timestamp is a legitimate answer, not a
           // failure — mediabunny documents getCanvas as returning null for it.
           if (sourceTime < 0) {
-            renderBlank(context(), options())
+            renderBlank(context(), options(), layersAt(forTime))
             paintedAt = forTime
             return
           }
@@ -329,7 +477,7 @@ export function Preview(props: {
           return
         }
 
-        paint(wrapped.canvas, loc.clip)
+        paint(wrapped.canvas, loc.clip, forTime)
         lastError = null
         paintedAt = forTime
         if (showDiag()) drawDiagnostic()
@@ -344,7 +492,7 @@ export function Preview(props: {
       })
   }
 
-  function paint(canvasLike: HTMLCanvasElement | OffscreenCanvas, clip: Clip): void {
+  function paint(canvasLike: HTMLCanvasElement | OffscreenCanvas, clip: Clip, at: number): void {
     const source: SourceImage = { image: canvasLike, width: canvasLike.width, height: canvasLike.height }
     if (source.width === 0 || source.height === 0) {
       explain(`decoded frame has no pixels (${source.width}x${source.height})`)
@@ -356,7 +504,7 @@ export function Preview(props: {
     const fitScale = fit === 'cover'
       ? Math.max(viewport.width / source.width, viewport.height / source.height)
       : Math.min(viewport.width / source.width, viewport.height / source.height)
-    renderFrame(context(), source, clip, { ...viewport, fit })
+    renderFrame(context(), source, clip, { ...viewport, fit }, layersAt(at))
 
     // Measure what actually landed on the canvas.
     //
@@ -434,8 +582,10 @@ export function Preview(props: {
     if (props.layout.pictureHidden()) return
     state.playhead()
     state.videoTracks()
+    state.texts()
     state.project.assets
     canvas.width
+    if (stageHeight() !== canvas.height) setStageHeight(canvas.height)
     draw()
     // Nothing rendered and no decode in flight means we are stuck. Say so on
     // the canvas rather than leaving a black rectangle.
@@ -519,15 +669,64 @@ export function Preview(props: {
               e.preventDefault()
               props.menu.show({ kind: 'preview', x: e.clientX, y: e.clientY })
             }}
-            onPointerDown={(e) => {
-              e.currentTarget.setPointerCapture(e.pointerId)
-              onScrub(e)
+            onPointerDown={onStagePointerDown}
+            onPointerMove={(e) => {
+              if (!textDrag && e.buttons === 1) onScrub(e)
             }}
-            onPointerMove={(e) => e.buttons === 1 && onScrub(e)}
           />
 
+          {/* The active title's box and corner handles. Pointer-events are off on
+              the box so a drag inside it still reaches the canvas, which moves
+              the title; only the corners are live, and they resize it. */}
+          <Show when={textBox()}>
+            {(box) => (
+              <div
+                class="pointer-events-none absolute z-10 rounded-[3px] border border-accent/80"
+                style={{
+                  left: `${(box().x / (options().width || 1)) * 100}%`,
+                  top: `${(box().y / (options().height || 1)) * 100}%`,
+                  width: `${(box().width / (options().width || 1)) * 100}%`,
+                  height: `${(box().height / (options().height || 1)) * 100}%`,
+                }}
+              >
+                <div
+                  class="pointer-events-auto absolute -left-1.5 -top-1.5 size-3 cursor-nwse-resize rounded-[2px] border border-accent bg-bg"
+                  onPointerDown={(e) => {
+                    e.stopPropagation()
+                    const clip = state.activeText()
+                    if (clip) beginTextDrag('scale', clip, e)
+                  }}
+                />
+                <div
+                  class="pointer-events-auto absolute -right-1.5 -top-1.5 size-3 cursor-nesw-resize rounded-[2px] border border-accent bg-bg"
+                  onPointerDown={(e) => {
+                    e.stopPropagation()
+                    const clip = state.activeText()
+                    if (clip) beginTextDrag('scale', clip, e)
+                  }}
+                />
+                <div
+                  class="pointer-events-auto absolute -bottom-1.5 -left-1.5 size-3 cursor-nesw-resize rounded-[2px] border border-accent bg-bg"
+                  onPointerDown={(e) => {
+                    e.stopPropagation()
+                    const clip = state.activeText()
+                    if (clip) beginTextDrag('scale', clip, e)
+                  }}
+                />
+                <div
+                  class="pointer-events-auto absolute -bottom-1.5 -right-1.5 size-3 cursor-nwse-resize rounded-[2px] border border-accent bg-bg"
+                  onPointerDown={(e) => {
+                    e.stopPropagation()
+                    const clip = state.activeText()
+                    if (clip) beginTextDrag('scale', clip, e)
+                  }}
+                />
+              </div>
+            )}
+          </Show>
+
           {/* Empty state, rather than a black rectangle with no explanation. */}
-          <Show when={state.videoClipCount() === 0}>
+          <Show when={state.videoClipCount() === 0 && state.texts().length === 0}>
             <div class="absolute inset-0 grid place-items-center">
               <div class="max-w-[38ch] text-center">
                 <p class="text-[13px] text-fg">
@@ -546,6 +745,8 @@ export function Preview(props: {
             </div>
           </Show>
         </div>
+
+        <TextInspector state={state} />
       </div>
       </Show>
 

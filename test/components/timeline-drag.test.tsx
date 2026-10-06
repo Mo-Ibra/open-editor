@@ -23,6 +23,7 @@ g.crypto ??= { randomUUID: () => 'x' }
 const { createAppState } = await import('../../src/app/store/state.js')
 const { Lane } = await import('../../src/app/view/timeline/Lane.js')
 const { useTimelineDrag } = await import('../../src/app/view/timeline/use-timeline-drag.js')
+const { TextLane } = await import('../../src/app/view/timeline/TextLane.js')
 const { clipStart } = await import('../../src/model/project.js')
 
 type State = ReturnType<typeof createAppState>
@@ -481,5 +482,55 @@ describe('the remove-track button', () => {
 
     fireEvent.click(button)
     expect(removed, 'the click reaches the button and removes the track').toBe(1)
+  })
+})
+
+describe('the text lane', () => {
+  function lane(state: State, shown: { value?: unknown }) {
+    const menu = {
+      show: (target: unknown): void => {
+        shown.value = target
+      },
+    } as never
+    return render(() => <TextLane state={state} trackLeft={() => 0} menu={menu} />)
+  }
+
+  it('adds a title where you double-click, and makes it active', () => {
+    const state = createAppState()
+    state.setZoom(80)
+    const { container } = lane(state, {})
+
+    fireEvent.dblClick(container.firstElementChild as HTMLElement, { clientX: 800 })
+    expect(state.texts().length).toBe(1)
+    expect(state.texts()[0]!.start).toBeCloseTo(10, 5)
+    expect(state.activeTextId()).toBe(state.texts()[0]!.id)
+  })
+
+  it('drags a title along time when you grab its body', () => {
+    const state = createAppState()
+    state.setZoom(80)
+    state.addText({ start: 10 })
+    const { container } = lane(state, {})
+
+    const block = container.querySelector('[data-text-id]') as HTMLElement
+    expect(block).toBeTruthy()
+    fireEvent.pointerDown(block, { clientX: 800, pointerId: 1 })
+    fireEvent.pointerMove(document, { clientX: 840, pointerId: 1 })
+    fireEvent.pointerUp(document, { pointerId: 1 })
+
+    expect(state.texts()[0]!.start).toBeCloseTo(10.5, 5)
+  })
+
+  it('offers the title menu on right-click', () => {
+    const state = createAppState()
+    state.setZoom(80)
+    state.addText({ start: 10 })
+    const shown: { value?: { kind?: string; textId?: string } } = {}
+    const { container } = lane(state, shown)
+
+    const block = container.querySelector('[data-text-id]') as HTMLElement
+    fireEvent.contextMenu(block, { clientX: 820 })
+    expect(shown.value?.kind).toBe('text')
+    expect(shown.value?.textId).toBe(state.texts()[0]!.id)
   })
 })

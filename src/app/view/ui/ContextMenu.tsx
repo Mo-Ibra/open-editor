@@ -36,10 +36,11 @@ export interface MenuItem {
 }
 
 export interface MenuTarget {
-  kind: 'clip' | 'track' | 'asset' | 'preview' | 'timeline' | 'app'
+  kind: 'clip' | 'track' | 'asset' | 'preview' | 'timeline' | 'text' | 'app'
   trackId?: string
   clipId?: string
   assetId?: string
+  textId?: string
   /** Where the pointer was, in client coordinates. */
   x: number
   y: number

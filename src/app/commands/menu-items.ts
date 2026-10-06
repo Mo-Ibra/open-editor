@@ -137,6 +137,15 @@ export function menuItems(
     ]
   }
 
+  if (target?.kind === 'text') {
+    const clip = target.textId ? state.texts().find((t) => t.id === target.textId) : undefined
+    if (!clip) return []
+    return [
+      { label: 'Duplicate title', run: () => state.duplicateActiveText() },
+      { label: 'Remove title', shortcut: '⌫', danger: true, run: () => state.removeText(clip.id) },
+    ]
+  }
+
   if (target?.kind === 'asset') {
     const assetId = target.assetId
     return [

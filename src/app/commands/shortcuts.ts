@@ -91,7 +91,22 @@ export function createShortcuts({
       run: () => state.selectAll(),
     },
 
-    { keys: ['Backspace', 'Delete'], hint: '⌫', label: 'delete', enabled: hasSelection, run: () => state.deleteSelected() },
+    {
+      keys: ['Backspace', 'Delete'],
+      hint: '⌫',
+      label: 'delete',
+      // One key, whatever is lit: a selected title is deleted like a selected
+      // clip, so the user never has to remember which kind of thing was active.
+      enabled: () => hasSelection() || state.hasActiveText(),
+      run: () => state.deleteActive(),
+    },
+
+    {
+      keys: ['t'],
+      hint: 'T',
+      label: 'add title',
+      run: () => state.addText(),
+    },
 
     { keys: ['ArrowLeft'], hint: '←', label: 'step', run: () => state.step(-1) },
     { keys: ['ArrowLeft'], shift: true, hint: '⇧←', label: 'step 10', run: () => state.step(-10) },

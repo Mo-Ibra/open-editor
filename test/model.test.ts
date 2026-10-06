@@ -393,8 +393,10 @@ const audioTrack = (clips: Clip[]) => ({ id: 'audio', type: 'audio' as const, cl
   const grown = trimClip(p, 'video', 0, 0, 30)
   assert.equal(clipDuration(grown.tracks[0]!.clips[0]!), 30, 'an image is not capped at its default duration')
   assert.equal(trimClip(grown, 'video', 0, 0, 5).tracks[0]!.clips[0]!.out, 5, 'and it can be shortened again')
-  // A real asset is still bounded by its source length.
-  assert.equal(trimClip(p, 'video', 0, 0, 30).tracks[0]!.clips[0]!.out, 5, 'the default asset is not an image here')
+  // A real asset is still bounded by its source length. This needs its own
+  // project: `p` above deliberately holds a still, so it could never show the cap.
+  const real: Project = { ...withAsset(asset({ duration: 5 })), tracks: [videoTrack([clip('a', 0, 5)])] }
+  assert.equal(trimClip(real, 'video', 0, 0, 30).tracks[0]!.clips[0]!.out, 5, 'a real asset is capped at its source')
 }
 
 // --- findClip searches all tracks ---------------------------------------

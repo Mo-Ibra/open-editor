@@ -20,6 +20,8 @@
  *     directly testable.
  */
 
+import { normaliseStyle, TEXT_DURATION_MIN, type TextClip } from './text.js'
+
 export type AssetId = string
 export type ClipId = string
 export type TrackId = string
@@ -146,6 +148,13 @@ export interface Project {
   assets: Record<AssetId, Asset>
   tracks: Track[]
   captions?: CaptionTrack
+  /**
+   * Free-floating titles, in draw order (first is furthest back). Absent on
+   * every project that has none, which is why it is optional rather than an
+   * always-present empty array: an empty `texts` would serialise into every
+   * file and turn "no text" into a value that a reader has to interpret.
+   */
+  texts?: TextClip[]
 }
 
 // ---------------------------------------------------------------------------
@@ -236,6 +245,13 @@ export function projectDuration(project: Project): number {
   for (const track of project.tracks) {
     const d = trackDuration(track.clips)
     if (d > max) max = d
+  }
+  // A title can sit past the last clip — a closing card over black. If it did
+  // not extend the timeline, the playhead could not reach it and the export
+  // would cut it off before it finished.
+  for (const text of project.texts ?? []) {
+    const end = text.start + text.duration
+    if (end > max) max = end
   }
   return max
 }
@@ -1373,11 +1389,39 @@ export function parseProject(text: string): Project {
     }
   }
 
+  // Text is validated just enough that a truncated file cannot inject an
+  // un-renderable layer; its style is filled from defaults so a file written
+  // before a style field existed still opens.
+  const texts: TextClip[] = []
+  if (p.texts !== undefined) {
+    if (!Array.isArray(p.texts)) throw new Error('Project texts must be an array')
+    for (const raw of p.texts) {
+      const t = raw as Partial<TextClip>
+      if (typeof t.id !== 'string') throw new Error('A text is missing its id')
+      if (typeof t.text !== 'string') throw new Error(`Text ${t.id} is missing its text`)
+      if (typeof t.start !== 'number' || typeof t.duration !== 'number') {
+        throw new Error(`Text ${t.id} has non-numeric start/duration`)
+      }
+      texts.push({
+        id: t.id,
+        text: t.text,
+        start: Math.max(0, t.start),
+        duration: Math.max(TEXT_DURATION_MIN, t.duration),
+        x: typeof t.x === 'number' ? t.x : 0.5,
+        y: typeof t.y === 'number' ? t.y : 0.82,
+        style: normaliseStyle(t.style),
+        animation: t.animation ?? 'none',
+        animationDuration: typeof t.animationDuration === 'number' ? t.animationDuration : 0.6,
+      })
+    }
+  }
+
   return {
     version: 3,
     assets: p.assets,
     tracks: p.tracks,
     ...(p.captions ? { captions: p.captions } : {}),
+    ...(texts.length > 0 ? { texts } : {}),
   }
 }
 

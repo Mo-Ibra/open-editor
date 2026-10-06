@@ -21,6 +21,7 @@
 import { AudioBufferSource, BufferTarget, CanvasSource, Output, Quality } from 'mediabunny'
 import type { AudioCodec } from 'mediabunny'
 import { clipDuration, clipStart, projectDuration, type Clip, type Project } from '../model/project.js'
+import { textLayersAt } from '../model/text.js'
 import { renderBlank, renderFrame } from '../render/render.js'
 import type { MediaLibrary } from '../media/library.js'
 import {
@@ -431,6 +432,10 @@ export class Exporter {
     const schedule = videoSchedule(videoTracks, settings.fps, totalFrames)
     const renderOptions = { width: settings.width, height: settings.height }
     const frameDuration = 1 / settings.fps
+    // Resolved against the export height, so a title's size is the same
+    // fraction of the frame as it was in the preview.
+    const textClips = project.texts ?? []
+    const textAt = (t: number) => textLayersAt(textClips, t, settings.height)
 
     let done = 0
     let lastReport = 0
@@ -462,8 +467,9 @@ export class Exporter {
           if (seg.hiddenClip) log.info(`export: clip ${seg.hiddenClip.id} is hidden — writing black`)
           for (let k = seg.startF; k < seg.endF; k++) {
             this.#checkCancelled()
-            renderBlank(ctx, renderOptions)
-            await canvasSource.add(k * frameDuration, frameDuration)
+            const t = k * frameDuration
+            renderBlank(ctx, renderOptions, textAt(t))
+            await canvasSource.add(t, frameDuration)
             done++
           }
           continue
@@ -494,9 +500,10 @@ export class Exporter {
               { image: wrapped.canvas, width: wrapped.canvas.width, height: wrapped.canvas.height },
               clip,
               entry!.asset.isImage ? { ...renderOptions, fit: 'cover' } : renderOptions,
+              textAt(t),
             )
           } else {
-            renderBlank(ctx, renderOptions)
+            renderBlank(ctx, renderOptions, textAt(t))
           }
 
           await canvasSource.add(t, frameDuration, { keyFrame: done % keyframeFrames(settings.fps) === 0 })
@@ -511,8 +518,9 @@ export class Exporter {
         // A short clip may yield fewer frames than the segment owns; fill the rest.
         while (at < count) {
           this.#checkCancelled()
-          renderBlank(ctx, renderOptions)
-          await canvasSource.add((seg.startF + at) * frameDuration, frameDuration)
+          const t = (seg.startF + at) * frameDuration
+          renderBlank(ctx, renderOptions, textAt(t))
+          await canvasSource.add(t, frameDuration)
           at++
           done++
         }

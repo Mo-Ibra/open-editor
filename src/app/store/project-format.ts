@@ -87,6 +87,9 @@ export function serialiseProject(project: Project): string {
     tracks: project.tracks,
   }
   if (project.captions) out.captions = project.captions
+  // Only when there is text, so a project without any round-trips to the exact
+  // same object it started as — the property is absent, not an empty array.
+  if (project.texts && project.texts.length > 0) out.texts = project.texts
   return JSON.stringify(out)
 }
 
