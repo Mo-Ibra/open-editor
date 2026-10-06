@@ -221,12 +221,12 @@ export function useTimelineDrag(
     const trackId = target.closest('[data-track]')?.getAttribute('data-track') as TrackId | undefined
     elements.track()?.setPointerCapture(event.pointerId)
 
-    // Every click positions the playhead, wherever it lands: ruler, empty lane,
-    // or on top of a clip. Position first, gesture second — a press is a seek
-    // that may turn into a drag, not one or the other.
+    // Pressing anywhere stops playback, but the playhead is positioned only
+    // when the press starts a playhead gesture — the ruler or an empty lane,
+    // below. A press on a clip is a selection or the start of a move/trim, and
+    // dragging a clip must not drag the playhead with it.
     const x = localX(event)
     if (state.playing()) state.setPlaying(false)
-    state.seek(state.xToTime(x))
 
     if (target.dataset.handle === 'in' || target.dataset.handle === 'out') {
       if (!trackId) return
@@ -266,9 +266,10 @@ export function useTimelineDrag(
       return
     }
 
-    // Ruler or empty lane: a plain seek, and dragging keeps scrubbing. The
-    // selection is dropped, because a left click on nothing means "I am done
+    // Ruler or empty lane: position the playhead, and dragging keeps scrubbing.
+    // The selection is dropped, because a left click on nothing means "I am done
     // with those clips" — and the next Delete should not take them.
+    state.seek(state.xToTime(x))
     state.clearSelection()
     drag = { kind: 'playhead', locked: null }
     setGuide(null)
@@ -437,6 +438,11 @@ export function useTimelineDrag(
         if (drag.kind === 'trim-in') state.trim(drag.trackId, drag.index, sourceT, clip.out)
         else state.trim(drag.trackId, drag.index, clip.in, sourceT)
 
+        // The clip's start after the write. A trim-in rolls the left edge to
+        // follow the new in-frame, so the preview follows the clip; a trim-out
+        // leaves the start exactly where it was.
+        const newStart = trackStart(drag.trackId, drag.index)
+
         // The preview follows the handle.
         //
         // It used to follow a trim-*in* by accident: `sourceTimeAt` reads
@@ -455,7 +461,7 @@ export function useTimelineDrag(
         // changed); a trim-out is held one frame before the pointer, which is
         // inside the half-open clip.
         const frame = 1 / state.outputFps()
-        state.seek(drag.kind === 'trim-out' ? Math.max(trackStartTime, edge - frame) : trackStartTime)
+        state.seek(drag.kind === 'trim-out' ? Math.max(newStart, edge - frame) : newStart)
 
         drag.locked = snapped?.target ?? null
         setGuide(snapped ? { time: snapped.time, label: describeTarget(snapped.target) } : null)

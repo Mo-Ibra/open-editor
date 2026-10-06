@@ -444,7 +444,7 @@ console.log('ref-binding assertions passed')
   // for every clip whose source in-point did not equal its timeline start.
   assert.match(
     trim,
-    /state\.seek\(drag\.kind === 'trim-out' \? Math\.max\(trackStartTime, edge - frame\) : trackStartTime\)/,
+    /state\.seek\(drag\.kind === 'trim-out' \? Math\.max\(newStart, edge - frame\) : newStart\)/,
     'the trim preview must seek timeline space, not the source time',
   )
   assert.doesNotMatch(trim, /state\.seek\([^)]*sourceT/, 'a source time must never be seeked as a timeline position')

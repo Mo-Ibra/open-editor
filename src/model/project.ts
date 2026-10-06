@@ -307,9 +307,23 @@ export function toFrameIndex(seconds: number, frameRate: number): number {
   return Math.round(seconds * frameRate)
 }
 
+/**
+ * The furthest source time a clip may show.
+ *
+ * A still image has no inherent length: the probe gives it a default `duration`
+ * so it has *some* length to be dropped in with, but its frame source serves a
+ * frame for any timestamp, so it can be stretched as far as the timeline wants.
+ * Treating that default as a hard media end is what stopped images from being
+ * lengthened. Every other asset is bounded by its real source length.
+ */
+export function sourceLimit(asset: Asset | undefined): number {
+  return asset && !asset.isImage ? asset.duration : Number.POSITIVE_INFINITY
+}
+
 export function clampClip(clip: Clip, asset: Asset): Clip {
-  const inPoint = clamp(clip.in, 0, asset.duration)
-  const outPoint = clamp(clip.out, inPoint, asset.duration)
+  const limit = sourceLimit(asset)
+  const inPoint = clamp(clip.in, 0, limit)
+  const outPoint = clamp(clip.out, inPoint, limit)
   return outPoint > inPoint ? { ...clip, in: inPoint, out: outPoint } : { ...clip, in: inPoint, out: inPoint }
 }
 
@@ -1069,8 +1083,9 @@ export function trimClip(project: Project, trackId: TrackId, index: number, inPo
   const clip = clips[index]
   if (!clip) return project
   const asset = project.assets[clip.assetId]
-  const inClamped = asset ? clamp(inPoint, 0, asset.duration) : inPoint
-  const outClamped = asset ? clamp(outPoint, inClamped, asset.duration) : Math.max(inClamped, outPoint)
+  const limit = sourceLimit(asset)
+  let inClamped = clamp(inPoint, 0, limit)
+  let outClamped = clamp(outPoint, inClamped, limit)
 
   // Never hand back a clip shorter than MIN_CLIP — not even the zero-length one
   // that dragging a handle past the far edge asks for. This is the only write
@@ -1089,8 +1104,45 @@ export function trimClip(project: Project, trackId: TrackId, index: number, inPo
   // further is refused.
   if (outClamped - inClamped < MIN_CLIP) return project
 
+  const starts = clipStarts(clips)
+  const oldStart = starts[index]!
+  const prefix = oldStart - clipOffset(clip)
+  const oldEnd = oldStart + clipDuration(clip)
+
+  // A trim **rolls** the clip: the edge being dragged moves, the other stays.
+  // The in-point and the timeline start are two views of the same left edge, so
+  // trimming `in` moves the start by the same amount — unless the clip would run
+  // off the front of the lane or past its own source, in which case the start is
+  // pinned and the in-point re-derived so the kept edge holds still.
+  let newStart = oldStart + (inClamped - clip.in)
+  const earliest = Math.max(prefix, oldStart - clip.in)
+  if (newStart < earliest) {
+    newStart = earliest
+    inClamped = clip.out - (oldEnd - newStart)
+  }
+  const offset = newStart - prefix
+
+  // A trim changes this clip's footprint but must **not** move its neighbour.
+  // The clip after it keeps its absolute start: shortening leaves a wider gap,
+  // lengthening eats into the gap, and a clip that would grow past its successor
+  // stops at it. This is the same rule `placeClip` applies to a move; trimming
+  // used to ripple every later clip along with it.
+  const right = clips[index + 1]
+  let rightOffset: number | null = null
+  if (right) {
+    const rightStart = starts[index + 1]!
+    let newEnd = newStart + (outClamped - inClamped)
+    if (newEnd > rightStart) {
+      outClamped = inClamped + (rightStart - newStart)
+      if (outClamped - inClamped < MIN_CLIP) return project
+      newEnd = rightStart
+    }
+    rightOffset = rightStart - newEnd
+  }
+
   const next = clips.slice()
-  next[index] = { ...clip, in: inClamped, out: outClamped }
+  next[index] = { ...clip, in: inClamped, out: outClamped, offset }
+  if (right && rightOffset !== null) next[index + 1] = { ...right, offset: rightOffset }
   return {
     ...project,
     tracks: project.tracks.map((t) => (t.id === trackId ? { ...t, clips: next } : t)),

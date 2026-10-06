@@ -309,8 +309,11 @@ describe('the fixes from the gesture audit', () => {
     fireEvent.pointerUp(track, { pointerId: 1 })
 
     expect(videoOf(state)[1]!.in).toBeCloseTo(2, 9)
-    // The new in frame sits at the clip's start (timeline 10), not at source 2.
-    expect(state.playhead()).toBeCloseTo(10, 9)
+    expect(videoOf(state)[1]!.out).toBeCloseTo(10, 9)
+    // A trim-in rolls the clip: the left edge follows the new in-frame, so the
+    // clip now starts at timeline 12 (and the preview sits there, not at source 2).
+    expect(startOf(state, 'B')).toBeCloseTo(12, 9)
+    expect(state.playhead()).toBeCloseTo(12, 9)
   })
 })
 

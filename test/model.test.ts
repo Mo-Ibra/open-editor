@@ -358,6 +358,45 @@ const audioTrack = (clips: Clip[]) => ({ id: 'audio', type: 'audio' as const, cl
   assert.equal(trimClip(sliver, 'video', 0, 0, 0.005), sliver, 'but not shortened further')
 }
 
+// --- a trim rolls the clip and never ripples its neighbour ----------------
+{
+  // A trim-in moves the LEFT edge: the start follows the new in-point and the
+  // right edge holds still. Before this, `in` changed but `offset` did not, so
+  // the edge could not move and the drag compounded on itself.
+  const p: Project = { ...withAsset(), tracks: [videoTrack([clip('a', 0, 10), clip('b', 0, 10)])] }
+  const rolled = trimClip(p, 'video', 0, 3, 10)
+  const rv = rolled.tracks.find((t) => t.type === 'video')!.clips
+  assert.equal(rv[0]!.in, 3, 'the source in-point moved')
+  assert.equal(clipStart(rv, 0), 3, 'and the clip now starts where the edge was dragged')
+  assert.equal(clipStart(rv, 0) + clipDuration(rv[0]!), 10, 'while the right edge held still')
+  assert.equal(clipStart(rv, 1), 10, 'and the neighbour did not move')
+
+  // A trim-out pins the clip after it: shortening frees a gap, it does not pull
+  // B left. This is the rule `placeClip` already applies to a move.
+  const shortened = trimClip(p, 'video', 0, 0, 6)
+  const sv = shortened.tracks.find((t) => t.type === 'video')!.clips
+  assert.equal(clipStart(sv, 0) + clipDuration(sv[0]!), 6, 'A got shorter')
+  assert.equal(clipStart(sv, 1), 10, 'B did not move')
+  assert.equal(clipOffset(sv[1]!), 4, 'the freed space became a gap before B')
+
+  // Growing into the successor stops at it rather than overlapping or pushing.
+  const grown = trimClip(p, 'video', 0, 0, 25)
+  const gv = grown.tracks.find((t) => t.type === 'video')!.clips
+  assert.equal(clipStart(gv, 0) + clipDuration(gv[0]!), 10, 'A stops at B')
+  assert.equal(clipStart(gv, 1), 10, 'and B is untouched')
+}
+
+// --- a still image can be stretched to any length --------------------------
+{
+  const still = asset({ isImage: true, duration: 5, hasVideo: true })
+  const p: Project = { ...withAsset(still), tracks: [videoTrack([clip('a', 0, 5)])] }
+  const grown = trimClip(p, 'video', 0, 0, 30)
+  assert.equal(clipDuration(grown.tracks[0]!.clips[0]!), 30, 'an image is not capped at its default duration')
+  assert.equal(trimClip(grown, 'video', 0, 0, 5).tracks[0]!.clips[0]!.out, 5, 'and it can be shortened again')
+  // A real asset is still bounded by its source length.
+  assert.equal(trimClip(p, 'video', 0, 0, 30).tracks[0]!.clips[0]!.out, 5, 'the default asset is not an image here')
+}
+
 // --- findClip searches all tracks ---------------------------------------
 {
   const project = appendAsset(withAsset(), 'a', asset({ duration: 20 }))
