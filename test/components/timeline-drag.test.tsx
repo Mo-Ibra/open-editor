@@ -135,6 +135,87 @@ describe('moving a clip by dragging', () => {
     expect(startOf(state, 'A')).toBe(0)
     expect(startOf(state, 'B')).toBe(10)
   })
+
+  it('deleting the first clip after a leading gap leaves the survivor in place', async () => {
+    const state = createAppState()
+    await seed(state) // A 0–10, B 10–20
+    state.setZoom(80)
+    state.setClipSnap(false)
+    state.setLaneSnap(false)
+
+    const { container } = render(() => <Harness state={state} />)
+    const track = container.firstElementChild as HTMLElement
+    const a = container.querySelector('[data-clip-id="A"]') as HTMLElement
+    const b = container.querySelector('[data-clip-id="B"]') as HTMLElement
+
+    // Pull B to 25s: `-----A-----B` (a gap between the two).
+    fireEvent.pointerDown(b, { clientX: 800, pointerId: 1 })
+    fireEvent.pointerMove(track, { clientX: 2000, pointerId: 1 })
+    fireEvent.pointerUp(track, { pointerId: 1 })
+    expect(startOf(state, 'A')).toBe(0)
+    expect(startOf(state, 'B')).toBe(25)
+
+    // Slide the pair right by 5s: `-----A----------B`.
+    state.selectClip('A')
+    state.selectClip('B', 'toggle')
+    fireEvent.pointerDown(a, { clientX: 0, pointerId: 1 })
+    fireEvent.pointerMove(track, { clientX: 400, pointerId: 1 })
+    fireEvent.pointerUp(track, { pointerId: 1 })
+    expect(startOf(state, 'A')).toBe(5)
+    const bBefore = startOf(state, 'B')
+    expect(bBefore).toBe(30)
+
+    // Delete the first clip. B must not move.
+    state.clearSelection()
+    state.selectClip('A')
+    state.deleteSelected()
+    expect(videoOf(state).map((c) => c.id)).toEqual(['B'])
+    expect(startOf(state, 'B')).toBe(bBefore)
+  })
+
+  it('deleting a middle clip does not drag a clip that sits behind a gap', async () => {
+    const state = createAppState()
+    const file = {
+      format: 'open-editor.project',
+      formatVersion: 1,
+      name: 't',
+      savedAt: 0,
+      project: {
+        version: 3,
+        assets: { a: asset },
+        tracks: [
+          { id: 'video', type: 'video', clips: [
+            { id: 'A', trackId: 'video', assetId: 'a', in: 0, out: 10 },
+            { id: 'B', trackId: 'video', assetId: 'a', in: 0, out: 10 },
+            { id: 'C', trackId: 'video', assetId: 'a', in: 0, out: 10, offset: 5 },
+          ] },
+          { id: 'audio', type: 'audio', clips: [] },
+        ],
+      },
+      media: {},
+    }
+    try {
+      await state.projects.importText(JSON.stringify(file))
+    } catch {
+      // The project is written before importText's storage tail.
+    }
+    state.setZoom(80)
+    state.setClipSnap(false)
+    state.setLaneSnap(false)
+
+    render(() => <Harness state={state} />)
+    expect(startOf(state, 'A')).toBe(0)
+    expect(startOf(state, 'B')).toBe(10)
+    expect(startOf(state, 'C')).toBe(25) // C has a gap before it
+
+    state.clearSelection()
+    state.selectClip('B')
+    state.deleteSelected()
+
+    expect(videoOf(state).map((c) => c.id)).toEqual(['A', 'C'])
+    expect(startOf(state, 'A')).toBe(0)
+    expect(startOf(state, 'C')).toBe(25) // the gap absorbed B's hole
+  })
 })
 
 describe('the fixes from the gesture audit', () => {

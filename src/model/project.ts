@@ -412,11 +412,45 @@ export function appendAsset(project: Project, assetId: AssetId, asset: Asset): P
   }
 }
 
-/** Remove one clip. Linked partners survive — deleting is per-track. */
+/**
+ * Remove one clip. Linked partners survive — deleting is per-track.
+ *
+ * Deleting ripples the track closed, but only across a *touching* seam: the
+ * clip that lands flush against the hole is pulled left into it, and the pull
+ * carries on through the run of clips that were touching one another. It stops
+ * at the first gap — that gap simply gets wider instead of the clips beyond it
+ * sliding. So a clip that already had space before it never moves, and neither
+ * does anything after it.
+ *
+ * Deleting the **first** clip never shifts anything. There is nothing before it
+ * to ripple against, so moving the survivors would drag the whole track toward
+ * zero for no reason the user asked for; the head is left empty and every
+ * survivor keeps its absolute mark.
+ */
 export function removeClip(project: Project, trackId: TrackId, index: number): Project {
-  const tracks = project.tracks.map((track) =>
-    track.id === trackId ? { ...track, clips: track.clips.filter((_, i) => i !== index) } : track,
-  )
+  const tracks = project.tracks.map((track) => {
+    if (track.id !== trackId) return track
+    const clips = track.clips
+    const removed = clips[index]
+    if (!removed) return track
+    const survivors = clips.filter((_, i) => i !== index)
+    if (survivors.length === 0) return { ...track, clips: survivors }
+
+    const starts = clipStarts(clips)
+    const right = clips[index + 1]
+    // The pull only starts when the clip after the hole is flush against it.
+    // `pull` is how far each survivor slides left; it drops to zero at the
+    // first gap, so that gap absorbs the space instead of being crossed.
+    let pull = index > 0 && right != null && clipOffset(right) === 0 ? clipDuration(removed) : 0
+    const items: { clip: Clip; from: number }[] = []
+    for (let i = 0; i < clips.length; i++) {
+      if (i === index) continue
+      const clip = clips[i]!
+      if (pull > 0 && i > index && clipOffset(clip) > 0) pull = 0
+      items.push({ clip, from: starts[i]! - (i > index ? pull : 0) })
+    }
+    return { ...track, clips: rederiveOffsets(items) }
+  })
   return { ...project, tracks }
 }
 

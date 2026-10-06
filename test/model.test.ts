@@ -515,6 +515,111 @@ check('removing a clip takes its gap with it', () => {
   assert.equal(clipStart(removed.tracks.find((t) => t.type === 'video')!.clips, 1), 5, 'and b is still flush after a')
 })
 
+check('deleting a middle clip still ripples the track closed', () => {
+  const p: Project = { ...withAsset(), tracks: [videoTrack([clip('a', 0, 5), clip('b', 0, 5), clip('c', 0, 5)])] }
+  const clips = removeClip(p, 'video', 1).tracks.find((t) => t.type === 'video')!.clips
+  assert.deepEqual(clips.map((c) => c.id), ['a', 'c'])
+  assert.equal(clipStart(clips, 1), 5, 'c rippled left into the hole b left')
+})
+
+check('deleting the first clip leaves the rest where they are', () => {
+  const p: Project = { ...withAsset(), tracks: [videoTrack([clip('a', 0, 5), clip('b', 0, 5), clip('c', 0, 5)])] }
+  assert.equal(clipStart(p.tracks.find((t) => t.type === 'video')!.clips, 1), 5)
+  const clips = removeClip(p, 'video', 0).tracks.find((t) => t.type === 'video')!.clips
+  assert.deepEqual(clips.map((c) => c.id), ['b', 'c'])
+  assert.equal(clipStart(clips, 0), 5, 'b keeps its original start; the head is left empty')
+  assert.equal(clipStart(clips, 1), 10, 'and c keeps its original start too')
+})
+
+check('deleting the first clip keeps a leading gap from moving the rest', () => {
+  // `-----A----------B`: a gap before A and a gap between A and B. Deleting A
+  // must leave B exactly where it was, gaps and all.
+  const p: Project = {
+    ...withAsset(),
+    tracks: [videoTrack([clip('a', 0, 5, { offset: 5 }), clip('b', 0, 5, { offset: 15 })])],
+  }
+  const before = p.tracks.find((t) => t.type === 'video')!.clips
+  assert.equal(clipStart(before, 1), 25, 'b starts at 25 before the delete')
+  const clips = removeClip(p, 'video', 0).tracks.find((t) => t.type === 'video')!.clips
+  assert.deepEqual(clips.map((c) => c.id), ['b'])
+  assert.equal(clipStart(clips, 0), 25, 'b does not move when the first clip is deleted')
+})
+
+check('deleting the first clip only moves its own track', () => {
+  const p: Project = {
+    ...withAsset(),
+    tracks: [
+      videoTrack([clip('v1', 0, 5), clip('v2', 0, 5)]),
+      audioTrack([clip('a1', 0, 5), clip('a2', 0, 5)]),
+    ],
+  }
+  const after = removeClip(p, 'video', 0)
+  const v = after.tracks.find((t) => t.type === 'video')!.clips
+  const a = after.tracks.find((t) => t.type === 'audio')!.clips
+  assert.deepEqual(v.map((c) => c.id), ['v2'])
+  assert.equal(clipStart(v, 0), 5, 'the video survivor holds its place')
+  assert.deepEqual(a.map((c) => c.id), ['a1', 'a2'], 'the audio lane is untouched')
+  assert.equal(clipStart(a, 0), 0)
+})
+
+check('deleting the last clip needs no shift', () => {
+  const p: Project = { ...withAsset(), tracks: [videoTrack([clip('a', 0, 5), clip('b', 0, 5)])] }
+  const clips = removeClip(p, 'video', 1).tracks.find((t) => t.type === 'video')!.clips
+  assert.deepEqual(clips.map((c) => c.id), ['a'])
+  assert.equal(clipStart(clips, 0), 0)
+})
+
+check('a gap after the deleted clip stops the pull', () => {
+  // `A B _ C`: b is flush after a, but c already has space before it, so
+  // deleting b must not drag c. The hole simply becomes part of c's gap.
+  const p: Project = {
+    ...withAsset(),
+    tracks: [videoTrack([clip('a', 0, 5), clip('b', 0, 5), clip('c', 0, 5, { offset: 5 })])],
+  }
+  const before = p.tracks.find((t) => t.type === 'video')!.clips
+  assert.equal(clipStart(before, 2), 15, 'c starts at 15 before the delete')
+  const clips = removeClip(p, 'video', 1).tracks.find((t) => t.type === 'video')!.clips
+  assert.deepEqual(clips.map((c) => c.id), ['a', 'c'])
+  assert.equal(clipStart(clips, 1), 15, 'c does not move — the gap stops the ripple')
+})
+
+check('the pull stops at the first gap and leaves the rest put', () => {
+  // `A B C _ D`: deleting b pulls the flush c left, but the gap before d stops
+  // it there, so d keeps its absolute mark.
+  const p: Project = {
+    ...withAsset(),
+    tracks: [
+      videoTrack([
+        clip('a', 0, 5),
+        clip('b', 0, 5),
+        clip('c', 0, 5),
+        clip('d', 0, 5, { offset: 5 }),
+      ]),
+    ],
+  }
+  const before = p.tracks.find((t) => t.type === 'video')!.clips
+  assert.equal(clipStart(before, 3), 20, 'd starts at 20 before the delete')
+  const clips = removeClip(p, 'video', 1).tracks.find((t) => t.type === 'video')!.clips
+  assert.deepEqual(clips.map((c) => c.id), ['a', 'c', 'd'])
+  assert.equal(clipStart(clips, 1), 5, 'c closed the hole b left')
+  assert.equal(clipStart(clips, 2), 20, 'd stayed where it was, behind the gap')
+})
+
+check('a gap that was already before the deleted clip survives', () => {
+  // `A _ B C`: b has space in front of it. Deleting b pulls the flush c into
+  // b's slot, but the space before b is the user's and must remain.
+  const p: Project = {
+    ...withAsset(),
+    tracks: [videoTrack([clip('a', 0, 5), clip('b', 0, 5, { offset: 5 }), clip('c', 0, 5)])],
+  }
+  const before = p.tracks.find((t) => t.type === 'video')!.clips
+  assert.equal(clipStart(before, 1), 10, 'b starts at 10 before the delete')
+  assert.equal(clipStart(before, 2), 15, 'c is flush after b')
+  const clips = removeClip(p, 'video', 1).tracks.find((t) => t.type === 'video')!.clips
+  assert.deepEqual(clips.map((c) => c.id), ['a', 'c'])
+  assert.equal(clipStart(clips, 1), 10, 'c moved into b slot, keeping the leading gap')
+})
+
 check('splitting leaves the right half flush with the left', () => {
   let p: Project = { ...withAsset(), tracks: [videoTrack([clip('a', 0, 10)])] }
   p = placeClip(p, 'video', 0, 4) // a gap before it, which is legal
