@@ -130,6 +130,6 @@ re-import.
 Refusing to open would have been simpler and would have thrown away the one
 irreplaceable part. Media can be re-imported; a mangled timeline cannot. The
 same reasoning is why the file format has a migration chain from the start:
-`[docs/app/store/project-format.ts]` walks v2 forward a version at a time, and
+`app/store/project-format.ts` walks v2 forward a version at a time, and
 refuses anything it cannot read *with a message that says the file is fine and
 only the app is behind**.

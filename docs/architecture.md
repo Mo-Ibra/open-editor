@@ -38,12 +38,14 @@ pure for the same reason, and are the pattern to follow when adding a slice.
 | Module | Responsibility |
 |---|---|
 | `model/project.ts` | The editing model. Types, derived positions, and every edit operation. Zero Web APIs. |
-| `model/snapping.ts` | Magnetic snapping. One exported function: `snapTrimEdge`. |
+| `model/snapping.ts` | Magnetic snapping. Exactly three exported functions: `snapMove`, `snapTrimEdge`, `snapPlayhead`. |
+| `model/text.ts` | Text overlays: the `TextClip` type and the pure functions that place and animate a title. No asset, no track. |
 | `output/codecs.ts` | Which output format this browser can actually produce. |
 | `media/frame-cache.ts` | Frame reuse for scrubbing. No mediabunny dependency. |
 
-`model/project.ts` having no imports from anywhere else is load-bearing: it makes the
-model trivially testable and makes undo a non-problem.
+`model/` importing nothing from the app is load-bearing: it makes the model
+trivially testable and makes undo a non-problem. The one edge inside it,
+`project.ts` → `text.ts`, is between two pure files.
 
 ### Media
 
@@ -53,6 +55,7 @@ model trivially testable and makes undo a non-problem.
 | `media/probe.ts` | File → `Asset`. Detects VFR, rotation, pixel aspect ratio. See [media.md](media.md). |
 | `media/frame-cache.ts` | Holds recently decoded frames so scrubbing is not a re-decode. |
 | `media/peaks.ts` | Waveform peaks, and `findSilence()` for a future dead-air pass. |
+| `media/quick-hash.ts` | A cheap content hash, so a file already on this machine can be recognised. Lives here because both the library and the store need it. |
 | `audio/audio-engine.ts` | **Preview** audio playback. Scheduling, not mixing. |
 
 Note the split: `audio.ts` mixes for export, `audio-engine.ts` plays for
@@ -80,13 +83,17 @@ audible during an export.
 |---|---|
 | `app/store/state.ts` | **Composition root.** Builds the slices, wires them, exposes one flat surface. |
 | `app/store/selection.ts` | Clip selection. Multi-select policy; testable with no store. |
-| `app/store/history.ts` | Undo. A stack of lane snapshots. |
+| `app/store/history.ts` | Undo. A stack of track-and-text snapshots. |
 | `app/store/assets.ts` | Import, remove, and getting files onto the timeline. |
 | `app/store/edits.ts` | Every clip operation. Intent here, meaning in `model/project.ts`. |
 | `app/store/transport.ts` | Playhead, playback, and what is derived from them. |
 | `app/store/project-store.ts` | What is open, what is saved, what is missing. Autosave, rehydration, boot. |
 | `app/store/project-format.ts` | The saved-file format, and the forward migration chain. Pure — no IndexedDB, no DOM. |
 | `app/store/persistence.ts` | The IndexedDB layer: projects, blobs, meta. No mediabunny, no DOM. |
+| `app/store/project-file.ts` | The portable project file: the edit goes out, the same edit comes back. |
+| `app/store/fingerprint.ts` | How a project file recognises its media on another machine. |
+| `app/store/media-status.ts` | What state each media file is in — the media review screen's brain, pure. |
+| `app/store/text-edits.ts` | Title operations. A title is not a clip, so it gets its own slice. |
 | `app/commands/shortcuts.ts` | The shortcut list — the single source for handler and legend. |
 | `app/commands/keyboard.ts` | Matching and legend derivation. Pure, no browser. |
 | `app/commands/menu-items.ts` | The context menu, as a pure function of (state, target). |
@@ -102,27 +109,40 @@ SolidJS components, no VDOM.
 | Component | Responsibility |
 |---|---|
 | `app/view/App.tsx` | The shell. Wiring and markup only. |
-| `app/view/Timeline.tsx` | Layout and composition. No decisions. |
+| `app/view/timeline/Timeline.tsx` | Layout and composition. No decisions. |
 | `app/view/timeline/use-timeline-drag.ts` | Every pointer and wheel gesture: seek, move, trim, right-click, zoom. |
 | `app/view/timeline/ticks.ts` | Ruler spacing and labels. Pure, in a `.ts` so it is testable. |
 | `app/view/timeline/Ruler.tsx` | The ruler's markup. |
-| `app/view/timeline/Lane.tsx` | One lane, and the drop target for dragged-in files. |
+| `app/view/timeline/Lane.tsx` | One track's lane, and the drop target for dragged-in files. |
+| `app/view/timeline/TextLane.tsx` | Titles along time, one row above the picture tracks. Drag to move, drag an edge to resize. |
 | `app/view/timeline/Clip.tsx` | One clip: body, trim handles, badges. |
+| `app/view/timeline/Filmstrip.tsx` | A clip's filmstrip: one small frame, tiled by the compositor — no canvas as wide as the clip. |
 | `app/view/timeline/Waveform.tsx` | The peaks canvas. |
 | `app/view/timeline/Toolbar.tsx` | The toolbar. |
-| `app/view/Preview.tsx` | The canvas and the render loop. Cohesive on purpose. |
+| `app/view/timeline/DropCue.tsx` | The drop indicator: a caret, the clip's real extent, and whether it overwrites or inserts. |
+| `app/view/timeline/TimelineScrollbar.tsx` | The timeline's permanent horizontal scrollbar: click to jump, drag the thumb to pan. |
+| `app/view/preview/Preview.tsx` | The canvas and the render loop. Cohesive on purpose. |
 | `app/view/preview/Transport.tsx` | The transport bar: play, stepping, mute, time, zoom. |
 | `app/view/preview/use-playback-clock.ts` | The playback clock. Polls the audio clock; never owns it. |
-| `app/view/PanelToggle.tsx` | The button that collapses a panel. The drag handle resizes; this says so. |
-| `app/view/fullscreen.ts` | The full-screen seam. One `toggle()` for the button, the menu, and `F`. |
-| `app/view/LogPanel.tsx` | The log panel. Reads `logRevision()`, so a closed panel costs nothing. |
-| `app/view/ShortcutsPanel.tsx` | The keymap, as a panel rather than furniture. |
-| `app/view/format.ts` | `formatTime`, shared by the transport and the status bar. |
-| `app/view/timeline/DropCue.tsx` | The drop indicator: a caret, the clip's real extent, and whether it overwrites or inserts. |
-| `app/view/ExportDialog.tsx` | The export modal. Plays its own output before offering the download. |
-| `app/view/AssetBin.tsx` | Imported files. Select, double-click to append, drag onto a lane. |
-| `app/view/ContextMenu.tsx` | The application context menu. |
-| `app/view/Resizer.tsx` | The draggable panel dividers. |
+| `app/view/preview/Scrubber.tsx` | The seek bar under the picture. Pure presentation over `state.seek`. |
+| `app/view/preview/TextInspector.tsx` | The floating title inspector: one bar that edits the selected title. |
+| `app/view/preview/paint-intent.ts` | What the preview should paint at a moment. Black is a decision, and it is made here once rather than inline three times. |
+| `app/view/shell/PanelToggle.tsx` | The button that collapses a panel. The drag handle resizes; this says so. |
+| `app/view/shell/Resizer.tsx` | The draggable panel dividers. |
+| `app/view/shell/fullscreen.ts` | The full-screen seam. One `toggle()` for the button, the menu, and `F`. |
+| `app/view/logs/LogPanel.tsx` | The log panel. Reads `logRevision()`, so a closed panel costs nothing. |
+| `app/view/shortcuts/ShortcutsPanel.tsx` | The keymap, as a panel rather than furniture. |
+| `app/view/ui/format.ts` | `formatTime`, shared by the transport and the status bar. |
+| `app/view/ui/ContextMenu.tsx` | The application context menu. |
+| `app/view/ui/Modal.tsx` | The shared overlay every dialog sits on: backdrop, surface, content. |
+| `app/view/ui/Tooltip.tsx` | The visible tooltip for icon-only controls. |
+| `app/view/export/ExportDialog.tsx` | The export modal. Plays its own output before offering the download. |
+| `app/view/media/AssetBin.tsx` | Imported files. Select, double-click to append, drag onto a track. |
+| `app/view/media/MediaPanel.tsx` | The media review screen: what is attached, what is not, and why. |
+| `app/view/media/folder.ts` | Getting a folder's files, from a picker or from a drop. |
+| `app/view/media/thumbnail.ts` | One shared thumbnail per asset, so the bin and the filmstrip do not decode twice. |
+| `app/view/projects/ProjectPanel.tsx` | The project list — and what storage costs. |
+| `app/view/projects/transfer.ts` | Getting a project file onto and off the disk. |
 
 ### Not part of the app
 
@@ -188,9 +208,9 @@ Importing does *not* touch the timeline.
 
 **Edit.** Every operation in `model/project.ts` takes a `Project` and returns a new
 one. The store writes it through `project-store.ts` and pushes the previous
-lanes onto the undo stack. Nothing re-encodes, ever.
+tracks and texts onto the undo stack. Nothing re-encodes, ever.
 
-**Preview.** The playhead moves → `clipAtLane` finds the clip → `sourceTimeAt`
+**Preview.** The playhead moves → `clipAtTrack` finds the clip → `sourceTimeAt`
 converts timeline time to source time → the frame cache returns a frame, decoding
 if needed → `renderFrame` draws it.
 
@@ -204,13 +224,16 @@ array — see [export.md](export.md#source-time-vs-output-time).
 
 These are not enforced by anything, so they are worth stating:
 
-1. `model/project.ts` must not import from any other module in the app.
+1. The model must not import from the app. Within `model/`, `project.ts` imports
+   `text.ts`; the only import that leaves `model/` is a **type** (`RenderText`
+   from `render/render.ts`), erased at build time, so the model still runs in
+   Node.
 2. `render/render.ts` must not know what a playhead is. It draws one image.
 3. UI components may read anything and write only through `app/store/state.ts`.
 4. `app/store/state.ts` holds no behaviour of its own. It builds slices and wires
    them; a `project.ts` call that appears there is a bug, because it would
    bypass the slice that owns the policy around it.
-4. No module may hardcode an output codec. See
+5. No module may hardcode an output codec. See
    [ADR-8](decisions/0008-negotiate-never-hardcode-a-codec.md).
 
 Rule 2 is what makes [ADR-1](decisions/0001-one-render-function.md) hold. If
@@ -225,6 +248,6 @@ both a type checker and a DOM-free test:
 
 - `test/dom.test.ts` — singleton panels rendered once, context menus bound to
   right-click only, no invalid CSS in the build, no `reconcile` on the project store
-- `test/snapping.test.ts` — asserts there is exactly one exported snapping
-  function, so a move-path helper cannot be quietly re-added
+- `test/snapping.test.ts` — asserts there are exactly three exported snapping
+  functions (move, trim, playhead), so a fourth cannot be quietly added
 - `test/model.test.ts` — links, gaps, duplication, the audio-only mute rule

@@ -19,8 +19,8 @@ start or its end to a nearby clip edge or the timeline start; a trim handle pull
 its edge the same way; and the playhead, while scrubbed, pulls to the nearest
 edge. They are three independent toggles:
 
-- *clip snap* — clips in the same lane, and the timeline start;
-- *lane snap* — also clips in the other lane, so picture lines up with sound once
+- *clip snap* — clips in the same track, and the timeline start;
+- *lane snap* — also clips in the other tracks, so picture lines up with sound once
   a pair has been broken apart;
 - *playhead snap* — the scrubber, onto clip edges and the timeline start.
 
@@ -58,7 +58,7 @@ target; the clip's own edges are excluded, so it cannot latch onto itself.
   `playheadSnap()` for the scrubber — so one mode cannot switch another on.
 - A move snaps against a target list **captured at drag start and restricted to
   targets that do not move with the drag** — the clips before the first selected
-  one, the other lane, and the timeline start, plus the next clip's start as an
+  one, the other tracks, and the timeline start, plus the next clip's start as an
   end-only butt target. Moving pushes the clips after it, so their edges travel
   with the drag; a target that travels with the drag is a target the clip chases,
   and that is the vibration. Restricting to fixed targets removed it. Trims and

@@ -19,8 +19,8 @@ one of the [traces](traces/). The rest of this set assumes you have the map.
 
 The old `PLAN.md` mixed all three in one 754-line file, and drifted: its module
 map described files that were never written, and its type definitions showed
-`version: 1` after the model had moved to version 2. Splitting them is what keeps
-description honest.
+`version: 1` after the model had already moved past it (the format is
+`version: 3` today). Splitting them is what keeps description honest.
 
 ## Contents
 
@@ -33,8 +33,6 @@ description honest.
 | [development.md](development.md) | How do I run, test, and add a test? |
 | [traces/](traces/) | What actually happens when I press a key? |
 | [reading-order.md](reading-order.md) | I'm new. What do I read, in what order, and what can I skip? |
-| [reading-order.md](reading-order.md) | I want to understand this codebase. What do I read, in what order, and what can I skip? |
-| [traces/](traces/) | What actually happens when I press a key? |
 | [decisions/](decisions/) | Why is it built this way? |
 | [risks.md](risks.md) | What is known to be weak? |
 | [roadmap.md](roadmap.md) | What comes next? |

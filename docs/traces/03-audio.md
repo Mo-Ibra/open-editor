@@ -101,10 +101,10 @@ the usual causality: the AudioContext clock is the master, and the playhead is
 derived from it. [Trace 02](02-playback.md) walks that in full; the parts that
 belong here are the scheduling ones.
 
-- `play(project, position)` (`:133`) walks **the audio lane only** — the comment
+- `play(project, position)` (`:133`) walks **the audio tracks only** — the comment
   says "The picture is the exporter's business" — and for each clip computes
   `sourceFrom = clip.in + offsetIntoClip` and a `delay` for future clips.
-- `#runStart = ctx.currentTime + START_LEAD` (`:149`, constant at `:349`) is deliberately in the
+- `#runStart = ctx.currentTime + START_LEAD` (`:149`, constant at `:365`) is deliberately in the
   future, so sources are ready before the timeline says they start.
 - `now()` (`:121`) reads that clock back and clamps at zero, because during the
   lead the elapsed time is negative. The comment records the resulting hang.
@@ -122,7 +122,7 @@ guarantee:
 
 | | Preview | Export |
 | --- | --- | --- |
-| Where a clip starts | `clipStart(project.audio, i)` | `clipStart(project.audio, i)` |
+| Where a clip starts | `clipStart(track.clips, i)` | `clipStart(track.clips, i)` |
 | Where a clip's audio begins | `clip.in + offsetIntoClip` | `clip.in`, then trim to the clip |
 | Gains | live `GainNode` per clip | `segment.gain`, multiplied in the mix |
 | Gaps | scheduled silence via `delay` | zero-filled buffer |

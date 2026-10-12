@@ -5,7 +5,7 @@
 | Phase | Outcome |
 |---|---|
 | **0** — Prove the loop closes | Demux → decode → draw → encode → mux → download, all in a browser. Settled [ADR-3](decisions/0003-re-encode-only.md) and exposed [ADR-8](decisions/0008-negotiate-never-hardcode-a-codec.md). Still re-runnable at `/phase0`. |
-| **1** — The model | Two linked lanes, derived positions, deliberate gaps, breakable links. |
+| **1** — The model | Linked tracks, derived positions, deliberate gaps, breakable links. |
 | **2** — Editing | Trim, split, reorder, delete, duplicate, multi-select, undo/redo. |
 | **3** — Preview | Playhead scrubbing, waveform, approximate decode with a frame cache. |
 | **4** — Export | MP4/WebM with negotiation, A/V sync assertions, the output played back before download. |

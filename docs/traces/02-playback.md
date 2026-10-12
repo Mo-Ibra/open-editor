@@ -20,9 +20,9 @@ app/view/preview/use-playback-clock.ts   120Hz poll
   └─ app/store/transport.ts   advanceClock() — read audio.now()
       └─ setPlayhead(t)                    ← a signal, nothing else
 
-app/view/Preview.tsx   createEffect sees playhead change
+app/view/preview/Preview.tsx   createEffect sees playhead change
   └─ draw()
-      ├─ model/project.ts      clipAtLane() — which clip, which source time
+      ├─ preview/paint-intent.ts  paintIntentAt() — which clip, which source time
       ├─ media/frame-cache.ts  find()       — or do we already have it?
       ├─ media/library.ts      getCanvas()  — decode, async, may be stale
       └─ render/render.ts      renderFrame() — the one draw call
@@ -30,11 +30,11 @@ app/view/Preview.tsx   createEffect sees playhead change
 
 ## 1. `togglePlay` — and why it can refuse
 
-`src/app/store/transport.ts:116`:
+`src/app/store/transport.ts:204`:
 
 ```ts
 async function togglePlay(): Promise<void> {
-  if (project.video.length === 0 && project.audio.length === 0) {
+  if (project.tracks.every((t) => t.clips.length === 0)) {
     notify('warn', hasImportedFiles()
       ? 'Add a clip to the timeline first — double-click a file under Media.'
       : 'Drop a video file to get started.')
@@ -52,8 +52,8 @@ Then the pause branch, which contains the first real lesson:
   if (playing()) {
     // Where the audio actually got to, not where we last drew the playhead.
     const at = audio.now() ?? playhead()
+    // Read the position first, then stop — `setPlaying` owns stopping the engine.
     setPlaying(false)
-    audio.stop()
     setPlayhead(at)
     return
   }
@@ -62,7 +62,9 @@ Then the pause branch, which contains the first real lesson:
 The playhead is snapped to `audio.now()`, not left where the last frame was
 painted. Those are different numbers — the picture lags the sound by however
 long the last decode took — and using the painted position is how a player ends
-up jumping backwards when you press pause.
+up jumping backwards when you press pause. Note the comment on the order: the
+position is read *before* `setPlaying(false)`, because stopping the engine is what
+`audio.now()` is asking about.
 
 ## 2. The AudioContext is the master clock
 
@@ -76,14 +78,17 @@ important one:
 
 Read that twice. The causality is reversed from the usual assumption. Most
 players drive audio from a timer. This one drives the playhead from audio, and
-`advanceClock` (`src/app/store/transport.ts:146`) shows the shape:
+`advanceClock` (`src/app/store/transport.ts:235`) shows the shape:
 
 ```ts
 function advanceClock(): void {
   if (!playing()) return
   // Prefer the audio clock: it is the one the viewer is listening to.
   const audioTime = audio.now()
-  if (audioTime !== null) { setPlayhead(...); return }
+  if (audioTime !== null) {
+    setPlayhead(Math.max(0, Math.min(audioTime, duration())))
+    return
+  }
   if (wallClockAnchor) { /* performance.now() fallback */ }
 }
 ```
@@ -142,15 +147,17 @@ smooth. It is not a precision requirement — the audio clock is.
 
 ## 5. A signal, and Solid does the rest
 
-`src/app/view/preview/Preview.tsx:362`:
+`src/app/view/preview/Preview.tsx:576`:
 
 ```ts
 createEffect(() => {
+  if (props.layout.pictureHidden()) return
   state.playhead()
-  state.project.video
-  state.project.audio
+  state.videoTracks()
+  state.texts()
   state.project.assets
   canvas.width
+  if (stageHeight() !== canvas.height) setStageHeight(canvas.height)
   draw()
   if (!inFlight && paintedAt !== state.playhead() && !lastError) drawDiagnostic()
 })
@@ -160,36 +167,55 @@ There is no call to `render()` from the clock. The clock sets a signal; the
 effect re-runs because it read that signal. That is the entire update mechanism
 of this application.
 
+The single guard reads a signal too, which is why it is there: hiding the picture
+unmounts the canvas, so `canvas.width` would throw on a hidden stage. Tracking
+`pictureHidden` means the effect also fires when the picture comes *back*.
+
 The second half of the effect is a health check: nothing painted, no decode in
 flight, no error — that combination means the loop is wedged, so say so on the
 canvas instead of leaving a black rectangle.
 
 ## 6. From a timeline time to a source time
 
-`draw()` at `src/app/view/preview/Preview.tsx:148` starts by converting a *timeline*
-position into a *source* position, which is the conversion the whole app turns
-on:
+`draw()` at `src/app/view/preview/Preview.tsx:316` gets the frame's location and
+source time from one function, `paintIntentAt` (`src/app/view/preview/paint-intent.ts:82`),
+which is the conversion the whole app turns on:
 
 ```ts
-const loc = clipAtLane(state.project.video, t)   // which clip covers t
-const sourceTime = loc.clip.in + (t - loc.clip.start)
+const intent = paintIntentAt(state.videoTracks(), t, unavailable)
+// → { kind: 'decode', loc, sourceTime: sourceTimeAt(loc, t) }
+```
+
+`sourceTimeAt` (`src/model/project.ts:305`) is the actual arithmetic:
+
+```ts
+const sourceTime = loc.clip.in + (t - loc.start)
 ```
 
 `clip.in` is the offset into the source file; the timeline position is not.
 Getting this backwards is how a preview ends up showing the wrong frame of a
 trimmed clip while everything looks plausible.
 
-The early exits are all diagnostic: empty timeline, playhead past the end,
+`paintIntentAt` walks the video tracks from the top down (top layer wins) and
+returns one of exactly two things: a clip to decode, or a blank — where the blank
+carries a `fault: string | null`. That distinction is the point: a **gap** the
+user cut has `fault: null` and is painted black without comment, because the
+exporter fills it with black too; a missing decoder carries a reason and is
+explained on screen. The comment at `Preview.tsx:349` records why it lives in one
+function: it used to be decided inline in three places in `draw()`, and the three
+disagreed.
+
+The other early exits are all diagnostic: empty timeline, a hidden canvas, an
 unknown asset. Each calls `explain()`, which logs the full context and draws the
 overlay — because "black rectangle" is not a bug report.
 
 ## 7. Cache first, always
 
-`src/app/view/preview/Preview.tsx:209`:
+`src/app/view/preview/Preview.tsx:392`:
 
 ```ts
 const cached = state.frameCache.find(sourceTime)
-if (cached) { paint(cached.canvas, loc.clip); ...; return }
+if (cached) { paint(cached.canvas, loc.clip, t); ...; return }
 if (inFlight) return   // a decode is running; it will catch up
 ```
 
@@ -198,7 +224,7 @@ if (inFlight) return   // a decode is running; it will catch up
 requests while you scrub slowly. That is the difference between a drag that
 stutters and one that glides.
 
-Then the rule that took a rewrite to get right, at `src/app/view/preview/Preview.tsx:248`:
+Then the rule that took a rewrite to get right, at `src/app/view/preview/Preview.tsx:437`:
 
 ```ts
 // Cache the frame FIRST, unconditionally.
@@ -224,10 +250,15 @@ rather than a failure.
 
 ## 8. The one draw call
 
-`paint()` at `:235` is a five-line wrapper around
-`renderFrame(context(), source, clip, viewport)` in
-`src/render/render.ts`. That function is also what the exporter calls.
+`paint()` at `src/app/view/preview/Preview.tsx:495` computes how the frame fits
+(an image `cover`s the frame, a video `contain`s its own aspect inside it) and
+makes one call into `src/render/render.ts`:
 
+```ts
+renderFrame(context(), source, clip, { ...viewport, fit }, layersAt(at))
+```
+
+That function is also what the exporter calls.
 [ADR-1](../decisions/0001-one-render-function.md) exists because this is the one
 invariant that no test can enforce: there is no test that fails when you add a
 second drawing path. Preview and export sharing `renderFrame` means there is
@@ -254,6 +285,6 @@ disagree with each other and you get a file that does not match what you saw.
 
 ## What to do next
 
-Read `src/app/store/transport.ts` in full — 196 lines, and every branch is a
+Read `src/app/store/transport.ts` in full — 305 lines, and every branch is a
 decision about time. Then read `test/exporter.test.ts`, which is mostly about
 the source-versus-output distinction that [trace 01](01-split.md) hinted at.

@@ -69,7 +69,7 @@ which is true and actionable.
   together.
 - The grid template is a pure function, `mainRows()`, so both arrangements are
   unit-testable without a DOM.
-- Full screen is a seam (`app/view/fullscreen.ts`) rather than a `Preview`
+- Full screen is a seam (`app/view/shell/fullscreen.ts`) rather than a `Preview`
   detail, because the button, the context menu and the `F` shortcut all need it
   and none of them can reach a component's ref.
 - Four new keys: `H` (hide picture), `F` (full screen), `\` (timeline),
@@ -121,7 +121,7 @@ to mute, and a selected audio clip has nothing to hide.
   and the clip is desaturated. Pressing `M` and then hunting for evidence is how
   a user concludes the key did nothing.
 - The two flags are separate fields, and each model function refuses the wrong
-  lane — the same rule `toggleMute` already used, for the same reason.
+  track — the same rule `toggleMute` already used, for the same reason.
 
 ### A race, found because the probe was intermittent
 

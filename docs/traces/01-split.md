@@ -9,13 +9,14 @@ it touches every layer without any of them being about video.
 ```
 keydown
   └─ app/commands/keyboard.ts        match the key
-      └─ app/commands/shortcuts.ts   the `s` descriptor
-          └─ app/store/edits.ts      splitAt / splitSelectionAtPlayhead
+      └─ app/commands/shortcuts.ts   the `s` descriptor (:67)
+          └─ app/store/edits.ts      splitAt (:131)
+              ├─ splitCore (:87)         pick the track(s) to cut
+              │   └─ model/project.ts    splitClip / splitLinked — the pure edit
               ├─ app/store/history.ts    commit() — snapshot before the change
-              └─ model/project.ts        splitLinked() — the pure edit
-                  └─ app/store/state.ts  setProject() — the only write path
-                      ├─ model/project-store.ts   applyLanes() — plain set
-                      └─ app/store/selection.ts   prune() — drop dead ids
+              └─ model/project-store.ts  applyTracks() — plain set (:40)
+                  ├─ app/store/state.ts  setProject() — the only write path (:91)
+                  └─ app/store/selection.ts   prune() — drop dead ids
   └─ Solid re-renders the timeline
 ```
 
@@ -33,7 +34,7 @@ consumers. `test/keyboard.test.ts` exists mostly to keep it that way.
 
 ## 2. The shortcut decides which behaviour
 
-`src/app/commands/shortcuts.ts:32` is the `s` descriptor:
+`src/app/commands/shortcuts.ts:67` is the `s` descriptor:
 
 ```ts
 {
@@ -41,54 +42,64 @@ consumers. `test/keyboard.test.ts` exists mostly to keep it that way.
   hint: 'S',
   label: 'split',
   enabled: hasClips,
-  // Several clips selected means split all of them; one (or none) keeps the
-  // older behaviour of splitting whatever is under the playhead.
-  run: () =>
-    state.selectionCount() > 1
-      ? state.splitSelectionAtPlayhead()
-      : state.splitAt(state.playhead()),
+  // The selection names the tracks to cut: video only, audio only, or both
+  // (also both when nothing is selected). The playhead is the cut point.
+  run: () => state.splitAt(state.playhead()),
 },
 ```
 
 Note what this is *not*: it is not a key handler. It is a descriptor holding a
-closure, and the branch is a plain ternary. Both behaviours are reachable, and
-the decision is made from state at the moment the key is pressed.
+closure. The choice of *what* to cut is no longer made here — it reads the
+selection, which is store state, so the branch lives in the store (see `splitCore`
+below). The descriptor only says "split at the playhead".
 
-The nearest interesting neighbour is `m` (`:72`), which mutes the selection
-when there is one and the master otherwise — with a comment explaining that
-otherwise there would be no way to mute the whole project mid-edit.
+The nearest interesting neighbour is `m` (`:119`), which mutes the selection when
+there is one and the master otherwise — with a comment explaining that otherwise
+there would be no way to mute the whole project mid-edit.
 
 ## 3. The store commits *before* changing anything
 
-`src/app/store/edits.ts:96`:
+`src/app/store/edits.ts:131`:
 
 ```ts
-function splitAt(time: number, lane?: Lane): void {
+function splitAt(time: number, trackId?: TrackId): void {
+  const { next, split } = splitCore(time, trackId)
+  if (split === 0) {
+    notify('info', 'Nothing to split — put the playhead inside a clip.')
+    return
+  }
   history.commit()
-  ...
+  setProject(replace(next))
+}
 ```
 
-`commit()` first, before the edit. This is the whole undo strategy: undo is a
-stack of *values*, not a stack of inverse operations. `src/app/store/history.ts:5`
+The model work (`splitCore`) runs first, but it is **pure** — it returns a new
+`Project` and touches nothing. `history.commit()` runs only once something will
+actually change, so a cut that the model refuses leaves no undo step behind. The
+order that matters is still: compute, snapshot, write. `src/app/store/history.ts:5`
 is explicit that there is no undo engine here and there should not be one —
 because the alternative is writing an inverse for every edit, and an inverse that
 disagrees with its forward operation is a worse bug than no undo at all.
 
-So the order is always the same: snapshot, edit, write.
-
 ## 4. The edit itself, in the pure model
 
-`splitAt` resolves *which* clip to split, then delegates:
+`splitCore` (`src/app/store/edits.ts:87`) resolves *which* track(s) to cut, then
+delegates:
 
-- an explicit `lane` argument, if given
-- otherwise the primary selection
-- otherwise every lane independently at the playhead
+- an explicit `trackId`, when a drag named its track;
+- otherwise the primary selection, when it lands on **exactly one** track;
+- otherwise **every** track — which is also the nothing-selected case.
 
-All three paths converge on `splitLinked` in `src/model/project.ts:446`:
+The single-track case is `splitClip` (`src/model/project.ts:1181`): cut one side
+of a linked pair, leave the partner whole — "cut the picture and keep the sound".
+The pair case is `splitLinked` (`src/model/project.ts:1211`):
 
 ```ts
-export function splitLinked(project: Project, lane: Lane, index: number, timelineT: number): Project {
-  const clips = laneOf(project, lane)
+export function splitLinked(project: Project, trackId: TrackId, index: number, timelineT: number): Project {
+  let next = project
+  const track = project.tracks.find((t) => t.id === trackId)
+  if (!track) return project
+  const clips = track.clips
   const clip = clips[index]
   if (!clip) return project
 
@@ -98,13 +109,13 @@ export function splitLinked(project: Project, lane: Lane, index: number, timelin
   const left: Clip = { ...clip, out: clip.in + local }
   // The right half starts where the left ends, so it carries no offset — its
   // position comes from being next in the array.
-  const right: Clip = { ...clip, id: newId('clp'), in: clip.in + local, offset: 0 }
+  const right: Clip = { ...clip, id: newId('clp'), in: clip.in + local, offset: 0, linkId: rightLink }
   ...
 ```
 
 Three things in 15 lines that are worth the whole file:
 
-1. **`local` is measured against this lane's own start.** A linked video/audio
+1. **`local` is measured against this track's own start.** A linked video/audio
    pair can legitimately be out of alignment — you may have slid the audio — so
    splitting the audio at the video's *source* time would land in the wrong
    place. Each half is split against its own in-point.
@@ -116,43 +127,46 @@ Three things in 15 lines that are worth the whole file:
    valid for video but yields a 10 ms audio clip is not a split anyone wanted,
    so the partner is allowed to decline independently.
 
-`MIN_CLIP` (`:436`) is 0.04s, and the comment is the reason: "Below this, a clip
-divides by zero somewhere."
+`MIN_CLIP` (`src/model/project.ts:1093`) is 0.04s, and the comment is the reason:
+"Below this, a clip divides by zero somewhere."
 
-## 5. The batch path is not a loop
+## 5. The pair path, and why it does not cut twice
 
-`splitSelectionAtPlayhead` (`src/app/store/edits.ts:139`) is the multi-select
-case, and its docblock names the two things that make it more than a loop:
+`splitCore`'s pair branch walks **every** track in a plain forward loop, calling
+`splitLinked` on each. That looks like it should cut the partner twice — once when
+the loop reaches the video track, once when it reaches the audio track — and it
+does not, for a reason worth seeing:
 
-- **A linked pair is split by `splitLinked`, which cuts both halves.** So a
-  selected pair must be counted once, or the second call targets a clip that no
-  longer exists at that index.
-- **A clip whose edge is already at the playhead is skipped**, because splitting
-  there produces a zero-length clip — a corrupt clip, not an edit.
+- When the loop reaches a track, `clipAtTrack(clips, time)` returns the clip whose
+  derived start is at or before the playhead. A cut leaves a **right half** that
+  starts exactly at the playhead, so the next visit resolves to that right half.
+- `splitLinked` then measures `local = time - clipStart(...)` — which is `0`, well
+  under `MIN_CLIP` — and returns the project unchanged.
 
-Which is also why it iterates **back-to-front per lane**: each split inserts a
-clip and shifts every later index down. Iterate forwards and the second
-iteration targets the wrong clip. This is the classic insertion-into-an-array
-bug, and it is invisible until the indices happen to coincide.
+So the `MIN_CLIP` floor that guards against slivers is also what makes the visit
+idempotent at the seam. The loop needs no back-to-front iteration and no
+seen-set: a second visit is a legal but refused cut, and a refused cut does not
+increment the counter that decides whether history is committed.
 
-`MIN_SPLIT` (`:49`) is 0.01 here, a different constant from `MIN_CLIP` in the
-model. The store is *more* conservative than the model, because the model has to
-accept a hand-edited call while the store has to answer a keystroke.
+The single-track path (`splitClip`) is used whenever the cut is aimed at one
+track, which is the gesture "cut the picture and keep the sound".
 
 ## 6. One write path, and a prune
 
-Back in `src/app/store/state.ts:147`, every edit goes through `setProject`, which
-is deliberately overloaded to distinguish the three kinds of write:
+Back in `src/app/store/state.ts:91`, every edit goes through `setProject`, which
+is deliberately overloaded to distinguish three kinds of write:
 
 ```ts
 function setProject(a: unknown, b?: unknown, c?: unknown): void {
-  // Asset writes cannot orphan a clip selection, or move a clip, so they skip
-  // both — there is nothing for either to do.
   if (a === 'assets') applyProject(a as 'assets', b as string, c as Asset)
-  else if (typeof a === 'string') applyProject(a as Lane, b as Clip[])
-  // A plain two-key set, never `reconcile` — see model/project-store.ts for
-  // the media library that reconcile deleted.
-  else applyLanes((lanes) => applyProject(lanes), a as Lanes, sel.prune)
+  else if (typeof a === 'string') {
+    const trackId = a as TrackId
+    applyProject('tracks', (prev: Project['tracks']) =>
+      prev.map((t) => (t.id === trackId ? { ...t, clips: b as Clip[] } : t)),
+    )
+  } else applyTracks((tracks) => applyProject('tracks', tracks), a as Tracks, sel.prune)
+  projects.markDirty()
+  transport.clampPlayhead()
 }
 ```
 
@@ -162,27 +176,31 @@ it names is a live hazard, because every batch action resolves its targets
 through the selection. One deleted clip staying selected would silently swallow
 the next `Delete`. Pruning centrally means no call site can forget.
 
+The same function is also the one place the project is marked dirty and the
+playhead is clamped back inside it, so those never have to be remembered
+separately either.
+
 ## 7. The write that must stay a plain set
 
 `src/model/project-store.ts:40` is four lines of code and twenty lines of
 warning:
 
 ```ts
-export function applyLanes(
-  setter: (value: Lanes) => void,
-  lanes: Lanes,
+export function applyTracks(
+  setter: (value: Tracks) => void,
+  tracks: Tracks,
   onWritten: () => void,
 ): void {
-  setter({ video: lanes.video, audio: lanes.audio })
+  setter(tracks)
   // Run after the write: pruning reads the project, so it must see the new one.
   onWritten()
 }
 ```
 
 Solid's `reconcile` sets every key the target does not mention to `undefined`.
-Since `replace()` returns only `{ video, audio }`, every edit deleted
-`project.assets` and `project.version` — the media library was not deleted, only
-the reference to it, and the next `project.assets[id]` threw.
+Since an edit returns only the `tracks`, every edit deleted `project.assets` and
+`project.version` — the media library was not deleted, only the reference to it,
+and the next `project.assets[id]` threw.
 
 It is worth reading this file just to see what a performance micro-optimisation
 cost. It is the strongest argument in the repository against optimising Solid
@@ -191,9 +209,9 @@ store writes without reading what the setter does.
 ## 8. Nobody re-renders by hand
 
 There is no call to a render function, and nothing invalidates a cache. The
-timeline re-renders because `src/app/store/edits.ts:96` produced a *new array* and the store
-setter signalled. Solid tracks that, and `src/app/view/timeline/Lane.tsx` re-runs
-its `For` over the changed array.
+timeline re-renders because `src/app/store/edits.ts:131` produced a *new array* and
+the store setter signalled. Solid tracks that, and
+`src/app/view/timeline/Lane.tsx` re-runs its `For` over the changed array.
 
 This is the payoff of the derived-position model. Because a split is expressed
 as a new array rather than a mutation, the framework knows what changed. An

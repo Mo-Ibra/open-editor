@@ -98,7 +98,7 @@ export interface SourceImage {
  *
  * The source is assumed already upright: rotation and pixel-aspect correction
  * are applied by the media layer when the frame is produced, so that preview
- * and export cannot disagree about them. See `src/library.ts`.
+ * and export cannot disagree about them. See `src/media/library.ts`.
  *
  * Geometry: the source is scaled into the output — letterboxed (`contain`, the
  * default) or cropped (`cover`, for stills) — then the clip transform is

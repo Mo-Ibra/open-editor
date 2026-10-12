@@ -1,6 +1,6 @@
 # Reading order
 
-How to learn this codebase without reading all 8,000 lines.
+How to learn this codebase without reading all 17,000 lines.
 
 ## Why order matters
 
@@ -38,8 +38,8 @@ Read these before any source. They are short and they are the map.
 | --- | --- |
 | [data-model.md](data-model.md) | What a `Clip` is, and why position is derived rather than stored. |
 | [architecture.md](architecture.md) | The dependency direction above, and the split rules. |
-| [decisions/](decisions/) | Eight short ADRs. Each records a choice *and* what it cost. |
-| [risks.md](risks.md) | The five things most likely to bite. |
+| [decisions/](decisions/) | Eleven short ADRs. Each records a choice *and* what it cost. |
+| [risks.md](risks.md) | The eight things most likely to bite. |
 
 Read the ADRs properly. They are the highest-value 20 pages in the repository,
 because they capture reasoning that is otherwise only visible as scar tissue in
@@ -47,7 +47,7 @@ the code. `0008` alone explains the entire MP3-in-MP4 situation.
 
 ## Tier 1 — the model
 
-`src/model/project.ts` (564) · `project-store.ts` (48) · `snapping.ts` (179)
+`src/model/project.ts` (1430) · `project-store.ts` (48) · `snapping.ts` (307)
 
 **This is the whole product.** Everything else is delivery.
 
@@ -60,10 +60,10 @@ Read in this order, because each depends on the previous:
 1. `clipDuration`, `clipStart` — the two functions that define what time *means*.
    Position is derived by summing the clips before it. This is the single idea
    the rest of the model rests on.
-2. `splitLinked` (`:446`) — the clearest non-trivial edit. Watch how each half is
+2. `splitLinked` (`:1211`) — the clearest non-trivial edit. Watch how each half is
    split against *its own* in-point rather than a shared one.
-3. `trimLinked` (`:410`) — the same shape, with clamping.
-4. The `laneOf` / `clipAtLane` / `findClip` helpers — the lookup vocabulary the
+3. `trimClip` (`:1095`) — the same shape, with clamping.
+4. The `trackById` / `clipAtTrack` / `findClip` helpers — the lookup vocabulary the
    rest of the codebase uses constantly.
 
 Read `project-store.ts` and be warned. It is 48 lines, and 20 of them are a
@@ -72,7 +72,7 @@ on every edit. Do not add `reconcile`.
 
 ## Tier 2 — the store
 
-`src/app/store/state.ts` (264) then the slices.
+`src/app/store/state.ts` (430) then the slices.
 
 `state.ts` is the composition root — the only place that knows every slice
 exists. Read it once to see the wiring, then use it as a map. Do not read it to
@@ -82,22 +82,22 @@ The slices are the real reading, in this order:
 
 | File | Lines | Why here |
 | --- | --- | --- |
-| `edits.ts` | 370 | The bridge: every clip edit, and the first place you see selection, history and the store setter working together. |
-| `selection.ts` | 151 | Multi-select policy. Small, and it explains why batch actions are shaped the way they are. |
-| `transport.ts` | 196 | The playhead, playback, and the audio-is-the-clock rule. |
-| `history.ts` | 78 | Undo. Read this *after* `edits.ts` so you can see what it is snapshotting. |
-| `assets.ts` | 225 | File import, and dropping a file onto a lane. |
+| `edits.ts` | 382 | The bridge: every clip edit, and the first place you see selection, history and the store setter working together. |
+| `selection.ts` | 126 | Multi-select policy. Small, and it explains why batch actions are shaped the way they are. |
+| `transport.ts` | 305 | The playhead, playback, and the audio-is-the-clock rule. |
+| `history.ts` | 92 | Undo. Read this *after* `edits.ts` so you can see what it is snapshotting. |
+| `assets.ts` | 300 | File import, and dropping a file onto a track. |
 | `zoom.ts` | 119 | Pure maths, independently testable. Skim. |
-| `layout.ts` | 259 | Panel sizes and `localStorage`. The least interesting file in the repo. |
+| `layout.ts` | 342 | Panel sizes and `localStorage`. The least interesting file in the repo. |
 
 ## Tier 3 — media and render
 
-`src/media/library.ts` (117) · `probe.ts` (130) · `frame-cache.ts` (50) · `src/render/render.ts` (99)
+`src/media/library.ts` (244) · `probe.ts` (221) · `frame-cache.ts` (50) · `src/render/render.ts` (309)
 
 `library.ts` is the owner of every `File`, `Input` and sink. Small enough to
 read whole, and the clearest explanation of how mediabunny is used.
 
-`render.ts` is 99 lines and is the highest ratio of importance to length in the
+`render.ts` is 309 lines and is the highest ratio of importance to length in the
 repository. It is *the* render pass — preview and export both call it, so there
 is nothing that can drift between what you see and what you get. Read it before
 `Preview.tsx`, because then the preview's `paint()` is obviously a five-line
@@ -108,7 +108,7 @@ here, because its comment explains the "150 decodes and 3 paints" bug.
 
 ## Tier 4 — audio
 
-`src/audio/audio.ts` (167) · `export-audio.ts` (158) · `audio-engine.ts` (385)
+`src/audio/audio.ts` (167) · `export-audio.ts` (182) · `audio-engine.ts` (401)
 
 Three files, three different jobs. Confusing them is the most common
 misunderstanding in this codebase, so [traces/03-audio.md](traces/03-audio.md)
@@ -121,8 +121,8 @@ determinism matters is understanding [ADR-4](decisions/0004-deterministic-audio-
 
 ## Tier 5 — the view layer
 
-`src/app/view/App.tsx` (224) · `Timeline.tsx` (138) · `Preview.tsx` (421) ·
-`ExportDialog.tsx` (458) · the `timeline/` and `preview/` subdirectories
+`src/app/view/App.tsx` (492) · `Timeline.tsx` (229) · `Preview.tsx` (763) ·
+`ExportDialog.tsx` (486) · the `timeline/` and `preview/` subdirectories
 
 The view reads the store and renders it. It contains **no** rules — if you find
 yourself writing an `if` about clip semantics in a component, it belongs in the
@@ -138,7 +138,7 @@ come back to `Preview.tsx` when you already understand the pieces.
 
 ## Tier 6 — export
 
-`src/output/exporter.ts` (458) · `codecs.ts` (306) · `self-check.ts` (112)
+`src/output/exporter.ts` (607) · `codecs.ts` (408) · `self-check.ts` (112)
 
 Last, because export depends on everything above it. `exporter.ts` is where the
 source-time versus output-time distinction becomes unavoidable, and that
@@ -153,12 +153,12 @@ This is the more valuable half of the document.
 
 | Skip | Why |
 | --- | --- |
-| `app/store/layout.ts` (259) | Panel drag maths. Nothing about media. |
-| `app/view/Resizer.tsx` (69) | A draggable divider. Read it once, in ten minutes, then never again. |
-| `dev/debug.ts` (159) | A logging facade that also streams to the dev-server terminal. Useful, not instructive. |
-| `dev/preview-diagnostics.ts` (274) | 274 lines of luma sampling and overlay formatting. It exists so `Preview.tsx` does not. |
-| `app/commands/keyboard.ts` (95) | A 40-line key-matching loop. Read the docblock; skip the body. |
-| `app/commands/shortcuts.ts` (116) | A literal list. Skim for the interesting entries — the `m` mute shortcut (`:71`) has a real design note. |
+| `app/store/layout.ts` (342) | Panel drag maths. Nothing about media. |
+| `app/view/shell/Resizer.tsx` (134) | A draggable divider. Read it once, in ten minutes, then never again. |
+| `dev/debug.ts` (181) | A logging facade that also streams to the dev-server terminal. Useful, not instructive. |
+| `dev/preview-diagnostics.ts` (314) | 314 lines of luma sampling and overlay formatting. It exists so `Preview.tsx` does not. |
+| `app/commands/keyboard.ts` (101) | A 40-line key-matching loop. Read the docblock; skip the body. |
+| `app/commands/shortcuts.ts` (243) | A literal list. Skim for the interesting entries — the `m` mute shortcut (`:120`) has a real design note. |
 | `main.tsx` (12) | Twelve lines. Read it last, as a curiosity. |
 | `phase0.ts` | The performance harness. Not part of the app. |
 
@@ -185,8 +185,8 @@ explaining what caught it:
 | --- | --- |
 | Add `snapClipMove` and snap a move | `test/dom.test.ts` — the guards are explicit about this. |
 | Let `toggleMute` accept a video clip | `test/model.test.ts` |
-| Replace the plain set in `applyLanes` with `reconcile` | The media library vanishes. The 48-line file warns you. |
-| Discard the frame when the playhead moved | The `test/frame-cache.test.ts` assertion, and the comment at `src/app/view/preview/Preview.tsx:197`. |
+| Replace the plain set in `applyTracks` with `reconcile` | The media library vanishes. The 48-line file warns you. |
+| Discard the frame when the playhead moved | The `test/frame-cache.test.ts` assertion, and the comment at `src/app/view/preview/Preview.tsx:437`. |
 | Add a second drawing path in `render.ts` | Nothing catches it. That is why [ADR-1](decisions/0001-one-render-function.md) exists — read it before you finish this tier. |
 | Hardcode `video: 'avc1'` in the exporter | `test/codecs.test.ts` |
 

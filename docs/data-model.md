@@ -4,26 +4,40 @@ This is the whole product. It is small, and that is the point.
 
 ```ts
 type Project = {
-  version: 2
+  version: 3
   assets: Record<AssetId, Asset>
-  video: Clip[]                  // array order IS timeline order
-  audio: Clip[]                  // a second, independent lane
-  captions?: CaptionTrack
+  tracks: Track[]                 // ordered; video tracks stack bottom-to-top
+  captions?: CaptionTrack         // a raw subtitle file, verbatim
+  texts?: TextClip[]              // free-floating titles, in draw order
+}
+
+type Track = {
+  id: TrackId
+  type: 'video' | 'audio'
+  clips: Clip[]                   // array order IS timeline order
 }
 
 type Clip = {
   id: ClipId
-  lane: Lane                     // 'video' | 'audio' — a clip is in exactly one
+  trackId: TrackId                // a clip is in exactly one track
   assetId: AssetId
-  in: number                     // source in-point, seconds
-  out: number                    // source out-point, seconds
-  linkId?: LinkId                // shared by a video/audio pair
-  offset?: number                // deliberate silence BEFORE this clip
+  in: number                      // source in-point, seconds
+  out: number                     // source out-point, seconds
+  linkId?: LinkId                 // shared by a video/audio pair
+  offset?: number                 // deliberate silence BEFORE this clip
   transform?: ClipTransform
   gain?: number
-  muted?: boolean
+  muted?: boolean                 // audio tracks only
+  hidden?: boolean                // video tracks only
 }
 ```
+
+> Earlier files carried two fixed arrays instead — `video: Clip[]` and
+> `audio: Clip[]`, with a `lane: 'video' | 'audio'` on every clip. When the model
+> grew to N tracks that shape could no longer express the project, so `version: 3`
+> replaced it: position in `Project.tracks` replaced `lane`, and `trackId` names
+> the row a clip lives in. `app/store/project-format.ts` still walks those v2
+> files forward one version at a time.
 
 ## Three rules that keep this honest
 
@@ -44,7 +58,9 @@ class rather than fixing instances of it.
 
 The cost is O(n) per lookup. For a cutter's timeline length that is free, and
 memoising it would be trading a bug class for a performance problem that does not
-exist.
+exist. When the answer is needed for more than one clip, `clipStarts` computes
+every start in a single pass — the same arithmetic with the running total hoisted
+out of the loop.
 
 ### 2. Durations are derived, never stored
 
@@ -60,17 +76,24 @@ time, and the export loop never does float math. Accumulating `t += 1/30` drifts
 Boundaries are rounded to whole frames once, then divided. See
 [export.md](export.md#integers-at-the-boundaries).
 
-## Two lanes, linked by default
+## Tracks, linked by default
 
 ```
-┌─ video ────────────────────────  trim, zoom
+┌─ video ────────────────────────  trim, zoom, hide
 │ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
 ├─ audio ────────────────────────  waveform, level, mute
 │ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
 ```
 
+A new project has **one video track and one audio track**. The toolbar adds more
+(`addTrack`): a new video track joins the top of the picture group, a new audio
+track goes underneath. Video tracks composite **bottom-to-top**, so a later one
+is drawn over the earlier ones. A track can only be removed once it is empty, and
+the timeline always keeps at least one (`removeTrack`).
+
 A file with picture and sound becomes a **linked pair**: two clips sharing one
-`linkId`. Splitting cuts both. Deleting one leaves the other.
+`linkId`, on a video track and an audio track. Splitting cuts both. Deleting one
+leaves the other.
 
 That independence is the entire point. Trimming the picture while keeping the
 sound is a normal thing to want, and it is inexpressible if a clip carries its
@@ -111,20 +134,49 @@ Each of these was a real bug, and each is now covered by a test:
 1. `clipStart` must include the clip's **own** offset. A gap sits *before* a
    clip, so the term belongs to it; without it `placeClip` sets an offset that
    does nothing.
-2. `laneDuration` must include offsets, or the timeline under-reports its own
+2. `trackDuration` must include offsets, or the track under-reports its own
    length.
-3. `clipAtLane` must use the derived `clipStart` rather than accumulating
+3. `clipAtTrack` must use the derived `clipStart` rather than accumulating
    durations, or a position inside a gap resolves to the previous clip and the
    preview shows a frame where the timeline is empty.
 
 ## Project length
 
 ```ts
-projectDuration = max(laneDuration(video), laneDuration(audio))
+projectDuration = max over tracks of trackDuration(track.clips)
+                  extended to cover any text overlay past the last clip
 ```
 
-The **video** lane does not define output length. Audio that outlasts the picture
-is not something to pad the video with black for; the excess is simply not heard.
+The timeline is as long as its **longest track**. Audio longer than the picture
+is not something to pad the video with black for; the excess is simply not
+heard. A closing title can also sit past the final clip, over black, so a text
+overlay extends the timeline too — otherwise the playhead could not reach it and
+the export would cut it off before it finished.
+
+## Text overlays
+
+[`model/text.ts`](../src/model/text.ts) · [`app/store/text-edits.ts`](../src/app/store/text-edits.ts).
+
+A title is deliberately **not** a media clip. It has no asset and no source
+in/out, and it lives outside the track model on its own single lane beside the
+picture. `Project.texts` is optional; absent means no titles, and an empty array
+is never written into a file.
+
+It is the one thing in the model that stores its own `start`, and that is not a
+contradiction of rule 1: a media clip's position is a consequence of the clips it
+is butted against, while a title is free-floating — placed at a time, the way a
+caption is — so there is nothing for it to drift relative to. Later entries in
+the array draw on top (`textAt`, `textLayersAt`).
+
+The renderer treats a title as one more thing drawn into the same frame
+([ADR-1](decisions/0001-one-render-function.md)), sized as a fraction of the
+output height so a preview and a 4K export agree about how big it is.
+
+## Captions
+
+`Project.captions` carries a raw subtitle file — the `.srt` text verbatim, plus a
+`CaptionStyle` (font, size, colour, background, position). It rides in the saved
+format and round-trips; the editor does not yet edit or draw it.
 
 ## Snapping
 
@@ -139,17 +191,18 @@ trim-only rule.
 
 There are **three independent toggles**, each answering a different question:
 
-- **Clip snap** (`G`): align to clips in the **same lane**, plus the timeline
+- **Clip snap** (`G`): align to clips in the **same track**, plus the timeline
   start. The cut-to-cut magnet.
-- **Lane snap** (`⇧G`): also align to clips in the **other lane**, so picture and
-  sound line up — useful once a pair has been broken apart.
+- **Lane snap** (`⇧G`): also align to clips in the **other tracks**, so picture
+  and sound line up — useful once a pair has been broken apart.
 - **Playhead snap** (`P`): the playhead, while scrubbed, pulls to the nearest
   clip edge or the timeline start, so it lands on a cut exactly rather than near
   it.
 
-`collectTargets` takes a `lanes` list; the timeline passes the dragged lane for
-clip snap and the other lane for lane snap. The playhead has no lane of its own,
-so it uses every clip edge; the drop path uses both.
+Which tracks contribute is decided by `targetTracks(trackId, allTrackIds, clipSnap, laneSnap)`
+and passed to `collectTargets`. The playhead has no track of its own, so it uses
+every clip edge; the drop path uses the same helper as a drag, so a toggle can
+never be a lie for drops.
 
 The surface is structural, not a convention:
 
@@ -231,16 +284,22 @@ rather than sticking on the boundary and refusing to go further.
 edit is O(1) on a small array. Editing is instant because it is structural, not
 because it was optimised.
 
-## Mute is an audio-lane thing
+## Mute is an audio-track thing
 
 `toggleMute` **refuses a video clip**. This is enforced in the model rather than
 in each caller, because a video clip carrying `muted: true` is a flag that means
 nothing and renders anyway: it shows a mute badge on a clip with no sound, and
 changes the audio mixer's gain for a clip that was never in it.
 
+`hidden` is the mirror image: a **video-track** flag that draws black for the
+clip, preview and export alike, and is refused on an audio clip. They are
+deliberately two fields rather than one "hidden" flag, because a single flag on
+both would allow a clip that is neither audible nor visible — not a thing anyone
+can want, and two flags to keep straight.
+
 ## Undo
 
-A snapshot of the two lane arrays. Structured clone, a few KB, push on every
+A snapshot of the tracks and the texts. Structured clone, a few KB, push on every
 edit, capped at 100. There is no undo engine to build. Do not build one.
 
 
@@ -261,7 +320,7 @@ reason they could be added at all.
 before it, inserting into the array *is* the push-along — no arithmetic, and
 nothing to keep in sync.
 
-**Overwrite has to re-encode the lane.** The clips after the drop are meant to
+**Overwrite has to re-encode the track.** The clips after the drop are meant to
 stay exactly where they were, but their `offset` is relative to whatever ended
 before them, and the overwrite changed that. So `placeClipAt` records each
 survivor's *absolute* start, adds the new clip among them, and derives every
@@ -279,10 +338,11 @@ one, and something divides by zero downstream.
 
 ### What a drop will accept
 
-- An **A/V file** becomes a *linked pair* on both lanes. The old behaviour kept
-  only the half you aimed at, which quietly discarded the other.
-- An **audio-only file** goes to the audio lane, wherever you drop it.
-- A **video-only file** goes to the video lane.
-- The lane is chosen by proximity, so the empty track above and below the lanes
-  is a valid target rather than dead space.
+- An **A/V file** becomes a *linked pair*, on a video track and an audio track.
+  The old behaviour kept only the half you aimed at, which quietly discarded the
+  other.
+- An **audio-only file** goes to an audio track, wherever you drop it.
+- A **video-only file** goes to a video track.
+- The track is chosen by proximity, so the empty space above and below the
+  tracks is a valid target rather than dead space.
 - A file dragged in from the **desktop** is imported *and* placed, in one gesture.

@@ -166,8 +166,8 @@ at them, and `ADR-4` must mean the same thing forever.
 | `app/store/project-format.ts` | The saved-file format and the migration chain. **Pure** — no IndexedDB, no DOM — so it is unit tested in Node. |
 | `app/store/persistence.ts` | The IndexedDB layer: `projects`, `blobs`, `meta`. No mediabunny, no DOM. |
 | `app/store/project-store.ts` | What is open, what is saved, what is missing. Autosave, rehydration, boot. |
-| `app/view/ProjectPanel.tsx` | The list. `⌘O`, or the topbar's save indicator. |
-| `app/view/MediaPanel.tsx` | The media review screen. `⌘M`. See below. |
+| `app/view/projects/ProjectPanel.tsx` | The list. `⌘O`, or the topbar's save indicator. |
+| `app/view/media/MediaPanel.tsx` | The media review screen. `⌘M`. See below. |
 
 Two rules when touching this area:
 
@@ -212,8 +212,8 @@ machine that has it; the file only says what it is looking for.
 | `app/store/fingerprint.ts` | The matching ladder: what two fingerprints mean together, and what may be applied without asking. |
 | `app/store/project-file.ts` | The envelope, its versioning, and the refusal messages. **Pure.** |
 | `app/store/media-status.ts` | What state each asset is in, and whether a relink is allowed. **Pure.** |
-| `app/view/MediaPanel.tsx` | The review screen. `⌘M`, or **Media…** in the project list. |
-| `app/view/folder.ts` | Folder enumeration: the directory picker and the drop walk. |
+| `app/view/media/MediaPanel.tsx` | The review screen. `⌘M`, or **Media…** in the project list. |
+| `app/view/media/folder.ts` | Folder enumeration: the directory picker and the drop walk. |
 
 ### The one rule
 
