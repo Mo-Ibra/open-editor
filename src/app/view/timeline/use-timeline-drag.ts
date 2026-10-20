@@ -231,6 +231,12 @@ export function useTimelineDrag(
     if (target.dataset.handle === 'in' || target.dataset.handle === 'out') {
       if (!trackId) return
       const index = Number(target.dataset.index)
+      const clip = trackById(state.project, trackId)[index]
+      if (!clip) return
+      // A trim is a gesture on one clip, so pressing its handle selects it —
+      // but keep an existing multi-selection intact when trimming a member.
+      state.setActiveText(null)
+      if (!state.isSelected(clip.id)) state.selectClip(clip.id, 'replace')
       drag = { kind: target.dataset.handle === 'in' ? 'trim-in' : 'trim-out', trackId, index, locked: null }
       return
     }
@@ -239,8 +245,13 @@ export function useTimelineDrag(
       const index = Number(target.dataset.clipIndex)
       const clip = trackById(state.project, trackId)[index]
       if (!clip) return
+      state.setActiveText(null)
       state.selectClip(clip.id, selectModeOf(event))
       const selected = new Set(state.selection())
+      // A ctrl/meta click can toggle the pressed clip *out* of the selection.
+      // Starting a move for it then would drag a clip the user just deselected
+      // (and `selectionCount` would move the remaining group instead).
+      if (!selected.has(clip.id)) return
       // Only *fixed* edges are targets, captured once. A dragged clip moves, and
       // in a group drag so does every clip after the first selected one in
       // **each** track — positions are derived, so a rightward shift pushes its
@@ -271,6 +282,7 @@ export function useTimelineDrag(
     // with those clips" — and the next Delete should not take them.
     state.seek(state.xToTime(x))
     state.clearSelection()
+    state.setActiveText(null)
     drag = { kind: 'playhead', locked: null }
     setGuide(null)
   }
@@ -493,6 +505,7 @@ export function useTimelineDrag(
     if (clipEl && trackId) {
       const clipId = clipEl.getAttribute('data-clip-id')
       if (!clipId) return
+      state.setActiveText(null)
       if (!state.isSelected(clipId)) state.selectClip(clipId, 'replace')
       else state.setPrimary(clipId)
       menu.show({ kind: 'clip', trackId, clipId, x: event.clientX, y: event.clientY })

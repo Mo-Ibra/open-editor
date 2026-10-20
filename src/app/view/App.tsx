@@ -14,7 +14,7 @@
  */
 
 import { createEffect, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
-import { Download, Keyboard, ScrollText } from 'lucide-solid'
+import { Download, Keyboard, Redo2, ScrollText, Undo2 } from 'lucide-solid'
 
 import { AssetBin } from './media/AssetBin.js'
 import { ContextMenu, createContextMenu } from './ui/ContextMenu.js'
@@ -22,6 +22,7 @@ import { createFullscreen } from './shell/fullscreen.js'
 import { ExportDialog } from './export/ExportDialog.js'
 import { LogPanel } from './logs/LogPanel.js'
 import { Preview } from './preview/Preview.js'
+import { TextInspector } from './preview/TextInspector.js'
 import { ProjectPanel } from './projects/ProjectPanel.js'
 import { MediaPanel } from './media/MediaPanel.js'
 import { chooseOneMediaFile, chooseFileToRead, chooseSaveTarget, downloadText } from './projects/transfer.js'
@@ -237,36 +238,56 @@ export function App() {
           label="Media"
         />
 
-        <main
-          class="relative grid min-h-0 min-w-0"
-          style={{ 'grid-template-rows': mainRows(layout.pictureHidden(), layout.timelineTrack()) }}
-        >
-          <Preview state={state} menu={menu} layout={layout} fullscreen={fullscreen} />
+        <main class="relative flex min-h-0 min-w-0">
+          <div
+            class="relative grid min-h-0 min-w-0 flex-1 overflow-hidden"
+            style={{ 'grid-template-rows': mainRows(layout.pictureHidden(), layout.timelineTrack()) }}
+          >
+            <Preview state={state} menu={menu} layout={layout} fullscreen={fullscreen} />
 
-          <div class="relative flex min-h-0 min-w-0 overflow-hidden">
-            <Timeline state={state} menu={menu} layout={layout} />
+            <div class="relative flex min-h-0 min-w-0 overflow-hidden">
+              <Timeline state={state} menu={menu} layout={layout} />
+            </div>
+
+            {/* A sibling of the timeline, not a child of it.
+                A collapsed timeline is 0px tall and clips its overflow, so a
+                handle inside it gets clipped away — the tab was in the DOM, had
+                a real box, responded to .click(), and was unclickable by a
+                human, because the transport bar was what a pointer actually
+                hit. The sidebar handle has always been a sibling for the same
+                reason. Positioned from the bottom, which is the boundary only
+                while the timeline is the bottom row — and the one case where it
+                is not (the picture hidden) is exactly when this is not
+                rendered. */}
+            <Show when={!layout.pictureHidden()}>
+              <Resizer
+                axis="y"
+                at={{ bottom: layout.timelineTrack() }}
+                onDrag={(e) => layout.beginTimelineDrag(e)}
+                onToggle={() => layout.toggleTimeline()}
+                collapsed={layout.timelineCollapsed()}
+                prominent
+                title="Drag to resize the timeline · double-click to collapse"
+                label="Timeline"
+              />
+            </Show>
           </div>
 
-          {/* A sibling of the timeline, not a child of it.
-              A collapsed timeline is 0px tall and clips its overflow, so a
-              handle inside it gets clipped away — the tab was in the DOM, had a
-              real box, responded to .click(), and was unclickable by a human,
-              because the transport bar was what a pointer actually hit. The
-              sidebar handle has always been a sibling for the same reason.
-              Positioned from the bottom, which is the boundary only while the
-              timeline is the bottom row — and the one case where it is not (the
-              picture hidden) is exactly when this is not rendered. */}
-          <Show when={!layout.pictureHidden()}>
+          <Show when={state.activeText() && !layout.inspectorCollapsed()}>
             <Resizer
-              axis="y"
-              at={{ bottom: layout.timelineTrack() }}
-              onDrag={(e) => layout.beginTimelineDrag(e)}
-              onToggle={() => layout.toggleTimeline()}
-              collapsed={layout.timelineCollapsed()}
-              title="Drag to resize · double-click to collapse"
-              label="Timeline"
+              axis="x"
+              at={{ right: `calc(${layout.inspectorTrack()} - 3px)` }}
+              onDrag={(e) => layout.beginInspectorDrag(e)}
+              onToggle={() => layout.toggleInspector()}
+              title="Drag to resize title settings · double-click to collapse"
+              label="Title settings"
             />
           </Show>
+
+          {/* The title panel is a sibling of the picture, not a child of it.
+              Hiding the picture should give the timeline room, not throw away
+              the settings for the title that is still selected. */}
+          <TextInspector state={state} layout={layout} />
         </main>
       </div>
 
@@ -329,9 +350,36 @@ function TopBar(props: {
 
       <span class="h-5 w-px bg-line" />
 
+      <div class="flex items-center gap-0.5">
+        <button
+          type="button"
+          class="icon-btn"
+          onClick={() => state.undo()}
+          disabled={!state.canUndo()}
+          title="Undo (Ctrl/Cmd+Z)"
+          aria-label="Undo"
+        >
+          <Undo2 size={14} />
+        </button>
+        <button
+          type="button"
+          class="icon-btn"
+          onClick={() => state.redo()}
+          disabled={!state.canRedo()}
+          title="Redo (Ctrl/Cmd+Shift+Z)"
+          aria-label="Redo"
+        >
+          <Redo2 size={14} />
+        </button>
+      </div>
+
       <div class="flex min-w-0 items-center gap-3 text-muted">
         <span class="timecode text-mini">
           {state.videoClipCount()} video · {state.audioClipCount()} audio
+          <Show when={state.texts().length > 0}>
+            {' · '}
+            {state.texts().length} {state.texts().length === 1 ? 'title' : 'titles'}
+          </Show>
         </span>
         <Show when={state.canUndo()}>
           <span class="rounded-full border border-line bg-raised px-1.5 py-px text-tiny">edited</span>
@@ -358,8 +406,8 @@ function TopBar(props: {
         <button
           class="btn btn-primary"
           onClick={props.onExport}
-          disabled={!state.videoClipCount()}
-          title={state.videoClipCount() ? 'Export the timeline' : 'Add a video clip first'}
+          disabled={state.duration() <= 0}
+          title={state.duration() > 0 ? 'Export the timeline' : 'Add a clip or title first'}
         >
           <Download size={13} /> Export
         </button>
@@ -387,6 +435,10 @@ function StatusFooter(props: { state: AppState; pictureHidden: () => boolean }) 
       <span class="text-line">|</span>
       <span>
         {state.videoClipCount()} video · {state.audioClipCount()} audio
+        <Show when={state.texts().length > 0}>
+          {' · '}
+          {state.texts().length} {state.texts().length === 1 ? 'title' : 'titles'}
+        </Show>
       </span>
 
       <Show when={state.selectionCount() > 0}>

@@ -12,6 +12,8 @@
 
 /** The path points right, so every state is a rotation from there. */
 const ROTATION: Record<'left' | 'right' | 'up' | 'down', [open: number, collapsed: number]> = {
+  // A right-hand panel collapses toward the right, so its open arrow points
+  // right and its collapsed arrow points back toward the panel.
   right: [0, 180],
   left: [180, 0],
   down: [90, 270],
@@ -62,7 +64,7 @@ export function PanelToggle(props: {
         style={{ transform: `rotate(${open() ? openDeg : collapsedDeg}deg)` }}
         fill="currentColor"
       >
-        <path d="M10.2 3.3 5.5 8l4.7 4.7 1.1-1.1L7.7 8l3.6-3.6-1.1-1.1Z" />
+        <path d="M5.8 3.3 10.5 8l-4.7 4.7-1.1-1.1L8.3 8 4.7 4.4l1.1-1.1Z" />
       </svg>
     </button>
   )

@@ -230,9 +230,18 @@ export function drawTexts(
     const layout = layoutText(ctx, { ...layer, text })
     if (layer.background) {
       ctx.fillStyle = layer.background
+      // The plate follows the text's alignment. It used to be centred on the
+      // anchor for every alignment, which left half a plate behind left- and
+      // right-aligned text instead of padding it.
+      const plateX =
+        layer.align === 'left'
+          ? -layout.padX
+          : layer.align === 'right'
+            ? -layout.blockWidth - layout.padX
+            : -layout.blockWidth / 2 - layout.padX
       roundRect(
         ctx,
-        -layout.blockWidth / 2 - layout.padX,
+        plateX,
         -layout.blockHeight / 2 - layout.padY,
         layout.blockWidth + layout.padX * 2,
         layout.blockHeight + layout.padY * 2,
@@ -288,8 +297,15 @@ export function textFrameRect(
   const height = (layout.blockHeight + layout.padY * 2) * layer.scale
   const anchorX = layer.x * ctx.canvas.width
   const anchorY = layer.y * ctx.canvas.height + layer.offsetY * layer.scale
-  const x = layer.align === 'center' ? anchorX - width / 2 : layer.align === 'right' ? anchorX - width : anchorX
-  return { x, y: anchorY - height / 2, width, height }
+  // Match the plate, not just the glyphs: the frame must own the padding too,
+  // or a left/right-aligned plate sticks out past the selection box.
+  const left =
+    layer.align === 'left'
+      ? -layout.padX
+      : layer.align === 'right'
+        ? -layout.blockWidth - layout.padX
+        : -layout.blockWidth / 2 - layout.padX
+  return { x: anchorX + left * layer.scale, y: anchorY - height / 2, width, height }
 }
 
 /**

@@ -89,7 +89,7 @@ export function LogPanel(props: { onClose: () => void }) {
           </For>
         </div>
 
-        <div class="min-h-0 flex-1 overflow-y-auto font-mono text-mini leading-relaxed">
+        <div class="min-h-0 flex-1 overflow-y-auto font-mono text-mini leading-relaxed select-text">
           <Show
             when={entries().length > 0}
             fallback={

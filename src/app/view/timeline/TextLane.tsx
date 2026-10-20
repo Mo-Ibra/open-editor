@@ -7,17 +7,24 @@
  * operations that make sense for a free-floating thing live: drag to move it in
  * time, and drag an edge to make it longer or shorter.
  *
- * Everything snaps to the same edges the rest of the timeline snaps to — the
- * playhead, clip starts and ends, and other titles — so a card can be lined up
- * against a cut without zooming in.
+ * Everything snaps to the same edges the rest of the timeline snaps to — clip
+ * starts and ends, other titles, and the timeline start — under the same clip
+ * and lane toggles, so a card can be lined up against a cut without zooming in.
  */
 
-import { For, Show } from 'solid-js'
-import { clipDuration } from '../../../model/project.js'
+import { For, onCleanup, Show } from 'solid-js'
+import {
+  collectTargets,
+  snapMove,
+  snapTrimEdge,
+  thresholdInSeconds,
+  type SnapTarget,
+} from '../../../model/snapping.js'
 import type { TextClip, TextId } from '../../../model/text.js'
 import { TEXT_DURATION_MIN } from '../../../model/text.js'
 import type { AppState } from '../../store/state.js'
 import type { ContextMenuState } from '../ui/ContextMenu.js'
+import { focusTitleText } from '../preview/text-focus.js'
 
 type LaneDrag = {
   id: TextId
@@ -26,10 +33,12 @@ type LaneDrag = {
   originStart: number
   originEnd: number
   committed: boolean
+  locked: SnapTarget | null
 }
 
 const LANE_HEIGHT = 30
-const SNAP_PX = 8
+const SNAP_PIXELS = 10
+const DRAG_THRESHOLD = 3
 
 export function TextLane(props: { state: AppState; trackLeft: () => number; menu: ContextMenuState }) {
   const state = props.state
@@ -39,37 +48,34 @@ export function TextLane(props: { state: AppState; trackLeft: () => number; menu
 
   const timeAt = (clientX: number): number => state.xToTime(clientX - props.trackLeft())
 
-  /** Nearest edge to `t` within a few pixels, or `t` itself. */
-  function snap(t: number, exclude: TextId | null): number {
-    const threshold = SNAP_PX / state.zoom()
-    let best = t
-    let bestDistance = threshold
-    const consider = (candidate: number): void => {
-      const distance = Math.abs(candidate - t)
-      if (distance < bestDistance) {
-        bestDistance = distance
-        best = candidate
+  /** The edges a title may align to under the current snap toggles. */
+  function snapTargets(exclude: TextId | null): SnapTarget[] {
+    const targets: SnapTarget[] = []
+    if (state.clipSnap()) {
+      targets.push({ time: 0, kind: 'timeline-start', trackId: null, clipId: null })
+      for (const other of texts()) {
+        if (other.id === exclude) continue
+        targets.push({ time: other.start, kind: 'clip-start', trackId: null, clipId: other.id })
+        targets.push({
+          time: other.start + other.duration,
+          kind: 'clip-end',
+          trackId: null,
+          clipId: other.id,
+        })
       }
     }
+    if (state.laneSnap()) {
+      targets.push(...collectTargets(state.project, { playhead: state.playhead(), includePlayhead: false }))
+    }
+    return targets
+  }
 
-    consider(state.playhead())
-    for (const track of state.project.tracks) {
-      const starts = state.clipStartsFor(track.id)
-      for (let i = 0; i < track.clips.length; i++) {
-        const start = starts[i] ?? 0
-        consider(start)
-        consider(start + clipDuration(track.clips[i]!))
-      }
-    }
-    for (const other of texts()) {
-      if (other.id === exclude) continue
-      consider(other.start)
-      consider(other.start + other.duration)
-    }
-    return best
+  function snapThreshold(): number {
+    return state.snapping() ? thresholdInSeconds(SNAP_PIXELS, state.zoom()) : 0
   }
 
   function begin(mode: LaneDrag['mode'], clip: TextClip, event: PointerEvent): void {
+    if (state.playing()) state.setPlaying(false)
     drag = {
       id: clip.id,
       mode,
@@ -77,6 +83,7 @@ export function TextLane(props: { state: AppState; trackLeft: () => number; menu
       originStart: clip.start,
       originEnd: clip.start + clip.duration,
       committed: false,
+      locked: null,
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
@@ -87,24 +94,71 @@ export function TextLane(props: { state: AppState; trackLeft: () => number; menu
   function onMove(event: PointerEvent): void {
     if (!drag) return
     if (!drag.committed) {
+      if (Math.abs(event.clientX - drag.startX) < DRAG_THRESHOLD) return
       state.commit()
       drag.committed = true
     }
     const delta = state.xToTime(event.clientX - drag.startX)
+    const threshold = snapThreshold()
+    const targets = threshold > 0 ? snapTargets(drag.id) : []
+    const exclude = { clipId: drag.id }
     if (drag.mode === 'move') {
-      const start = Math.max(0, snap(drag.originStart + delta, drag.id))
+      const raw = Math.max(0, drag.originStart + delta)
+      let start = raw
+      if (threshold > 0) {
+        const snapped = snapMove(
+          raw,
+          drag.originEnd - drag.originStart,
+          targets,
+          threshold,
+          exclude,
+          drag.locked,
+        )
+        if (snapped && snapped.start >= 0) {
+          start = snapped.start
+          drag.locked = snapped.target
+        } else {
+          drag.locked = null
+        }
+      } else {
+        drag.locked = null
+      }
       state.moveText(drag.id, start, { commit: false })
       return
     }
     if (drag.mode === 'out') {
-      const end = Math.max(drag.originStart + TEXT_DURATION_MIN, snap(drag.originEnd + delta, drag.id))
+      const raw = Math.max(drag.originStart + TEXT_DURATION_MIN, drag.originEnd + delta)
+      let end = raw
+      if (threshold > 0) {
+        const snapped = snapTrimEdge(raw, targets, threshold, exclude, drag.locked)
+        if (snapped) {
+          end = Math.max(drag.originStart + TEXT_DURATION_MIN, snapped.time)
+          drag.locked = snapped.target
+        } else {
+          drag.locked = null
+        }
+      } else {
+        drag.locked = null
+      }
       state.updateText(drag.id, { duration: end - drag.originStart }, { commit: false })
       return
     }
-    const start = Math.min(
+    const raw = Math.min(
       drag.originEnd - TEXT_DURATION_MIN,
-      Math.max(0, snap(drag.originStart + delta, drag.id)),
+      Math.max(0, drag.originStart + delta),
     )
+    let start = raw
+    if (threshold > 0) {
+      const snapped = snapTrimEdge(raw, targets, threshold, exclude, drag.locked)
+      if (snapped) {
+        start = Math.min(drag.originEnd - TEXT_DURATION_MIN, Math.max(0, snapped.time))
+        drag.locked = snapped.target
+      } else {
+        drag.locked = null
+      }
+    } else {
+      drag.locked = null
+    }
     state.updateText(drag.id, { start, duration: drag.originEnd - start }, { commit: false })
   }
 
@@ -114,6 +168,8 @@ export function TextLane(props: { state: AppState; trackLeft: () => number; menu
     window.removeEventListener('pointerup', onUp)
     window.removeEventListener('pointercancel', onUp)
   }
+
+  onCleanup(onUp)
 
   /** Selecting a title brings the playhead into it, so the picture shows it. */
   function select(clip: TextClip): void {
@@ -126,6 +182,7 @@ export function TextLane(props: { state: AppState; trackLeft: () => number; menu
   function onEmptyPointerDown(event: PointerEvent): void {
     if (event.button !== 0) return
     event.stopPropagation()
+    if (state.playing()) state.setPlaying(false)
     state.clearSelection()
     state.setActiveText(null)
     state.seek(Math.max(0, timeAt(event.clientX)))
@@ -133,10 +190,15 @@ export function TextLane(props: { state: AppState; trackLeft: () => number; menu
 
   function onEmptyDoubleClick(event: MouseEvent): void {
     event.stopPropagation()
-    const start = Math.max(0, snap(timeAt(event.clientX), null))
+    const at = timeAt(event.clientX)
+    const threshold = snapThreshold()
+    const snapped =
+      threshold > 0 ? snapTrimEdge(at, snapTargets(null), threshold) : null
+    const start = Math.max(0, snapped ? snapped.time : at)
     state.clearSelection()
     const id = state.addText({ start })
     state.seek(start)
+    focusTitleText()
     void id
   }
 
@@ -180,7 +242,11 @@ export function TextLane(props: { state: AppState; trackLeft: () => number; menu
                 select(clip)
                 begin('move', clip, event)
               }}
-              onDblClick={(event) => event.stopPropagation()}
+              onDblClick={(event) => {
+                event.stopPropagation()
+                select(clip)
+                focusTitleText()
+              }}
               onContextMenu={(event) => {
                 event.preventDefault()
                 event.stopPropagation()
@@ -192,6 +258,7 @@ export function TextLane(props: { state: AppState; trackLeft: () => number; menu
                 class="absolute inset-y-0 left-0 z-10 w-1.5 cursor-ew-resize"
                 data-handle="in"
                 onPointerDown={(event) => {
+                  if (event.button !== 0) return
                   event.stopPropagation()
                   select(clip)
                   begin('in', clip, event)
@@ -202,6 +269,7 @@ export function TextLane(props: { state: AppState; trackLeft: () => number; menu
                 class="absolute inset-y-0 right-0 z-10 w-1.5 cursor-ew-resize"
                 data-handle="out"
                 onPointerDown={(event) => {
+                  if (event.button !== 0) return
                   event.stopPropagation()
                   select(clip)
                   begin('out', clip, event)

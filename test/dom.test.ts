@@ -280,6 +280,24 @@ console.log('ref-binding assertions passed')
 }
 
 /**
+ * Dragging the editor must not paint a text selection across its chrome.
+ *
+ * A video editor is a control surface: a drag that misses a clip by two pixels
+ * should do nothing, not highlight every timecode between the two points.
+ * Editable fields are the exception, or selecting text inside them breaks.
+ */
+{
+  const css = readFileSync(join(repoRootFor(), 'src/index.css'), 'utf8')
+  assert.match(css, /body\s*\{[\s\S]*?user-select:\s*none/, 'the app chrome must opt out of text selection')
+  assert.match(
+    css,
+    /input,\s*\n\s*textarea,[\s\S]{0,120}?user-select:\s*text/,
+    'inputs and textareas must opt back in, or their text cannot be selected',
+  )
+  console.log('  chrome is not selectable; editable fields are')
+}
+
+/**
  * Documentation references in the source must resolve.
  *
  * Code comments point at docs by path — `docs/data-model.md`,

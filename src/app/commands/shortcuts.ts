@@ -17,6 +17,7 @@ import type { LayoutState } from '../store/layout.js'
 import type { Fullscreen } from '../view/shell/fullscreen.js'
 import { trackTypeById } from '../../model/project.js'
 import { shouldSuppressNativeMenu } from '../view/ui/ContextMenu.js'
+import { focusTitleText } from '../view/preview/text-focus.js'
 
 export interface ShortcutContext {
   state: AppState
@@ -105,7 +106,10 @@ export function createShortcuts({
       keys: ['t'],
       hint: 'T',
       label: 'add title',
-      run: () => state.addText(),
+      run: () => {
+        state.addText()
+        focusTitleText()
+      },
     },
 
     { keys: ['ArrowLeft'], hint: '←', label: 'step', run: () => state.step(-1) },
@@ -166,7 +170,7 @@ export function createShortcuts({
     { keys: ['z'], accel: true, hint: '⌘Z', label: 'undo', enabled: () => state.canUndo(), run: () => state.undo() },
     { keys: ['z'], accel: true, shift: true, hint: '⇧⌘Z', label: 'redo', enabled: () => state.canRedo(), run: () => state.redo() },
 
-    { keys: ['Escape'], hint: 'esc', label: 'deselect', run: () => { state.clearSelection(); closeMenu() } },
+    { keys: ['Escape'], hint: 'esc', label: 'deselect', run: () => { state.clearSelection(); state.setActiveText(null); closeMenu() } },
     // The keymap left the footer, so it needs a key of its own — or moving it
     // would have made it harder to find than the thing it replaced.
     { keys: ['?'], hint: '?', label: 'keyboard', run: openKeys },

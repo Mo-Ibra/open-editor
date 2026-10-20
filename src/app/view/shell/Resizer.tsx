@@ -34,6 +34,8 @@ export function Resizer(props: {
   onDrag: (event: PointerEvent) => void
   onToggle: () => void
   collapsed?: boolean
+  /** Keep a visible grip at rest instead of revealing the handle only on hover. */
+  prominent?: boolean
   title: string
   /** What the collapsed tab names — the panel it reopens. */
   label?: string
@@ -74,6 +76,7 @@ export function Resizer(props: {
         if (collapsed()) props.onToggle()
       }}
       title={props.title}
+      aria-label={props.title}
       role="separator"
       aria-orientation={vertical() ? 'vertical' : 'horizontal'}
       aria-expanded={!collapsed()}
@@ -87,17 +90,21 @@ export function Resizer(props: {
       <Show when={!collapsed()}>
         {/* The hairline, and the hit area that makes it findable on hover. */}
         <div
-          class="absolute bg-accent opacity-0 transition-opacity group-hover:opacity-100"
+          class={props.prominent
+            ? 'absolute bg-line-strong transition-colors group-hover:bg-accent'
+            : 'absolute bg-accent opacity-0 transition-opacity group-hover:opacity-100'}
           classList={{
             'inset-y-0 left-1/2 w-px -translate-x-1/2': vertical(),
             'inset-x-0 top-1/2 h-px -translate-y-1/2': !vertical(),
           }}
         />
         <div
-          class="absolute opacity-0 transition-opacity group-hover:opacity-90"
+          class={props.prominent
+            ? 'absolute rounded-full bg-accent/65 shadow-sm transition-all group-hover:scale-110 group-hover:bg-accent'
+            : 'absolute rounded-full bg-accent/70 opacity-0 transition-opacity group-hover:opacity-90'}
           classList={{
-            'h-8 w-1 rounded-full bg-accent/70': vertical(),
-            'w-8 h-1 rounded-full bg-accent/70': !vertical(),
+            'h-10 w-1': vertical(),
+            'h-1 w-10': !vertical(),
           }}
         />
       </Show>
@@ -121,7 +128,7 @@ function ExpandTab(props: { axis: 'x' | 'right' | 'y'; label?: string }) {
       classList={{ 'flex-col': vertical() }}
     >
       <svg viewBox="0 0 16 16" class="size-3.5 shrink-0" fill="currentColor" style={{ transform: `rotate(${rotation()})` }}>
-        <path d="M10.2 3.3 5.5 8l4.7 4.7 1.1-1.1L7.7 8l3.6-3.6-1.1-1.1Z" />
+        <path d="M5.8 3.3 10.5 8l-4.7 4.7-1.1-1.1L8.3 8 4.7 4.4l1.1-1.1Z" />
       </svg>
       <span
         class="text-micro font-semibold uppercase tracking-[0.12em]"

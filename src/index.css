@@ -93,6 +93,23 @@
     overflow: hidden;
     /* Native controls should not look like they came from another app. */
     accent-color: var(--color-accent);
+    /*
+     * A video editor is a control surface, not a document.
+     *
+     * A drag on the timeline, a clip, or empty space is a gesture, never a
+     * text selection. Without this, missing a clip by two pixels leaves
+     * timecodes, counts, and labels highlighted across the chrome. Editable
+     * fields and explicitly copyable output opt back in below.
+     */
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  input,
+  textarea,
+  [contenteditable='true'] {
+    -webkit-user-select: text;
+    user-select: text;
   }
 
   button,

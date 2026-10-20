@@ -209,6 +209,10 @@ export function ExportDialog(props: { state: AppState; onClose: () => void }) {
           <span class="text-[13px] font-semibold">Export</span>
           <span class="timecode text-mini text-muted">
             {formatTime(state.duration())} · {state.videoClipCount()} video · {state.audioClipCount()} audio
+            <Show when={state.texts().length > 0}>
+              {' · '}
+              {state.texts().length} {state.texts().length === 1 ? 'title' : 'titles'}
+            </Show>
           </span>
           <span class="flex-1" />
           <button class="icon-btn" onClick={close} disabled={busy()} title="Close (Esc)" aria-label="Close">

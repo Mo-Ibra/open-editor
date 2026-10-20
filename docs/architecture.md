@@ -125,7 +125,8 @@ SolidJS components, no VDOM.
 | `app/view/preview/Transport.tsx` | The transport bar: play, stepping, mute, time, zoom. |
 | `app/view/preview/use-playback-clock.ts` | The playback clock. Polls the audio clock; never owns it. |
 | `app/view/preview/Scrubber.tsx` | The seek bar under the picture. Pure presentation over `state.seek`. |
-| `app/view/preview/TextInspector.tsx` | The floating title inspector: one bar that edits the selected title. |
+| `app/view/preview/TextInspector.tsx` | The docked title inspector: typography, placement, and motion for the selected title. |
+| `app/view/preview/text-focus.ts` | Focuses the title textarea after a title is added or duplicated. |
 | `app/view/preview/paint-intent.ts` | What the preview should paint at a moment. Black is a decision, and it is made here once rather than inline three times. |
 | `app/view/shell/PanelToggle.tsx` | The button that collapses a panel. The drag handle resizes; this says so. |
 | `app/view/shell/Resizer.tsx` | The draggable panel dividers. |

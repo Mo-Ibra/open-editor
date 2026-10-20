@@ -34,7 +34,7 @@ consumers. `test/keyboard.test.ts` exists mostly to keep it that way.
 
 ## 2. The shortcut decides which behaviour
 
-`src/app/commands/shortcuts.ts:67` is the `s` descriptor:
+`src/app/commands/shortcuts.ts:69` is the `s` descriptor:
 
 ```ts
 {

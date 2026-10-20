@@ -272,3 +272,61 @@ test('the timeline cannot be collapsed while the picture is hidden', () => {
   layout.toggleSidebar()
   assert.equal(layout.sidebarCollapsed(), true, 'hiding the picture must not freeze the other panel')
 })
+
+test('the title inspector defaults to a comfortable width and clamps', () => {
+  const layout = createLayout()
+  assert.equal(layout.inspectorWidth(), 286)
+  assert.equal(layout.inspectorTrack(), '286px')
+  layout.setInspectorWidth(99_999)
+  assert.equal(layout.inspectorWidth(), LIMITS.inspector.max)
+  layout.setInspectorWidth(1)
+  assert.equal(layout.inspectorWidth(), LIMITS.inspector.min)
+})
+
+test('the title inspector handle inverts the drag: left means wider', () => {
+  const layout = createLayout()
+  const before = layout.inspectorWidth()
+  const moves: ((e: PointerEvent) => void)[] = []
+  const win = globalThis.window as unknown as {
+    addEventListener(type: string, fn: (e: PointerEvent) => void, once?: boolean): void
+  }
+  win.addEventListener = (type, fn, once) => {
+    if (type === 'pointermove') moves.push(fn as (e: PointerEvent) => void)
+    void once
+  }
+  layout.beginInspectorDrag(pointer(500, 0))
+  for (const m of moves) m(pointer(450, 0))
+  assert.equal(layout.inspectorWidth(), before + 50)
+})
+
+test('collapsing the title inspector keeps its width for the next open', () => {
+  const layout = createLayout()
+  layout.setInspectorWidth(360)
+  layout.toggleInspector()
+  assert.equal(layout.inspectorCollapsed(), true)
+  assert.equal(layout.inspectorTrack(), '0px')
+  layout.toggleInspector()
+  assert.equal(layout.inspectorCollapsed(), false)
+  assert.equal(layout.inspectorWidth(), 360)
+})
+
+test('the title inspector width survives a reload', () => {
+  const first = createLayout()
+  first.setInspectorWidth(380)
+  first.toggleInspector()
+  first.save()
+
+  const second = createLayout()
+  assert.equal(second.inspectorCollapsed(), true)
+  second.toggleInspector()
+  assert.equal(second.inspectorWidth(), 380)
+})
+
+test('reset restores the title inspector as well', () => {
+  const layout = createLayout()
+  layout.setInspectorWidth(400)
+  layout.toggleInspector()
+  layout.reset()
+  assert.equal(layout.inspectorWidth(), 286)
+  assert.equal(layout.inspectorCollapsed(), false)
+})

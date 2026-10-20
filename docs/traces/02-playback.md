@@ -211,7 +211,7 @@ overlay — because "black rectangle" is not a bug report.
 
 ## 7. Cache first, always
 
-`src/app/view/preview/Preview.tsx:392`:
+`src/app/view/preview/Preview.tsx:409`:
 
 ```ts
 const cached = state.frameCache.find(sourceTime)
@@ -250,7 +250,7 @@ rather than a failure.
 
 ## 8. The one draw call
 
-`paint()` at `src/app/view/preview/Preview.tsx:495` computes how the frame fits
+`paint()` at `src/app/view/preview/Preview.tsx:511` computes how the frame fits
 (an image `cover`s the frame, a video `contain`s its own aspect inside it) and
 makes one call into `src/render/render.ts`:
 

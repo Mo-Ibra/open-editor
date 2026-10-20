@@ -24,9 +24,12 @@ import type { Fullscreen } from '../shell/fullscreen.js'
 import { log } from '../../../dev/debug.js'
 import { createDiagnostics, HEALTH_INTERVAL_MS } from '../../../dev/preview-diagnostics.js'
 import { Transport } from './Transport.js'
-import { TextInspector } from './TextInspector.js'
+import { focusTitleText } from './text-focus.js'
 import { paintIntentAt } from './paint-intent.js'
 import { usePlaybackClock } from './use-playback-clock.js'
+
+const TEXT_DRAG_THRESHOLD = 3
+const SNAP_AXES = [0, 1 / 3, 0.5, 2 / 3, 1] as const
 
 export function Preview(props: {
   state: AppState
@@ -138,13 +141,17 @@ export function Preview(props: {
     committed: boolean
   }
   let textDrag: TextDrag | null = null
+  const [textGuide, setTextGuide] = createSignal<{ x: number | null; y: number | null } | null>(null)
+  const [textHud, setTextHud] = createSignal<string | null>(null)
+  const guideX = () => textGuide()?.x ?? null
+  const guideY = () => textGuide()?.y ?? null
 
-  /** Magnet a title to the frame's edges and centre. */
-  function snapAxis(value: number): number {
-    for (const target of [0, 0.5, 1]) {
-      if (Math.abs(value - target) < 0.012) return target
+  /** Magnet a title to the frame's edges, centre and thirds. */
+  function snapAxis(value: number): { value: number; at: number | null } {
+    for (const target of SNAP_AXES) {
+      if (Math.abs(value - target) < 0.012) return { value: target, at: target }
     }
-    return value
+    return { value, at: null }
   }
 
   function beginTextDrag(mode: 'move' | 'scale', clip: TextClip, event: PointerEvent): void {
@@ -163,6 +170,9 @@ export function Preview(props: {
       startDistance: Math.max(6, Math.hypot(event.clientX - anchorX, event.clientY - anchorY)),
       committed: false,
     }
+    if (state.playing()) state.setPlaying(false)
+    setTextGuide(null)
+    setTextHud(null)
     window.addEventListener('pointermove', onTextDragMove)
     window.addEventListener('pointerup', onTextDragEnd)
     window.addEventListener('pointercancel', onTextDragEnd)
@@ -172,25 +182,31 @@ export function Preview(props: {
   function onTextDragMove(event: PointerEvent): void {
     const drag = textDrag
     if (!drag) return
-    // Commit once, on the first real movement, so a click that merely selects a
-    // title does not leave an undo step behind.
     if (!drag.committed) {
+      const moved = Math.max(Math.abs(event.clientX - drag.startX), Math.abs(event.clientY - drag.startY))
+      if (moved < TEXT_DRAG_THRESHOLD) return
       state.commit()
       drag.committed = true
     }
     if (drag.mode === 'move') {
       const x = snapAxis(clamp(drag.origin.x + (event.clientX - drag.startX) / drag.rect.width, 0, 1))
       const y = snapAxis(clamp(drag.origin.y + (event.clientY - drag.startY) / drag.rect.height, 0, 1))
-      state.updateText(drag.id, { x, y }, { commit: false })
+      setTextGuide({ x: x.at, y: y.at })
+      setTextHud(`${Math.round(x.value * 100)}% · ${Math.round(y.value * 100)}%`)
+      state.updateText(drag.id, { x: x.value, y: y.value }, { commit: false })
     } else {
       const distance = Math.hypot(event.clientX - drag.anchorX, event.clientY - drag.anchorY)
       const size = clamp(drag.origin.style.size * (distance / drag.startDistance), TEXT_SIZE_MIN, TEXT_SIZE_MAX)
+      setTextGuide(null)
+      setTextHud(`${(size * 100).toFixed(1)}%`)
       state.updateText(drag.id, { style: { size } }, { commit: false })
     }
   }
 
   function onTextDragEnd(): void {
     textDrag = null
+    setTextGuide(null)
+    setTextHud(null)
     window.removeEventListener('pointermove', onTextDragMove)
     window.removeEventListener('pointerup', onTextDragEnd)
     window.removeEventListener('pointercancel', onTextDragEnd)
@@ -199,7 +215,7 @@ export function Preview(props: {
   onCleanup(onTextDragEnd)
 
   /** The topmost visible title under a pointer, if any. */
-  function hitText(event: PointerEvent): { id: TextId; clip: TextClip } | null {
+  function hitText(event: { clientX: number; clientY: number }): { id: TextId; clip: TextClip } | null {
     if (stageHeight() === 0) return null
     const rect = canvas.getBoundingClientRect()
     const px = ((event.clientX - rect.left) / rect.width) * canvas.width
@@ -655,99 +671,125 @@ export function Preview(props: {
           not merely clipped: a 0-height canvas still costs a paint, and the
           scrub handler would still be bound to it. */}
       <Show when={!props.layout.pictureHidden()}>
-        <div ref={(el) => props.fullscreen.register(el)} class="relative grid min-h-0 flex-1 place-items-center overflow-hidden bg-black p-4">
-        <div
-          class="relative max-h-full max-w-full"
-          style={{ 'aspect-ratio': String(aspect()), width: 'min(100%, calc((100cqh) * ' + aspect() + '))' }}
-        >
-          <canvas
-            ref={canvas}
-            width={1280}
-            height={Math.round(1280 / aspect())}
-            class="size-full cursor-col-resize rounded-md bg-black shadow-[0_0_0_1px_#23242c,0_18px_50px_-12px_#000]"
-            onContextMenu={(e) => {
-              e.preventDefault()
-              props.menu.show({ kind: 'preview', x: e.clientX, y: e.clientY })
-            }}
-            onPointerDown={onStagePointerDown}
-            onPointerMove={(e) => {
-              if (!textDrag && e.buttons === 1) onScrub(e)
-            }}
-          />
-
-          {/* The active title's box and corner handles. Pointer-events are off on
-              the box so a drag inside it still reaches the canvas, which moves
-              the title; only the corners are live, and they resize it. */}
-          <Show when={textBox()}>
-            {(box) => (
-              <div
-                class="pointer-events-none absolute z-10 rounded-[3px] border border-accent/80"
-                style={{
-                  left: `${(box().x / (options().width || 1)) * 100}%`,
-                  top: `${(box().y / (options().height || 1)) * 100}%`,
-                  width: `${(box().width / (options().width || 1)) * 100}%`,
-                  height: `${(box().height / (options().height || 1)) * 100}%`,
+        <div class="flex min-h-0 flex-1 overflow-hidden">
+          <div ref={(el) => props.fullscreen.register(el)} class="relative grid min-h-0 min-w-0 flex-1 place-items-center overflow-hidden bg-black p-4">
+            <div
+              class="relative max-h-full max-w-full"
+              style={{ 'aspect-ratio': String(aspect()), width: 'min(100%, calc((100cqh) * ' + aspect() + '))' }}
+            >
+              <canvas
+                ref={canvas}
+                width={1280}
+                height={Math.round(1280 / aspect())}
+                class="size-full cursor-col-resize rounded-md bg-black shadow-[0_0_0_1px_#23242c,0_18px_50px_-12px_#000]"
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  props.menu.show({ kind: 'preview', x: e.clientX, y: e.clientY })
                 }}
-              >
-                <div
-                  class="pointer-events-auto absolute -left-1.5 -top-1.5 size-3 cursor-nwse-resize rounded-[2px] border border-accent bg-bg"
-                  onPointerDown={(e) => {
-                    e.stopPropagation()
-                    const clip = state.activeText()
-                    if (clip) beginTextDrag('scale', clip, e)
-                  }}
-                />
-                <div
-                  class="pointer-events-auto absolute -right-1.5 -top-1.5 size-3 cursor-nesw-resize rounded-[2px] border border-accent bg-bg"
-                  onPointerDown={(e) => {
-                    e.stopPropagation()
-                    const clip = state.activeText()
-                    if (clip) beginTextDrag('scale', clip, e)
-                  }}
-                />
-                <div
-                  class="pointer-events-auto absolute -bottom-1.5 -left-1.5 size-3 cursor-nesw-resize rounded-[2px] border border-accent bg-bg"
-                  onPointerDown={(e) => {
-                    e.stopPropagation()
-                    const clip = state.activeText()
-                    if (clip) beginTextDrag('scale', clip, e)
-                  }}
-                />
-                <div
-                  class="pointer-events-auto absolute -bottom-1.5 -right-1.5 size-3 cursor-nwse-resize rounded-[2px] border border-accent bg-bg"
-                  onPointerDown={(e) => {
-                    e.stopPropagation()
-                    const clip = state.activeText()
-                    if (clip) beginTextDrag('scale', clip, e)
-                  }}
-                />
-              </div>
-            )}
-          </Show>
+                onPointerDown={onStagePointerDown}
+                onPointerMove={(e) => {
+                  if (!textDrag && e.buttons === 1) onScrub(e)
+                }}
+                onDblClick={(e) => {
+                  const hit = hitText(e)
+                  if (!hit) return
+                  state.clearSelection()
+                  state.setActiveText(hit.id)
+                  focusTitleText()
+                }}
+              />
 
-          {/* Empty state, rather than a black rectangle with no explanation. */}
-          <Show when={state.videoClipCount() === 0 && state.texts().length === 0}>
-            <div class="absolute inset-0 grid place-items-center">
-              <div class="max-w-[38ch] text-center">
-                <p class="text-[13px] text-fg">
-                  {state.assetIds().length > 0 ? (
-                    <>
-                      <span class="font-semibold">
-                        {state.assetIds().length} file{state.assetIds().length === 1 ? '' : 's'} ready.
-                      </span>{' '}
-                      Double-click one under <span class="text-accent">Media</span>, or drag it onto a track.
-                    </>
-                  ) : (
-                    'Drop a video file anywhere to begin.'
-                  )}
-                </p>
-              </div>
+              {/* The active title's box and corner handles. Pointer-events are off on
+                  the box so a drag inside it still reaches the canvas, which moves
+                  the title; only the corners are live, and they resize it. */}
+              <Show when={textBox()}>
+                {(box) => (
+                  <div
+                    class="pointer-events-none absolute z-10 rounded-[3px] border border-accent/80"
+                    style={{
+                      left: `${(box().x / (options().width || 1)) * 100}%`,
+                      top: `${(box().y / (options().height || 1)) * 100}%`,
+                      width: `${(box().width / (options().width || 1)) * 100}%`,
+                      height: `${(box().height / (options().height || 1)) * 100}%`,
+                    }}
+                  >
+                    <div
+                      class="pointer-events-auto absolute -left-1.5 -top-1.5 size-3 cursor-nwse-resize rounded-[2px] border border-accent bg-bg"
+                      onPointerDown={(e) => {
+                        e.stopPropagation()
+                        const clip = state.activeText()
+                        if (clip) beginTextDrag('scale', clip, e)
+                      }}
+                    />
+                    <div
+                      class="pointer-events-auto absolute -right-1.5 -top-1.5 size-3 cursor-nesw-resize rounded-[2px] border border-accent bg-bg"
+                      onPointerDown={(e) => {
+                        e.stopPropagation()
+                        const clip = state.activeText()
+                        if (clip) beginTextDrag('scale', clip, e)
+                      }}
+                    />
+                    <div
+                      class="pointer-events-auto absolute -bottom-1.5 -left-1.5 size-3 cursor-nesw-resize rounded-[2px] border border-accent bg-bg"
+                      onPointerDown={(e) => {
+                        e.stopPropagation()
+                        const clip = state.activeText()
+                        if (clip) beginTextDrag('scale', clip, e)
+                      }}
+                    />
+                    <div
+                      class="pointer-events-auto absolute -bottom-1.5 -right-1.5 size-3 cursor-nwse-resize rounded-[2px] border border-accent bg-bg"
+                      onPointerDown={(e) => {
+                        e.stopPropagation()
+                        const clip = state.activeText()
+                        if (clip) beginTextDrag('scale', clip, e)
+                      }}
+                    />
+                  </div>
+                )}
+              </Show>
+
+              <Show when={guideX() !== null}>
+                <div
+                  class="pointer-events-none absolute inset-y-0 z-[5] w-px bg-accent/70"
+                  style={{ left: `${guideX()! * 100}%` }}
+                />
+              </Show>
+              <Show when={guideY() !== null}>
+                <div
+                  class="pointer-events-none absolute inset-x-0 z-[5] h-px bg-accent/70"
+                  style={{ top: `${guideY()! * 100}%` }}
+                />
+              </Show>
+              <Show when={textHud()}>
+                <div class="pointer-events-none absolute left-2 top-2 z-10 rounded-md border border-line bg-bg/85 px-2 py-1 text-tiny text-muted backdrop-blur">
+                  {textHud()}
+                </div>
+              </Show>
+
+              {/* Empty state, rather than a black rectangle with no explanation. */}
+              <Show when={state.videoClipCount() === 0 && state.texts().length === 0}>
+                <div class="absolute inset-0 grid place-items-center">
+                  <div class="max-w-[38ch] text-center">
+                    <p class="text-[13px] text-fg">
+                      {state.assetIds().length > 0 ? (
+                        <>
+                          <span class="font-semibold">
+                            {state.assetIds().length} file{state.assetIds().length === 1 ? '' : 's'} ready.
+                          </span>{' '}
+                          Double-click one under <span class="text-accent">Media</span>, or drag it onto a track.
+                        </>
+                      ) : (
+                        'Drop a video file anywhere to begin.'
+                      )}
+                    </p>
+                  </div>
+                </div>
+              </Show>
             </div>
-          </Show>
-        </div>
+          </div>
 
-        <TextInspector state={state} />
-      </div>
+        </div>
       </Show>
 
       <Transport

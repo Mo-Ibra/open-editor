@@ -195,7 +195,7 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
             )}
           </For>
 
-          <Show when={!anyClips()}>
+          <Show when={!anyClips() && state.texts().length === 0}>
             <p class="pointer-events-none absolute inset-x-0 top-16 text-center text-mini text-muted">
               Double-click a file in Media, or drag one onto a track.
             </p>

@@ -29,11 +29,14 @@ export interface Layout {
   sidebarCollapsed: boolean
   timelineHeight: number
   timelineCollapsed: boolean
+  inspectorWidth: number
+  inspectorCollapsed: boolean
   /** The picture is hidden; only the transport bar remains. */
   pictureHidden: boolean
   /** Size to restore on re-expand; survives a reload. */
   sidebarRestore?: number
   timelineRestore?: number
+  inspectorRestore?: number
 }
 
 const DEFAULTS: Layout = {
@@ -41,6 +44,8 @@ const DEFAULTS: Layout = {
   sidebarCollapsed: false,
   timelineHeight: 236,
   timelineCollapsed: false,
+  inspectorWidth: 286,
+  inspectorCollapsed: false,
   pictureHidden: false,
 }
 
@@ -69,6 +74,7 @@ export const PREVIEW_TRANSPORT_ONLY = 48
 export const LIMITS = {
   sidebar: { min: 180, max: 480 },
   timeline: { min: 120, max: 640 },
+  inspector: { min: 240, max: 420 },
 } as const
 
 function load(): Layout {
@@ -90,12 +96,20 @@ function load(): Layout {
       LIMITS.timeline.max,
       DEFAULTS.timelineHeight,
     )
+    const inspectorWidth = clamp(
+      Number(parsed.inspectorWidth),
+      LIMITS.inspector.min,
+      LIMITS.inspector.max,
+      DEFAULTS.inspectorWidth,
+    )
 
     return {
       sidebarWidth,
       sidebarCollapsed: Boolean(parsed.sidebarCollapsed),
       timelineHeight,
       timelineCollapsed: Boolean(parsed.timelineCollapsed),
+      inspectorWidth,
+      inspectorCollapsed: Boolean(parsed.inspectorCollapsed),
       pictureHidden: Boolean(parsed.pictureHidden),
       // The restore size is what a collapsed panel opens back to. It is stored
       // separately because the live width is 0 while collapsed, and 0 is not a
@@ -112,6 +126,12 @@ function load(): Layout {
         LIMITS.timeline.min,
         LIMITS.timeline.max,
         timelineHeight,
+      ),
+      inspectorRestore: clamp(
+        Number(parsed.inspectorRestore),
+        LIMITS.inspector.min,
+        LIMITS.inspector.max,
+        inspectorWidth,
       ),
     }
   } catch {
@@ -131,10 +151,13 @@ export function createLayout() {
   // without this the user gets a 0→min jump and has to re-drag every time.
   let sidebarRestore = initial.sidebarRestore ?? initial.sidebarWidth
   let timelineRestore = initial.timelineRestore ?? initial.timelineHeight
+  let inspectorRestore = initial.inspectorRestore ?? initial.inspectorWidth
   const [sidebarWidth, setSidebarWidth] = createSignal(initial.sidebarWidth)
   const [sidebarCollapsed, setSidebarCollapsedRaw] = createSignal(initial.sidebarCollapsed)
   const [timelineHeight, setTimelineHeight] = createSignal(initial.timelineHeight)
   const [timelineCollapsed, setTimelineCollapsedRaw] = createSignal(initial.timelineCollapsed)
+  const [inspectorWidth, setInspectorWidth] = createSignal(initial.inspectorWidth)
+  const [inspectorCollapsed, setInspectorCollapsedRaw] = createSignal(initial.inspectorCollapsed)
   const [pictureHidden, setPictureHidden] = createSignal(initial.pictureHidden)
 
   function save(): void {
@@ -146,11 +169,14 @@ export function createLayout() {
           sidebarCollapsed: sidebarCollapsed(),
           timelineHeight: timelineHeight(),
           timelineCollapsed: timelineCollapsed(),
+          inspectorWidth: inspectorWidth(),
+          inspectorCollapsed: inspectorCollapsed(),
           pictureHidden: pictureHidden(),
           // Saved explicitly: a collapsed panel reports 0px from its track,
           // but 0 is not a width worth restoring to.
           sidebarRestore,
           timelineRestore,
+          inspectorRestore,
         } satisfies Layout),
       )
     } catch (err) {
@@ -165,6 +191,10 @@ export function createLayout() {
 
   function setTimelineHeightClamped(value: number): void {
     setTimelineHeight(clamp(value, LIMITS.timeline.min, LIMITS.timeline.max, DEFAULTS.timelineHeight))
+  }
+
+  function setInspectorWidthClamped(value: number): void {
+    setInspectorWidth(clamp(value, LIMITS.inspector.min, LIMITS.inspector.max, DEFAULTS.inspectorWidth))
   }
 
   function toggleSidebar(): void {
@@ -204,6 +234,18 @@ export function createLayout() {
     }
     save()
     log.debug(`timeline ${timelineCollapsed() ? 'collapsed' : 'expanded'}`)
+  }
+
+  function toggleInspector(): void {
+    if (inspectorCollapsed()) {
+      setInspectorWidth(inspectorRestore)
+      setInspectorCollapsedRaw(false)
+    } else {
+      inspectorRestore = inspectorWidth()
+      setInspectorCollapsedRaw(true)
+    }
+    save()
+    log.debug(`title inspector ${inspectorCollapsed() ? 'collapsed' : 'expanded'}`)
   }
 
   /**
@@ -285,19 +327,56 @@ export function createLayout() {
     }
   }
 
+  function beginInspectorDrag(event: PointerEvent): void {
+    const startX = event.clientX
+    const startWidth = inspectorWidth()
+    let moved = false
+
+    const onMove = (e: PointerEvent) => {
+      moved = true
+      // The inspector is docked on the right, so dragging its edge left makes it wider.
+      inspectorRestore = clamp(
+        startWidth - (e.clientX - startX),
+        LIMITS.inspector.min,
+        LIMITS.inspector.max,
+        inspectorRestore,
+      )
+      setInspectorWidthClamped(inspectorRestore)
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      if (moved) {
+        if (inspectorCollapsed()) setInspectorCollapsedRaw(false)
+        save()
+      }
+    }
+
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp, { once: true })
+    if (inspectorCollapsed()) {
+      setInspectorCollapsedRaw(false)
+      setInspectorWidth(inspectorRestore)
+    }
+  }
+
   // --- derived, for inline styles -----------------------------------------
 
   /** The collapsed width is 0, not hidden, so the grid never re-flows. */
   const sidebarTrack = (): string => (sidebarCollapsed() ? '0px' : `${sidebarWidth()}px`)
   const timelineTrack = (): string => (timelineCollapsed() ? '0px' : `${timelineHeight()}px`)
+  const inspectorTrack = (): string => (inspectorCollapsed() ? '0px' : `${inspectorWidth()}px`)
 
   function reset(): void {
     sidebarRestore = DEFAULTS.sidebarWidth
     timelineRestore = DEFAULTS.timelineHeight
+    inspectorRestore = DEFAULTS.inspectorWidth
     setSidebarWidth(DEFAULTS.sidebarWidth)
     setSidebarCollapsedRaw(false)
     setTimelineHeight(DEFAULTS.timelineHeight)
     setTimelineCollapsedRaw(false)
+    setInspectorWidth(DEFAULTS.inspectorWidth)
+    setInspectorCollapsedRaw(false)
     setPictureHidden(false)
     save()
   }
@@ -307,17 +386,23 @@ export function createLayout() {
     sidebarCollapsed,
     timelineHeight,
     timelineCollapsed,
+    inspectorWidth,
+    inspectorCollapsed,
     pictureHidden,
     canCollapseTimeline,
     sidebarTrack,
     timelineTrack,
+    inspectorTrack,
     setSidebarWidth: setSidebarWidthClamped,
     setTimelineHeight: setTimelineHeightClamped,
+    setInspectorWidth: setInspectorWidthClamped,
     toggleSidebar,
     toggleTimeline,
+    toggleInspector,
     togglePicture,
     beginSidebarDrag,
     beginTimelineDrag,
+    beginInspectorDrag,
     reset,
     save,
   }

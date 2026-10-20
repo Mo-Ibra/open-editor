@@ -293,6 +293,25 @@ describe('the fixes from the gesture audit', () => {
     expect(state.playhead()).toBeCloseTo(17 - 1 / 30, 9)
   })
 
+  it('selects the clip whose trim handle is pressed', async () => {
+    const state = createAppState()
+    await seed(state)
+    state.setZoom(80)
+    state.setClipSnap(false)
+    state.setLaneSnap(false)
+
+    const { container } = render(() => <Harness state={state} />)
+    const outHandle = container.querySelector('[data-clip-id="B"] [data-handle="out"]') as HTMLElement
+    const track = container.firstElementChild as HTMLElement
+
+    state.selectClip('A')
+    fireEvent.pointerDown(outHandle, { clientX: 1600, pointerId: 1 })
+    fireEvent.pointerUp(track, { pointerId: 1 })
+
+    expect(state.isSelected('B')).toBe(true)
+    expect(state.isSelected('A')).toBe(false)
+  })
+
   it('previews a trim-in at the clip start, where the new in-frame now sits', async () => {
     const state = createAppState()
     await seed(state)
@@ -315,6 +334,32 @@ describe('the fixes from the gesture audit', () => {
     // clip now starts at timeline 12 (and the preview sits there, not at source 2).
     expect(startOf(state, 'B')).toBeCloseTo(12, 9)
     expect(state.playhead()).toBeCloseTo(12, 9)
+  })
+
+  it('does not drag a clip that a ctrl-click just deselected', async () => {
+    const state = createAppState()
+    await seed(state)
+    state.setZoom(80)
+    state.setClipSnap(false)
+    state.setLaneSnap(false)
+
+    const { container } = render(() => <Harness state={state} />)
+    const b = container.querySelector('[data-clip-id="B"]') as HTMLElement
+    const track = container.firstElementChild as HTMLElement
+
+    state.selectClip('A')
+    state.selectClip('B', 'toggle')
+    expect(state.selectionCount()).toBe(2)
+
+    // Ctrl-press B to toggle it off, then keep moving: the deselected clip must
+    // stay put and the remaining selection must not be dragged instead.
+    fireEvent.pointerDown(b, { clientX: 800, pointerId: 1, ctrlKey: true })
+    fireEvent.pointerMove(track, { clientX: 1200, pointerId: 1 })
+    fireEvent.pointerUp(track, { pointerId: 1 })
+
+    expect(state.isSelected('B')).toBe(false)
+    expect(startOf(state, 'A')).toBe(0)
+    expect(startOf(state, 'B')).toBe(10)
   })
 })
 
@@ -521,6 +566,57 @@ describe('the text lane', () => {
     expect(state.texts()[0]!.start).toBeCloseTo(10.5, 5)
   })
 
+  it('never pulls a title to the playhead', () => {
+    const state = createAppState()
+    state.setZoom(80)
+    state.setClipSnap(true)
+    state.setLaneSnap(false)
+    state.addText({ start: 10 })
+    state.seek(12.3)
+    const { container } = lane(state, {})
+
+    const block = container.querySelector('[data-text-id]') as HTMLElement
+    fireEvent.pointerDown(block, { clientX: 800, pointerId: 1 })
+    fireEvent.pointerMove(document, { clientX: 988, pointerId: 1 })
+    fireEvent.pointerUp(document, { pointerId: 1 })
+
+    expect(state.texts()[0]!.start).toBeCloseTo(12.35, 5)
+  })
+
+  it('only snaps a title to media in another lane when lane snap is on', async () => {
+    const state = createAppState()
+    await seed(state)
+    state.setZoom(80)
+    state.setClipSnap(true)
+    state.setLaneSnap(false)
+    state.addText({ start: 5 })
+    const { container } = lane(state, {})
+
+    const block = container.querySelector('[data-text-id]') as HTMLElement
+    fireEvent.pointerDown(block, { clientX: 400, pointerId: 1 })
+    fireEvent.pointerMove(document, { clientX: 804, pointerId: 1 })
+    fireEvent.pointerUp(document, { pointerId: 1 })
+
+    expect(state.texts()[0]!.start).toBeCloseTo(10.05, 5)
+  })
+
+  it('pulls a title to a clip in another lane when lane snap is on', async () => {
+    const state = createAppState()
+    await seed(state)
+    state.setZoom(80)
+    state.setClipSnap(true)
+    state.setLaneSnap(true)
+    state.addText({ start: 5 })
+    const { container } = lane(state, {})
+
+    const block = container.querySelector('[data-text-id]') as HTMLElement
+    fireEvent.pointerDown(block, { clientX: 400, pointerId: 1 })
+    fireEvent.pointerMove(document, { clientX: 804, pointerId: 1 })
+    fireEvent.pointerUp(document, { pointerId: 1 })
+
+    expect(state.texts()[0]!.start).toBeCloseTo(10, 5)
+  })
+
   it('offers the title menu on right-click', () => {
     const state = createAppState()
     state.setZoom(80)
@@ -532,5 +628,81 @@ describe('the text lane', () => {
     fireEvent.contextMenu(block, { clientX: 820 })
     expect(shown.value?.kind).toBe('text')
     expect(shown.value?.textId).toBe(state.texts()[0]!.id)
+  })
+
+  it('closes the title inspector when a media clip is selected', async () => {
+    const state = createAppState()
+    await seed(state)
+    state.setZoom(80)
+    state.addText({ start: 10 })
+    expect(state.activeTextId()).not.toBeNull()
+
+    const { container } = render(() => <Harness state={state} />)
+    const clip = container.querySelector('[data-clip-id="B"]') as HTMLElement
+    fireEvent.pointerDown(clip, { clientX: 1000, pointerId: 1 })
+
+    expect(state.activeTextId()).toBeNull()
+  })
+
+  it('does not move or commit a title on a sub-threshold jitter', () => {
+    const state = createAppState()
+    state.setZoom(80)
+    state.addText({ start: 10 })
+    const { container } = lane(state, {})
+
+    const block = container.querySelector('[data-text-id]') as HTMLElement
+    fireEvent.pointerDown(block, { clientX: 800, pointerId: 1 })
+    fireEvent.pointerMove(document, { clientX: 802, pointerId: 1 })
+    fireEvent.pointerUp(document, { pointerId: 1 })
+
+    expect(state.texts()[0]!.start).toBeCloseTo(10, 5)
+    // Only `addText` committed. Undo must remove the title; a phantom drag
+    // commit would leave it in place.
+    state.undo()
+    expect(state.texts().length).toBe(0)
+  })
+
+  it('ignores a non-primary button on a title trim handle', () => {
+    const state = createAppState()
+    state.setZoom(80)
+    state.addText({ start: 10 })
+    const { container } = lane(state, {})
+    const before = state.texts()[0]!
+
+    const outHandle = container.querySelector('[data-handle="out"]') as HTMLElement
+    fireEvent.pointerDown(outHandle, { clientX: 1200, pointerId: 1, button: 2 })
+    fireEvent.pointerMove(document, { clientX: 1000, pointerId: 1 })
+    fireEvent.pointerUp(document, { pointerId: 1 })
+
+    expect(state.texts()[0]!.start).toBeCloseTo(before.start, 5)
+    expect(state.texts()[0]!.duration).toBeCloseTo(before.duration, 5)
+  })
+
+  it('stops playback when the empty lane is pressed to scrub', async () => {
+    const state = createAppState()
+    await seed(state)
+    state.setZoom(80)
+    state.setPlaying(true)
+    const { container } = lane(state, {})
+
+    fireEvent.pointerDown(container.firstElementChild as HTMLElement, { clientX: 400, pointerId: 1 })
+
+    expect(state.playing()).toBe(false)
+    expect(state.playhead()).toBeCloseTo(5, 5)
+  })
+
+  it('stops playback when a title is dragged', async () => {
+    const state = createAppState()
+    state.setZoom(80)
+    state.addText({ start: 10, duration: 3 })
+    state.setPlaying(true)
+    const { container } = lane(state, {})
+
+    fireEvent.pointerDown(container.querySelector('[data-text-id]') as HTMLElement, {
+      clientX: 820,
+      pointerId: 1,
+    })
+
+    expect(state.playing()).toBe(false)
   })
 })

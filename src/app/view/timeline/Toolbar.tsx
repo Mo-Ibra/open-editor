@@ -14,6 +14,7 @@ import { trackTypeById } from '../../../model/project.js'
 import type { AppState } from '../../store/state.js'
 import type { LayoutState } from '../../store/layout.js'
 import { PanelToggle } from '../shell/PanelToggle.js'
+import { focusTitleText } from '../preview/text-focus.js'
 
 export function Toolbar(props: { state: AppState; anyClips: () => boolean; layout: LayoutState }) {
   const state = props.state
@@ -30,6 +31,7 @@ export function Toolbar(props: { state: AppState; anyClips: () => boolean; layou
     state.project.tracks.filter((t) => t.type === 'video').reduce((n, t) => n + t.clips.length, 0)
   const audioClipCount = (): number =>
     state.project.tracks.filter((t) => t.type === 'audio').reduce((n, t) => n + t.clips.length, 0)
+  const hasContent = (): boolean => props.anyClips() || state.texts().length > 0
 
   return (
     <div class="flex h-9 shrink-0 items-center gap-1.5 border-b border-line-soft px-2">
@@ -72,7 +74,7 @@ export function Toolbar(props: { state: AppState; anyClips: () => boolean; layou
       <button
         class="btn"
         classList={{ '!border-accent/50 !text-accent': state.clipSnap() }}
-        disabled={!props.anyClips()}
+        disabled={!hasContent()}
         onClick={() => state.setClipSnap(!state.clipSnap())}
         title="Clip snap: a dragged clip or trim pulls to other clips in the same lane, and the timeline start (G)"
       >
@@ -82,7 +84,7 @@ export function Toolbar(props: { state: AppState; anyClips: () => boolean; layou
       <button
         class="btn"
         classList={{ '!border-accent/50 !text-accent': state.laneSnap() }}
-        disabled={!props.anyClips()}
+        disabled={!hasContent()}
         onClick={() => state.setLaneSnap(!state.laneSnap())}
         title="Lane snap: also pull to clips in the other lane, so picture lines up with sound (⇧G)"
       >
@@ -92,7 +94,7 @@ export function Toolbar(props: { state: AppState; anyClips: () => boolean; layou
       <button
         class="btn"
         classList={{ '!border-accent/50 !text-accent': state.playheadSnap() }}
-        disabled={!props.anyClips()}
+        disabled={!hasContent()}
         onClick={() => state.setPlayheadSnap(!state.playheadSnap())}
         title="Playhead snap: dragging the playhead pulls it to a nearby clip edge (P)"
       >
@@ -121,8 +123,10 @@ export function Toolbar(props: { state: AppState; anyClips: () => boolean; layou
       </button>
       <button
         class="btn"
-        classList={{ '!border-accent/50 !text-accent': state.hasActiveText() }}
-        onClick={() => state.addText()}
+        onClick={() => {
+          state.addText()
+          focusTitleText()
+        }}
         title="Add a title at the playhead. Drag it on the picture to place it, or in the text lane to time it"
       >
         <Type size={13} /> text
