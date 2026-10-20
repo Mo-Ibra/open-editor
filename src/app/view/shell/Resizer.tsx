@@ -105,6 +105,10 @@ export function Resizer(props: {
           classList={{
             'h-10 w-1': vertical(),
             'h-1 w-10': !vertical(),
+            // The timeline's transport row sits directly above this divider.
+            // Nudge the grip into the padding below the buttons so it reads as
+            // part of the timeline edge instead of touching the play controls.
+            'translate-y-1': !vertical(),
           }}
         />
       </Show>

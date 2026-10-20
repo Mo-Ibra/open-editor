@@ -22,6 +22,7 @@ g.crypto ??= { randomUUID: () => 'x' }
 
 const { createAppState } = await import('../../src/app/store/state.js')
 const { Lane } = await import('../../src/app/view/timeline/Lane.js')
+const { TrackHeader } = await import('../../src/app/view/timeline/TrackHeader.js')
 const { useTimelineDrag } = await import('../../src/app/view/timeline/use-timeline-drag.js')
 const { TextLane } = await import('../../src/app/view/timeline/TextLane.js')
 const { clipStart } = await import('../../src/model/project.js')
@@ -496,24 +497,17 @@ describe('dragging a clip to another track', () => {
 
 describe('the remove-track button', () => {
   it('keeps the track drag handler out of its pointerdown, so the click fires', () => {
-    // The button lives inside `#timeline-track`, whose pointerdown captures the
-    // pointer for dragging. The capture retargeted the click away from the
-    // button, so removal never fired. Stopping propagation on the button's
-    // pointerdown is the fix; this asserts the track handler is never reached.
-    const state = createAppState()
+    // The header now sits outside `#timeline-track`, but keeping the gesture
+    // isolated means moving the control back inside a lane cannot reintroduce
+    // the old bug where timeline pointer capture swallowed the click.
     let trackDown = 0
     let removed = 0
     const { container } = render(() => (
       <div onPointerDown={() => { trackDown++ }}>
-        <Lane
-          trackId="video"
-          type="video"
-          label="video"
-          state={state}
-          height={80}
-          dropAt={() => null}
-          setDropAt={() => {}}
-          trackLeft={() => 0}
+        <TrackHeader
+          kind="video"
+          label="Video"
+          height={56}
           canRemove={true}
           onRemove={() => { removed++ }}
         />

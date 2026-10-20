@@ -207,14 +207,10 @@ export function TextLane(props: { state: AppState; trackLeft: () => number; menu
       class="relative z-10 border-b border-line-soft bg-raised/30"
       style={{ height: `${LANE_HEIGHT}px` }}
       data-text-lane
+      aria-label="Text track"
       onPointerDown={onEmptyPointerDown}
       onDblClick={onEmptyDoubleClick}
     >
-      <span class="pointer-events-none absolute right-2 top-1.5 z-10 flex items-center gap-1.5">
-        <span class="size-1.5 rounded-full bg-[#c084fc]" />
-        <span class="panel-label">text</span>
-      </span>
-
       <Show when={texts().length === 0}>
         <p class="pointer-events-none absolute inset-y-0 left-3 flex items-center text-micro text-faint">
           Double-click to add a title

@@ -14,6 +14,7 @@ import { DND_ASSET, draggedAssetId } from '../media/AssetBin.js'
 import { Lane as LaneView, type DropPreview } from './Lane.js'
 import { Ruler } from './Ruler.js'
 import { TextLane } from './TextLane.js'
+import { TrackHeader } from './TrackHeader.js'
 import { ticks } from './ticks.js'
 import { TimelineScrollbar } from './TimelineScrollbar.js'
 import { Toolbar } from './Toolbar.js'
@@ -24,6 +25,7 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
   const state = props.state
   let trackEl: HTMLDivElement | undefined
   let scrollerEl: HTMLDivElement | undefined
+  let headerEl: HTMLDivElement | undefined
 
   const [dropAt, setDropAt] = createSignal<DropPreview | null>(null)
 
@@ -62,6 +64,14 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
   })
 
   const trackLeft = (): number => trackEl?.getBoundingClientRect().left ?? 0
+
+  // The header gutter is a sibling of the scroller, so it never slides under the
+  // clips when the user scrolls horizontally. Vertically it must follow, or the
+  // names drift away from their rows.
+  function syncHeaderScroll(event: Event): void {
+    const scroller = event.currentTarget as HTMLDivElement | null
+    if (headerEl && scroller) headerEl.scrollTop = scroller.scrollTop
+  }
 
   function trackAtClientY(clientY: number): TrackId {
     const tracks: { trackId: TrackId; mid: number }[] = state.project.tracks.map((t) => {
@@ -150,80 +160,113 @@ export function Timeline(props: { state: AppState; menu: ContextMenuState; layou
   }
 
   return (
-    <section class="flex min-h-0 min-w-0 flex-1 flex-col border-t border-line bg-panel">
+    <section class="flex min-h-0 min-w-0 flex-1 flex-col border-t border-line bg-panel pt-2">
       <Toolbar state={state} anyClips={anyClips} layout={props.layout} />
 
-      <div ref={scrollerEl} class="min-h-0 w-full min-w-0 flex-1 overflow-y-auto overflow-x-hidden">
+      <div class="flex min-h-0 w-full min-w-0 flex-1">
         <div
-          ref={trackEl}
-          id="timeline-track"
-          class="relative min-h-full select-none touch-none"
-          style={{ width: `${contentWidth()}px` }}
-          data-zoom={state.zoom()}
-          onPointerDown={drag.onPointerDown}
-          onContextMenu={drag.onContextMenu}
-          onDragOver={onDragOverTrack}
-          onDrop={onDropTrack}
-          onPointerMove={drag.onPointerMove}
-          onPointerUp={drag.onPointerUp}
-          onPointerCancel={drag.onPointerUp}
+          ref={headerEl}
+          class="flex w-[88px] shrink-0 flex-col overflow-hidden border-r border-line bg-panel"
+          data-track-headers
+          onWheel={(event) => {
+            // The gutter is outside the scroller, so a wheel over a track name
+            // would otherwise do nothing. Send the gesture where it belongs.
+            if (scrollerEl) scrollerEl.scrollTop += event.deltaY
+          }}
         >
-          <Ruler state={state} onDrop={onDropTrack} onDragOver={onDragOverTrack} />
-
-          <TextLane state={state} trackLeft={trackLeft} menu={props.menu} />
-
-          <div class="pointer-events-none absolute inset-x-0 bottom-0 top-6 z-0">
-            <For each={ticks(state.duration(), state.zoom())}>
-              {(t) => <div class="absolute bottom-0 top-0 w-px bg-line-soft" style={{ left: `${state.timeToX(t)}px` }} />}
-            </For>
+          <div class="sticky top-0 z-10 flex h-6 shrink-0 items-center border-b border-line bg-raised/80 px-2">
+            <span class="text-micro font-semibold uppercase tracking-[0.12em] text-faint">Tracks</span>
           </div>
-
+          <TrackHeader kind="text" label="Text" height={30} />
           <For each={displayTracks()}>
             {(track) => (
-              <LaneView
-                trackId={track.id}
-                type={track.type}
-                label={track.type}
-                state={state}
+              <TrackHeader
+                kind={track.type}
+                label={track.type === 'video' ? 'Video' : 'Audio'}
                 height={track.type === 'video' ? 56 : 62}
-                dropAt={dropAt}
-                setDropAt={setDropAt}
-                trackLeft={trackLeft}
                 canRemove={track.clips.length === 0 && state.project.tracks.length > 1}
                 onRemove={() => state.removeTrack(track.id)}
               />
             )}
           </For>
+        </div>
 
-          <Show when={!anyClips() && state.texts().length === 0}>
-            <p class="pointer-events-none absolute inset-x-0 top-16 text-center text-mini text-muted">
-              Double-click a file in Media, or drag one onto a track.
-            </p>
-          </Show>
-
-          <Show when={drag.guide()}>
-            {(g) => (
-              <div
-                class="pointer-events-none absolute bottom-0 top-0 z-30 w-px bg-warn"
-                style={{ left: `${state.timeToX(g().time)}px` }}
-              >
-                <span class="absolute -top-px left-1 rounded bg-warn px-1 text-micro font-semibold text-black">
-                  {g().label}
-                </span>
-              </div>
-            )}
-          </Show>
-
+        <div class="flex min-h-0 min-w-0 flex-1 flex-col">
           <div
-            class="pointer-events-none absolute bottom-0 top-0 z-20 w-px bg-accent"
-            style={{ left: `${state.timeToX(state.playhead())}px` }}
+            ref={scrollerEl}
+            class="min-h-0 w-full min-w-0 flex-1 overflow-y-auto overflow-x-hidden"
+            onScroll={syncHeaderScroll}
           >
-            <span class="absolute -left-[5px] top-0 border-x-[5px] border-t-[6px] border-x-transparent border-t-accent" />
+            <div
+              ref={trackEl}
+              id="timeline-track"
+              class="relative min-h-full select-none touch-none"
+              style={{ width: `${contentWidth()}px` }}
+              data-zoom={state.zoom()}
+              onPointerDown={drag.onPointerDown}
+              onContextMenu={drag.onContextMenu}
+              onDragOver={onDragOverTrack}
+              onDrop={onDropTrack}
+              onPointerMove={drag.onPointerMove}
+              onPointerUp={drag.onPointerUp}
+              onPointerCancel={drag.onPointerUp}
+            >
+              <Ruler state={state} onDrop={onDropTrack} onDragOver={onDragOverTrack} />
+
+              <TextLane state={state} trackLeft={trackLeft} menu={props.menu} />
+
+              <div class="pointer-events-none absolute inset-x-0 bottom-0 top-6 z-0">
+                <For each={ticks(state.duration(), state.zoom())}>
+                  {(t) => <div class="absolute bottom-0 top-0 w-px bg-line-soft" style={{ left: `${state.timeToX(t)}px` }} />}
+                </For>
+              </div>
+
+              <For each={displayTracks()}>
+                {(track) => (
+                  <LaneView
+                    trackId={track.id}
+                    type={track.type}
+                    label={track.type}
+                    state={state}
+                    height={track.type === 'video' ? 56 : 62}
+                    dropAt={dropAt}
+                    setDropAt={setDropAt}
+                    trackLeft={trackLeft}
+                  />
+                )}
+              </For>
+
+              <Show when={!anyClips() && state.texts().length === 0}>
+                <p class="pointer-events-none absolute inset-x-0 top-16 text-center text-mini text-muted">
+                  Double-click a file in Media, or drag one onto a track.
+                </p>
+              </Show>
+
+              <Show when={drag.guide()}>
+                {(g) => (
+                  <div
+                    class="pointer-events-none absolute bottom-0 top-0 z-30 w-px bg-warn"
+                    style={{ left: `${state.timeToX(g().time)}px` }}
+                  >
+                    <span class="absolute -top-px left-1 rounded bg-warn px-1 text-micro font-semibold text-black">
+                      {g().label}
+                    </span>
+                  </div>
+                )}
+              </Show>
+
+              <div
+                class="pointer-events-none absolute bottom-0 top-0 z-20 w-px bg-accent"
+                style={{ left: `${state.timeToX(state.playhead())}px` }}
+              >
+                <span class="absolute -left-[5px] top-0 border-x-[5px] border-t-[6px] border-x-transparent border-t-accent" />
+              </div>
+            </div>
           </div>
+
+          <TimelineScrollbar scroller={() => scrollerEl} contentWidth={contentWidth} />
         </div>
       </div>
-
-      <TimelineScrollbar scroller={() => scrollerEl} contentWidth={contentWidth} />
     </section>
   )
 }

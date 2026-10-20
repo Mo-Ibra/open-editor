@@ -3,8 +3,7 @@
  * from the media bin.
  */
 
-import { createMemo, For, Show } from 'solid-js'
-import { X } from 'lucide-solid'
+import { createMemo, For } from 'solid-js'
 import { trackById, type TrackId } from '../../../model/project.js'
 import { DND_ASSET, draggedAssetId } from '../media/AssetBin.js'
 import type { AppState } from '../../store/state.js'
@@ -29,9 +28,6 @@ export interface LaneProps {
   dropAt: () => DropPreview | null
   setDropAt: (value: DropPreview | null) => void
   trackLeft: () => number
-  /** Whether the track is empty and not the last one, so it may be removed. */
-  canRemove?: boolean
-  onRemove?: () => void
 }
 
 export function Lane(props: LaneProps) {
@@ -94,6 +90,7 @@ export function Lane(props: LaneProps) {
       }}
       data-track={props.trackId}
       data-track-accepts={accepts() ? 'yes' : undefined}
+      aria-label={`${props.label} track`}
       style={{ height: `${props.height}px` }}
       onDragOver={previewDrop}
       onDragLeave={(event) => {
@@ -103,37 +100,6 @@ export function Lane(props: LaneProps) {
       }}
       onDrop={onDrop}
     >
-      <span class="absolute right-2 top-1.5 z-10 flex items-center gap-1.5">
-        <span
-          class="pointer-events-none size-1.5 rounded-full"
-          classList={{ 'bg-[#4f7dd6]': props.type === 'video', 'bg-[#3f9e78]': props.type === 'audio' }}
-        />
-        <span class="panel-label pointer-events-none">{props.label}</span>
-        <Show when={props.onRemove}>
-          <button
-            class="rounded p-0.5 text-muted hover:bg-line hover:text-fg disabled:cursor-not-allowed disabled:opacity-30"
-            disabled={!props.canRemove}
-            onPointerDown={(event) => {
-              // The lane lives inside `#timeline-track`, whose pointerdown
-              // captures the pointer for dragging. Without this the capture
-              // retargets the click away from the button and removal never fires.
-              event.stopPropagation()
-            }}
-            onClick={(event) => {
-              event.stopPropagation()
-              props.onRemove?.()
-            }}
-            aria-label={`Remove ${props.label} track`}
-            title={
-              props.canRemove
-                ? 'Remove this track'
-                : 'A track with clips must be cleared before it can be removed'
-            }
-          >
-            <X size={12} />
-          </button>
-        </Show>
-      </span>
       <DropCue preview={preview} trackId={props.trackId} state={state} />
       <For each={clips()}>
         {(clip, index) => (
